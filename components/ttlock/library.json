@@ -1,0 +1,10 @@
+{
+  "name": "ttlock",
+  "version": "0.1.0",
+  "description": "TTLock Bluetooth LE protocol core for Latchkey, free of ESP-IDF dependencies",
+  "license": "GPL-3.0-or-later",
+  "build": {
+    "srcDir": "src",
+    "includeDir": "include"
+  }
+}

@@ -1,0 +1,3 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+dependencies:
+  idf: ">=6.1.0,<6.2.0"

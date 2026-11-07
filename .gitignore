@@ -1,0 +1,10 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+.pio/
+managed_components/
+/sdkconfig
+/sdkconfig.*
+!/sdkconfig.defaults
+!/sdkconfig.defaults.*
+secrets.local.json
+.superpowers/
+_worktrees/

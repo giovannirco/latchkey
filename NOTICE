@@ -1,0 +1,17 @@
+Latchkey
+Copyright (C) 2026 Giovanni Coutinho
+
+This program is free software: you can redistribute it and/or modify it
+under the terms of the GNU General Public License as published by the Free
+Software Foundation, either version 3 of the License, or (at your option)
+any later version. See LICENSE for the full text.
+
+Protocol references
+
+- kind3r/ttlock-sdk-js, https://github.com/kind3r/ttlock-sdk-js
+  License: GPL-3.0. Primary reference for the TTLock Bluetooth LE protocol.
+  Code ported from it to C++ keeps its GPL-3.0 terms and credits it in the
+  ported file.
+
+- roquerodrigo/ttlock-ble, https://github.com/roquerodrigo/ttlock-ble
+  License: MIT. Second reference, used to cross-check commands and frames.
