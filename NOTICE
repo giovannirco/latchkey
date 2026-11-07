@@ -15,3 +15,12 @@ Protocol references
 
 - roquerodrigo/ttlock-ble, https://github.com/roquerodrigo/ttlock-ble
   License: MIT. Second reference, used to cross-check commands and frames.
+
+Third-party code
+
+- kokke/tiny-AES-c, https://github.com/kokke/tiny-AES-c
+  License: public domain (The Unlicense), see
+  components/ttlock/src/third_party/aes/unlicense.txt. aes.c, aes.h and
+  aes.hpp are vendored unmodified from commit
+  23856752fbd139da0b8ca6e471a13d5bcc99a08d and built for AES-128 with CBC
+  only (CBC=1, ECB=0, CTR=0).
