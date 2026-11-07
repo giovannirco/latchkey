@@ -8,12 +8,22 @@ Run from anywhere:
 Every expected value comes from ttlock-ble 0.3.4 (roquerodrigo/ttlock-ble, MIT):
 CRCs from `crypto.crc_compute`, AES from `crypto.aes_encrypt` / `aes_decrypt`,
 frames from `protocol.Frame`, the XOR codec from `crypto.codec_decode`, adverts
-from `models.LockAdvertisement`. Inputs are synthetic or use the factory default
-AES key; nothing comes from a paired lock or from the owner's devices. The lock
-responses in KIND3R_CAPTURES are copied from kind3r/ttlock-sdk-js
-(`docs/Bad CRC quest.md`, `tools/debug.js`, GPL-3.0) and checked against
-ttlock-ble before they are written. The script is deterministic: a second run
-rewrites identical files.
+from `models.LockAdvertisement`.
+
+Where the inputs come from:
+
+- Payloads, plaintexts, codec bytes and adverts are synthetic. Frames and AES
+  cases use the factory default key or the synthetic key 00..0f.
+- `factory_dormant` keeps the first five bytes (05 03 02 1c 3a: protocol type,
+  protocol version, scene, flags, battery) of an advert from the owner's
+  factory-state lock. Its other twelve bytes, the MAC included, are synthetic.
+- KIND3R_CAPTURES are four frames published in kind3r/ttlock-sdk-js
+  (`docs/Bad CRC quest.md`, `tools/debug.js`, GPL-3.0): three responses from
+  kind3r's own paired lock and one request kind3r sent to it, encrypted under
+  that lock's key. Only their CRCs are used, and each is checked against
+  ttlock-ble before it is written.
+
+The script is deterministic: a second run rewrites identical files.
 """
 
 from __future__ import annotations

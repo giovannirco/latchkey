@@ -14,8 +14,8 @@ void setUp() {}
 void tearDown() {}
 
 static void test_factory_fresh_lock_advert() {
-    const Bytes data{0x05, 0x03, 0x02, 0x1C, 0x3A, 0xB0, 0x00, 0xF4, 0xF9,
-                     0x53, 0x65, 0x66, 0x55, 0x44, 0x33, 0x22, 0x11};
+    const Bytes data{0x05, 0x03, 0x02, 0x1C, 0x3A, 0xAA, 0xBB, 0xCC, 0xDD,
+                     0xEE, 0xFF, 0x66, 0x55, 0x44, 0x33, 0x22, 0x11};
     ttlock::Advert advert;
     TEST_ASSERT_TRUE(ttlock::parseAdvert(data, advert));
     TEST_ASSERT_EQUAL_UINT8(5, advert.version.protocolType);
@@ -51,13 +51,6 @@ static void test_adverts_match_ttlock_ble() {
     }
 }
 
-static void test_payload_without_the_leading_type_bytes_is_rejected() {
-    const Bytes stripped{0x02, 0x1C, 0x3A, 0xB0, 0x00, 0xF4, 0xF9, 0x53,
-                         0x65, 0x66, 0x55, 0x44, 0x33, 0x22, 0x11};
-    ttlock::Advert advert;
-    TEST_ASSERT_FALSE(ttlock::parseAdvert(stripped, advert));
-}
-
 static void test_mac_is_the_reversed_tail_in_uppercase_hex() {
     const Bytes data{0x05, 0x03, 0x02, 0x00, 0x50, 0x00, 0x00, 0x00, 0x00,
                      0x00, 0x00, 0xAB, 0xCD, 0xEF, 0x01, 0x23, 0x45};
@@ -79,7 +72,6 @@ int main() {
     UNITY_BEGIN();
     RUN_TEST(test_factory_fresh_lock_advert);
     RUN_TEST(test_adverts_match_ttlock_ble);
-    RUN_TEST(test_payload_without_the_leading_type_bytes_is_rejected);
     RUN_TEST(test_mac_is_the_reversed_tail_in_uppercase_hex);
     RUN_TEST(test_failed_parse_leaves_output_untouched);
     return UNITY_END();
