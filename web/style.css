@@ -1238,6 +1238,16 @@ output.secret.long {
   color: var(--warn);
 }
 
+.toast-alarm {
+  background: var(--danger-soft);
+  color: var(--text);
+  border: 2px solid var(--danger);
+}
+
+.toast-alarm > .icon {
+  color: var(--danger);
+}
+
 .toast > .icon {
   margin-top: 2px;
 }
