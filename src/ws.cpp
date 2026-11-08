@@ -13,6 +13,7 @@
 #include "auth.h"
 #include "events.h"
 #include "http.h"
+#include "latchkey_util/backlog.h"
 #include "latchkey_util/web.h"
 
 namespace ws {
@@ -107,12 +108,12 @@ void enqueue(Outgoing out) {
             discard(out);
             return;
         }
-        if (s_pending.size() >= kMaxPending) {
-            ESP_LOGW(TAG, "event queue full: dropped the oldest event");
-            discard(s_pending.front());
-            s_pending.pop_front();
+        std::optional<Outgoing> dropped = latchkey_util::pushBounded(
+            s_pending, std::move(out), kMaxPending, [](const Outgoing& line) { return line.broadcast; });
+        if (dropped.has_value()) {
+            ESP_LOGW(TAG, "event queue full: dropped the oldest %s", dropped->broadcast ? "event" : "job result");
+            discard(*dropped);
         }
-        s_pending.push_back(std::move(out));
         due = !s_queued;
         s_queued = true;
     }
