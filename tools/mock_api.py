@@ -17,9 +17,16 @@ application/json and refuses a foreign Origin. A method that needs the board's b
 confirm.required, then confirm.result after 2 s (pressed) unless a test asks for a timeout.
 As on the board, the lock methods (locks.scan, locks.pair, lock.status, lock.info, lock.features,
 lock.unlock, lock.lock, lock.time.sync, lock.factoryReset, lock.passcodes.*, lock.fingerprints.*,
-lock.cards.*, lock.adminPasscode.*) and the button-gated auth.rotateTotp and system.factoryReset run
-as jobs: the reply is {"job": id} and the outcome arrives as a job.done event {"job", "result"} or
-{"job", "error"}, sent only to the sockets of the session that asked.
+lock.cards.*, lock.adminPasscode.*, lock.autolock.*, lock.passage.*, lock.sound.*, lock.resetButton.*,
+lock.privacyLock.*, lock.tamperAlert.*, lock.log.fetch) and the button-gated auth.rotateTotp and
+system.factoryReset run as jobs: the reply is {"job": id} and the outcome arrives as a job.done event
+{"job", "result"} or {"job", "error"}, sent only to the sockets of the session that asked.
+
+lock.log.fetch answers {"entries", "last", "more"}: without "since" the newest 16 entries, with "since" the
+entries after that record number. The board reads the log in the background and sends lock.alert
+{"lock", "method", "time", "seq", "type"} for an unlock from an app it did not make, or a forced opening;
+tests emit one with the emit hook. lock.resetButton.set needs the board button both ways and refuses to
+turn the button off until the lock's keys are backed up (backup_required).
 
 Test hooks used by tools/ui-tests/:
 
@@ -98,6 +105,8 @@ FULL_FEATURES = [
     "get_admin_code",
     "passage_mode",
     "reset_button",
+    "privacy_lock",
+    "tamper_alert",
     "config_gateway_unlock",
     "cyclic_ic_or_finger_print",
 ]
@@ -119,6 +128,8 @@ LOG_CARD_UNLOCK = 17
 LOG_FINGERPRINT_UNLOCK = 20
 LOG_APP_LOCK = 26
 LOG_KEY_UNLOCK = 27
+LOG_SHOWN = 16
+LOG_LAST_SLOT = 65534
 
 
 class RpcError(Exception):
@@ -338,7 +349,8 @@ def demo_locks() -> list[dict]:
         "autolock": {"seconds": 5, "min": 1, "max": 900},
         "sound": {"enabled": True, "volume": 3},
         "resetButton": False,
-        "remoteUnlock": False,
+        "privacyLock": False,
+        "tamperAlert": True,
         "adminPasscode": random_digits(8),
         "passcodes": [
             passcode("permanent", "Family", None),
@@ -381,7 +393,8 @@ def demo_locks() -> list[dict]:
         "autolock": {"seconds": 0, "min": 5, "max": 120},
         "sound": None,
         "resetButton": None,
-        "remoteUnlock": None,
+        "privacyLock": None,
+        "tamperAlert": None,
         "adminPasscode": "123456",
         "passcodes": [passcode("one_time", "Delivery", {"start": stamp, "end": stamp + 6 * 3600})],
         "fingerprints": [],
@@ -423,7 +436,8 @@ def new_lock(mac: str, name: str, admin_passcode: str) -> dict:
         "autolock": {"seconds": 0, "min": 1, "max": 900},
         "sound": {"enabled": True, "volume": 5},
         "resetButton": True,
-        "remoteUnlock": False,
+        "privacyLock": False,
+        "tamperAlert": False,
         "adminPasscode": admin_passcode,
         "passcodes": [passcode("permanent", "", None, managed=False, code="123456")],
         "fingerprints": [],
@@ -928,13 +942,13 @@ class Mock:
             pass
         return {"time": now()}
 
-    @rpc("lock.autolock.get", feature="auto_lock", audited=False)
+    @rpc("lock.autolock.get", feature="auto_lock", audited=False, job=True)
     def lock_autolock_get(self, ctx: Context, params: dict) -> dict:
         lock = self.get_lock(params)
         with self.radio():
             return dict(lock["autolock"])
 
-    @rpc("lock.autolock.set", feature="auto_lock")
+    @rpc("lock.autolock.set", feature="auto_lock", job=True)
     def lock_autolock_set(self, ctx: Context, params: dict) -> dict:
         lock = self.get_lock(params)
         setting = lock["autolock"]
@@ -945,7 +959,7 @@ class Mock:
             setting["seconds"] = seconds
         return dict(setting)
 
-    @rpc("lock.passage.list", feature="passage_mode", audited=False)
+    @rpc("lock.passage.list", feature="passage_mode", audited=False, job=True)
     def lock_passage_list(self, ctx: Context, params: dict) -> dict:
         lock = self.get_lock(params)
         with self.radio():
@@ -962,7 +976,7 @@ class Mock:
             raise invalid("the passage window must end after it starts")
         return {"type": "weekly", "day": day, "start": start, "end": end}
 
-    @rpc("lock.passage.add", feature="passage_mode")
+    @rpc("lock.passage.add", feature="passage_mode", job=True)
     def lock_passage_add(self, ctx: Context, params: dict) -> dict:
         lock = self.get_lock(params)
         days = params.get("days")
@@ -975,7 +989,7 @@ class Mock:
                     lock["passage"].append(entry)
         return {"modes": copy.deepcopy(lock["passage"])}
 
-    @rpc("lock.passage.delete", feature="passage_mode")
+    @rpc("lock.passage.delete", feature="passage_mode", job=True)
     def lock_passage_delete(self, ctx: Context, params: dict) -> dict:
         lock = self.get_lock(params)
         entry = self._passage_entry(params, params.get("day"))
@@ -985,7 +999,7 @@ class Mock:
             lock["passage"].remove(entry)
         return {"modes": copy.deepcopy(lock["passage"])}
 
-    @rpc("lock.passage.clear", feature="passage_mode")
+    @rpc("lock.passage.clear", feature="passage_mode", job=True)
     def lock_passage_clear(self, ctx: Context, params: dict) -> dict:
         lock = self.get_lock(params)
         with self.radio():
@@ -1163,22 +1177,25 @@ class Mock:
     def lock_cards_clear(self, ctx: Context, params: dict) -> dict:
         return self._clear(params, "cards")
 
-    @rpc("lock.log.fetch", audited=False)
+    @rpc("lock.log.fetch", audited=False, job=True)
     def lock_log_fetch(self, ctx: Context, params: dict) -> dict:
         lock = self.get_lock(params)
-        since = int_param(params, "since", default=0, lo=0)
+        since = int_param(params, "since", lo=0, hi=LOG_LAST_SLOT)
         with self.radio():
-            entries = [dict(entry) for entry in lock["log"] if entry["seq"] > since]
-        last = entries[-1]["seq"] if entries else since
-        return {"entries": entries, "last": last}
+            if since is None:
+                entries = [dict(entry) for entry in lock["log"][-LOG_SHOWN:]]
+            else:
+                entries = [dict(entry) for entry in lock["log"] if entry["seq"] > since]
+        last = entries[-1]["seq"] if entries else (since or 0)
+        return {"entries": entries, "last": last, "more": False}
 
-    @rpc("lock.sound.get", feature="audio_management", audited=False)
+    @rpc("lock.sound.get", feature="audio_management", audited=False, job=True)
     def lock_sound_get(self, ctx: Context, params: dict) -> dict:
         lock = self.get_lock(params)
         with self.radio():
             return {**lock["sound"], "levels": 5}
 
-    @rpc("lock.sound.set", feature="audio_management")
+    @rpc("lock.sound.set", feature="audio_management", job=True)
     def lock_sound_set(self, ctx: Context, params: dict) -> dict:
         lock = self.get_lock(params)
         enabled = bool_param(params, "enabled")
@@ -1187,35 +1204,46 @@ class Mock:
             lock["sound"] = {"enabled": enabled, "volume": volume}
         return {**lock["sound"], "levels": 5}
 
-    @rpc("lock.resetButton.get", feature="reset_button", audited=False)
+    @rpc("lock.resetButton.get", feature="reset_button", audited=False, job=True)
     def lock_reset_button_get(self, ctx: Context, params: dict) -> dict:
         lock = self.get_lock(params)
         with self.radio():
             return {"enabled": lock["resetButton"]}
 
-    @rpc("lock.resetButton.set", feature="reset_button")
+    @rpc("lock.resetButton.set", feature="reset_button", job=True)
     def lock_reset_button_set(self, ctx: Context, params: dict) -> dict:
         lock = self.get_lock(params)
         enabled = bool_param(params, "enabled")
-        if enabled:
-            self.confirm("lock.resetButton.set")
+        if not enabled and not lock["backedUp"]:
+            raise RpcError("backup_required", "export this lock's keys with keys.export before turning its reset button off")
+        self.confirm("lock.resetButton.set")
         with self.radio():
             lock["resetButton"] = enabled
         return {"enabled": enabled}
 
-    @rpc("lock.remoteUnlock.get", feature="config_gateway_unlock", audited=False)
-    def lock_remote_unlock_get(self, ctx: Context, params: dict) -> dict:
+    def _switch(self, params: dict, key: str, *, write: bool) -> dict:
         lock = self.get_lock(params)
+        enabled = bool_param(params, "enabled") if write else None
         with self.radio():
-            return {"enabled": lock["remoteUnlock"]}
+            if write:
+                lock[key] = enabled
+            return {"enabled": lock[key]}
 
-    @rpc("lock.remoteUnlock.set", feature="config_gateway_unlock")
-    def lock_remote_unlock_set(self, ctx: Context, params: dict) -> dict:
-        lock = self.get_lock(params)
-        enabled = bool_param(params, "enabled")
-        with self.radio():
-            lock["remoteUnlock"] = enabled
-        return {"enabled": enabled}
+    @rpc("lock.privacyLock.get", feature="privacy_lock", audited=False, job=True)
+    def lock_privacy_lock_get(self, ctx: Context, params: dict) -> dict:
+        return self._switch(params, "privacyLock", write=False)
+
+    @rpc("lock.privacyLock.set", feature="privacy_lock", job=True)
+    def lock_privacy_lock_set(self, ctx: Context, params: dict) -> dict:
+        return self._switch(params, "privacyLock", write=True)
+
+    @rpc("lock.tamperAlert.get", feature="tamper_alert", audited=False, job=True)
+    def lock_tamper_alert_get(self, ctx: Context, params: dict) -> dict:
+        return self._switch(params, "tamperAlert", write=False)
+
+    @rpc("lock.tamperAlert.set", feature="tamper_alert", job=True)
+    def lock_tamper_alert_set(self, ctx: Context, params: dict) -> dict:
+        return self._switch(params, "tamperAlert", write=True)
 
     @rpc("lock.adminPasscode.set", feature="passcode", job=True)
     def lock_admin_passcode_set(self, ctx: Context, params: dict) -> dict:
