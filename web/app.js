@@ -2519,17 +2519,24 @@ async function viewSecurity(view) {
   );
 
   const rows = h('tbody');
+  const shown = new Set();
   const nameOf = (id) => (state.locks.find((lock) => lock.id === id) || {}).name || id;
   const auditRow = (entry) =>
     h(
       'tr',
-      null,
+      { 'data-seq': entry.seq },
       h('td', { class: 'nowrap' }, formatTime(entry.time)),
       h('td', null, entry.source || '—'),
       h('td', null, h('code', null, entry.method)),
       h('td', null, entry.target ? nameOf(entry.target) : '—'),
       h('td', { class: entry.result === 'ok' ? null : 'result-bad' }, entry.result === 'ok' ? 'OK' : entry.result),
     );
+  const showEntry = (entry) => {
+    if (shown.has(entry.seq)) return;
+    shown.add(entry.seq);
+    const older = [...rows.rows].find((row) => Number(row.dataset.seq) < entry.seq);
+    rows.insertBefore(auditRow(entry), older || null);
+  };
   const table = h(
     'div',
     { class: 'table-wrap' },
@@ -2553,7 +2560,7 @@ async function viewSecurity(view) {
   const fetchAudit = async () => {
     const result = await rpc('audit.list', oldest ? { before: oldest, limit: 50 } : { limit: 50 });
     for (const entry of result.entries || []) {
-      rows.append(auditRow(entry));
+      showEntry(entry);
       oldest = oldest === null ? entry.seq : Math.min(oldest, entry.seq);
     }
     loadOlder.hidden = !result.more;
@@ -2566,7 +2573,7 @@ async function viewSecurity(view) {
     }
   });
   listen('audit.appended', (entry) => {
-    if (entry && entry.method) rows.prepend(auditRow(entry));
+    if (entry && entry.method) showEntry(entry);
   });
 
   view.append(h('div', { class: 'grid' }, cert.el, session.el, password.el, authenticator.el), backup.el, audit.el);
