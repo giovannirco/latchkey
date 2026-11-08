@@ -31,13 +31,40 @@ std::string readField(const char (&field)[N]) {
     return std::string(field, strnlen(field, N));
 }
 
+constexpr uint8_t kSerialOrigin = 0;
+constexpr uint8_t kWebOrigin = 1;
+constexpr uint8_t kMqttOrigin = 2;
+
 uint32_t oldestSeq(uint32_t next) { return next > store::audit::kCapacity ? next - store::audit::kCapacity : 1; }
+
+rpc::Transport originOf(uint8_t stored) {
+    switch (stored) {
+        case kSerialOrigin:
+            return rpc::Transport::Serial;
+        case kMqttOrigin:
+            return rpc::Transport::Mqtt;
+        default:
+            return rpc::Transport::Web;
+    }
+}
+
+uint8_t storedOrigin(rpc::Transport origin) {
+    switch (origin) {
+        case rpc::Transport::Serial:
+            return kSerialOrigin;
+        case rpc::Transport::Web:
+            return kWebOrigin;
+        case rpc::Transport::Mqtt:
+            return kMqttOrigin;
+    }
+    return kWebOrigin;
+}
 
 StoredEntry fromRecord(const store::audit::Record& record) {
     StoredEntry stored;
     stored.seq = record.seq;
     stored.entry.utc = record.utc;
-    stored.entry.origin = record.origin == 0 ? rpc::Transport::Serial : rpc::Transport::Web;
+    stored.entry.origin = originOf(record.origin);
     stored.entry.method = readField(record.method);
     stored.entry.target = readField(record.target);
     stored.entry.result = readField(record.result);
@@ -58,7 +85,7 @@ void append(const Entry& entry) {
         store::audit::Record record{};
         record.seq = s_nextSeq;
         record.utc = entry.utc;
-        record.origin = entry.origin == rpc::Transport::Serial ? 0 : 1;
+        record.origin = storedOrigin(entry.origin);
         copyField(record.method, entry.method);
         copyField(record.target, entry.target);
         copyField(record.result, entry.result);
