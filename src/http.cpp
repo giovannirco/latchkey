@@ -43,7 +43,7 @@ constexpr uint16_t kHttpsSockets = 3;
 #else
 constexpr uint16_t kHttpsSockets = 4;
 #endif
-constexpr uint32_t kHttpsStack = 8192;
+constexpr uint32_t kHttpsStack = 6144;
 constexpr uint32_t kRedirectStack = 3072;
 constexpr uint32_t kWorkerStack = 6144;
 constexpr uint32_t kInitStack = 8192;

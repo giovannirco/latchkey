@@ -20,6 +20,7 @@
 #include "jobs.h"
 #include "lock_manager.h"
 #include "methods.h"
+#include "mqtt.h"
 #include "ota.h"
 #include "store.h"
 #include "wifi.h"
@@ -57,8 +58,10 @@ extern "C" void app_main() {
     methods::registerPasscodes();
     methods::registerCredentials();
     methods::registerAdminPasscode();
+    methods::registerMqtt();
     ota::start();
     jobs::start();
+    mqtt::start();
     http::start();
     console::start();
 }
