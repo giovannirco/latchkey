@@ -117,7 +117,7 @@ public:
 
     int64_t utcSeconds() override { return wallclock::utcSeconds(); }
 
-    int32_t utcOffsetSeconds() override { return 0; }
+    int32_t utcOffsetSeconds() override { return wallclock::utcOffsetSeconds(); }
 };
 
 class HardwareRandom final : public ttlock::Random {

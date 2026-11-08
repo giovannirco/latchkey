@@ -36,6 +36,10 @@ bool loadWifi(Wifi& out);
 
 esp_err_t saveWifi(const Wifi& wifi);
 
+bool loadTimezone(std::string& out);
+
+esp_err_t saveTimezone(const std::string& timezone);
+
 esp_err_t erase();
 
 }

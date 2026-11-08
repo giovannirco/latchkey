@@ -27,6 +27,7 @@
 #include "console.h"
 #include "latchkey_util/ipv4.h"
 #include "latchkey_util/otpauth.h"
+#include "latchkey_util/tz.h"
 #include "lock_manager.h"
 #include "methods.h"
 #include "rpc.h"
@@ -216,10 +217,15 @@ rpc::Reply info(const cJSON*, const rpc::Context&) {
     cJSON_AddItemToObject(result, "wifi", wifiJson());
     const bool synced = wallclock::synced();
     cJSON_AddBoolToObject(result, "time_synced", synced);
+    cJSON_AddStringToObject(result, "timezone", wallclock::timezone().c_str());
     if (synced) {
-        cJSON_AddNumberToObject(result, "utc", static_cast<double>(wallclock::utcSeconds()));
+        const int64_t utc = wallclock::utcSeconds();
+        cJSON_AddNumberToObject(result, "utc", static_cast<double>(utc));
+        cJSON_AddStringToObject(result, "localTime",
+                                latchkey_util::localTimestamp(utc, wallclock::utcOffsetAt(utc)).c_str());
     } else {
         cJSON_AddNullToObject(result, "utc");
+        cJSON_AddNullToObject(result, "localTime");
     }
     cJSON* button = cJSON_AddObjectToObject(result, "button");
     cJSON_AddNumberToObject(button, "gpio", board::buttonGpio());
@@ -325,6 +331,31 @@ rpc::Reply timeSet(const cJSON* params, const rpc::Context&) {
     return rpc::ok();
 }
 
+cJSON* timezoneJson() {
+    cJSON* result = cJSON_CreateObject();
+    cJSON_AddStringToObject(result, "tz", wallclock::timezone().c_str());
+    cJSON_AddNumberToObject(result, "utcOffset", wallclock::utcOffsetSeconds());
+    return result;
+}
+
+rpc::Reply timezoneGet(const cJSON*, const rpc::Context&) { return rpc::ok(timezoneJson()); }
+
+rpc::Reply timezoneSet(const cJSON* params, const rpc::Context&) {
+    std::string timezone;
+    if (!readString(params, "tz", 1, latchkey_util::kMaxTimeZoneLength, timezone)) {
+        return rpc::fail("invalid_argument", "tz must be a POSIX TZ string such as CET-1CEST,M3.5.0,M10.5.0/3");
+    }
+    const esp_err_t error = wallclock::setTimezone(timezone);
+    if (error == ESP_ERR_INVALID_ARG) {
+        return rpc::fail("invalid_argument",
+                         "tz must be a POSIX TZ string such as CET-1CEST,M3.5.0,M10.5.0/3, with rules for daylight time");
+    }
+    if (error != ESP_OK) {
+        return rpc::fail("internal", "cannot store the time zone");
+    }
+    return rpc::ok(timezoneJson());
+}
+
 rpc::Reply logSet(const cJSON* params, const rpc::Context&) {
     std::string tag;
     std::string level;
@@ -382,6 +413,8 @@ void registerSystem() {
     rpc::registerMethod("system.reboot", {}, reboot);
     rpc::registerMethod("system.factoryReset", {.needsButton = true}, factoryReset);
     rpc::registerMethod("system.time.set", {.serialOnly = true}, timeSet);
+    rpc::registerMethod("system.timezone.get", {.audited = false}, timezoneGet);
+    rpc::registerMethod("system.timezone.set", {}, timezoneSet);
     rpc::registerMethod("system.log.set", {.serialOnly = true, .audited = false}, logSet);
     rpc::registerMethod("audit.list", {.audited = false}, auditList);
 }

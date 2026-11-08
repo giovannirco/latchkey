@@ -147,6 +147,20 @@ esp_err_t saveWifi(const Wifi& wifi) {
     return error == ESP_OK ? nvs_commit(h) : error;
 }
 
+bool loadTimezone(std::string& out) {
+    Handle handle(kCfgNamespace, NVS_READONLY);
+    return handle.ok() && readString(handle.get(), "tz", out);
+}
+
+esp_err_t saveTimezone(const std::string& timezone) {
+    Handle handle(kCfgNamespace, NVS_READWRITE);
+    if (!handle.ok()) {
+        return handle.error();
+    }
+    const esp_err_t error = nvs_set_str(handle.get(), "tz", timezone.c_str());
+    return error == ESP_OK ? nvs_commit(handle.get()) : error;
+}
+
 esp_err_t erase() { return eraseNamespace(kCfgNamespace); }
 
 }

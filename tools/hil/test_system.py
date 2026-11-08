@@ -9,7 +9,9 @@ from __future__ import annotations
 import json
 import re
 import time
+from datetime import datetime, timezone
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from latchkey_cli import Console
 from owner import claim_secret, holds_no_secret, setup_params, wifi_params
@@ -19,6 +21,8 @@ AUDIT_CAPACITY = 200
 MIN_UTC = 1704067200
 SYNC_TOLERANCE_S = 10
 NVS_HEADROOM_ENTRIES = 500
+CET = "CET-1CEST,M3.5.0,M10.5.0/3"
+CLOCK_TOLERANCE_S = 5
 
 
 def error_code(console: Console, method: str, params: dict[str, Any] | None = None) -> str | None:
@@ -40,6 +44,21 @@ def audit_entries(console: Console) -> list[dict[str, Any]]:
             return entries
 
 
+def set_clock(console: Console) -> None:
+    assert console.call("system.time.set", {"utc": int(time.time())}) == {}
+
+
+def paris_offset() -> int:
+    return int(datetime.now(timezone.utc).astimezone(ZoneInfo("Europe/Paris")).utcoffset().total_seconds())
+
+
+def assert_local_time(info: dict[str, Any], tz: str, offset: int) -> None:
+    assert info["timezone"] == tz
+    local = datetime.fromisoformat(info["localTime"])
+    assert local.utcoffset().total_seconds() == offset
+    assert abs(local.timestamp() - info["utc"]) <= CLOCK_TOLERANCE_S
+
+
 def test_info_reports_identity(console: Console, fresh: list[str]) -> None:
     info = console.call("system.info")
     assert info["chip"] in BOARDS
@@ -56,6 +75,8 @@ def test_info_reports_identity(console: Console, fresh: list[str]) -> None:
     assert info["button"]["gpio"] == button
     assert info["time_synced"] is False
     assert info["utc"] is None
+    assert info["timezone"] == "UTC0"
+    assert info["localTime"] is None
 
 
 def test_bluetooth_comes_up_idle(console: Console, fresh: list[str]) -> None:
@@ -150,6 +171,25 @@ def test_setup_returns_otpauth_once(
     info = console.call("system.info")
     assert info["claimed"] is True
     assert info["wifi"]["configured"] is True
+
+
+def test_time_zone_sets_the_local_time(console: Console, fresh: list[str]) -> None:
+    assert console.call("system.timezone.get") == {"tz": "UTC0", "utcOffset": 0}
+    set_clock(console)
+    assert_local_time(console.call("system.info"), "UTC0", 0)
+    assert console.call("system.timezone.set", {"tz": "BRT3"}) == {"tz": "BRT3", "utcOffset": -10800}
+    assert_local_time(console.call("system.info"), "BRT3", -10800)
+    assert console.call("system.timezone.set", {"tz": CET}) == {"tz": CET, "utcOffset": paris_offset()}
+    assert_local_time(console.call("system.info"), CET, paris_offset())
+    for bad in ("garbage", "CET-1CEST", "BRT3 ", "", 5, None):
+        assert error_code(console, "system.timezone.set", {"tz": bad}) == "invalid_argument"
+    assert error_code(console, "system.timezone.set", {}) == "invalid_argument"
+    assert console.call("system.timezone.get")["tz"] == CET
+    info = console.call_and_wait_restart("system.reboot")
+    assert info["timezone"] == CET
+    assert info["localTime"] is None
+    set_clock(console)
+    assert console.call("system.timezone.get") == {"tz": CET, "utcOffset": paris_offset()}
 
 
 def test_audit_lists_actions_without_secrets(

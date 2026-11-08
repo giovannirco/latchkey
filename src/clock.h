@@ -2,6 +2,10 @@
 #pragma once
 
 #include <cstdint>
+#include <string>
+#include <string_view>
+
+#include "esp_err.h"
 
 namespace wallclock {
 
@@ -15,5 +19,13 @@ bool synced();
 int64_t utcSeconds();
 
 bool set(int64_t utc);
+
+std::string timezone();
+
+esp_err_t setTimezone(std::string_view timezone);
+
+int32_t utcOffsetAt(int64_t utc);
+
+int32_t utcOffsetSeconds();
 
 }
