@@ -199,8 +199,38 @@ test('a schedule needs a day and a window that runs forward', async ({ page }) =
   await expect(dialog.getByRole('alert')).toContainText('must end after it starts');
 });
 
+async function choicesStayPut(page) {
+  await login(page);
+  await openLock(page, 'Front door', 'Access');
+  await page.getByRole('region', { name: 'Fingerprints' }).getByRole('button', { name: 'Validity' }).first().click();
+  const dialog = page.getByRole('dialog', { name: 'Fingerprint validity' });
+  const names = ['Always', 'Between dates', 'Weekly schedule'];
+  const boxes = async () => {
+    const group = await dialog.locator('fieldset.choices').boundingBox();
+    const found = [];
+    for (const name of names) {
+      const box = await dialog.locator('label.choice').filter({ hasText: name }).boundingBox();
+      found.push({ x: box.x - group.x, y: box.y - group.y, width: box.width, height: box.height });
+    }
+    return found;
+  };
+  const before = await boxes();
+  for (const name of ['Between dates', 'Weekly schedule', 'Always']) {
+    await dialog.getByLabel(name).check();
+    expect(await boxes(), `after picking ${name}`).toEqual(before);
+  }
+}
+
+test('the schedule choices stay in place when another is picked', async ({ page }) => {
+  await choicesStayPut(page);
+});
+
 test.describe('validity editor at phone width', () => {
   test.use({ viewport: { width: 360, height: 740 }, isMobile: true, hasTouch: true });
+
+  test('the schedule choices stay in place when another is picked', async ({ page }) => {
+    await choicesStayPut(page);
+  });
 
   test('the choices and day toggles fit without overlapping', async ({ page }) => {
     await login(page);

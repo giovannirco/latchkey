@@ -684,8 +684,7 @@ input.masked {
 }
 
 fieldset.choices {
-  display: flex;
-  flex-wrap: wrap;
+  display: grid;
   gap: 8px;
   padding: 0;
   border: 0;
@@ -698,13 +697,13 @@ fieldset.choices legend {
 }
 
 .choice {
-  display: inline-flex;
+  display: flex;
   align-items: center;
   gap: 8px;
   min-height: 44px;
   padding: 8px 14px;
   border: 1px solid var(--border);
-  border-radius: 999px;
+  border-radius: 10px;
   background: var(--surface);
   font-weight: 400;
   cursor: pointer;
@@ -720,7 +719,6 @@ fieldset.choices legend {
 .choice:has(input:checked) {
   border-color: var(--accent);
   background: var(--accent-soft);
-  font-weight: 600;
 }
 
 .day-toggles {
