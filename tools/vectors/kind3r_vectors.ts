@@ -19,6 +19,10 @@
  * Two inputs are kind3r's own published data: the passcode-list plaintext that `docs/Bad CRC quest.md` prints
  * (the factory passcode 123456), and the IC-card frame plus the key it was encrypted with from `tools/debug.js`,
  * checked and decrypted here by kind3r's `CodecUtils` and `AESUtil`.
+ *
+ * Where kind3r cannot produce a value the file records that instead: its cyclic commands write a 4-byte card number
+ * as a signed 32-bit integer and throw from 2^31 up, and its screen-passcode `getValue()` drops a hidden (0) value,
+ * so both screen-passcode values are read from the field `processData()` fills.
  */
 
 const FIXED_NOW_MS = 1762524000000;
@@ -59,6 +63,7 @@ const commands = {
   CheckRandom: (await load("api/Commands/CheckRandomCommand")).CheckRandomCommand,
   CheckUserTime: (await load("api/Commands/CheckUserTimeCommand")).CheckUserTimeCommand,
   ControlRemoteUnlock: (await load("api/Commands/ControlRemoteUnlockCommand")).ControlRemoteUnlockCommand,
+  CyclicDate: (await load("api/Commands/CyclicDateCommand")).CyclicDateCommand,
   DeviceFeatures: (await load("api/Commands/DeviceFeaturesCommand")).DeviceFeaturesCommand,
   GetAdminCode: (await load("api/Commands/GetAdminCodeCommand")).GetAdminCodeCommand,
   GetKeyboardPasswords: (await load("api/Commands/GetKeyboardPasswordsCommand")).GetKeyboardPasswordsCommand,
@@ -340,6 +345,44 @@ for (const [name, hex] of [["waiting", "640202"], ["progress", "640203"], ["adde
   }
 }
 
+section("cyclic validity");
+const officeHours = { weekDay: 3, startTime: 8 * 60 + 30, endTime: 17 * 60 + 45 };
+const cyclicCardAdd4 = new commands.CyclicDate();
+cyclicCardAdd4.addIC("305419896", officeHours);
+emitBytes("cyclic_card_add_4", built(cyclicCardAdd4));
+const cyclicCardAdd8 = new commands.CyclicDate();
+cyclicCardAdd8.addIC("1234605616436508552", { weekDay: 7, startTime: 0, endTime: 24 * 60 });
+emitBytes("cyclic_card_add_8", built(cyclicCardAdd8));
+const cyclicFingerprintAdd = new commands.CyclicDate();
+cyclicFingerprintAdd.addFR("1234567890123", { weekDay: 1, startTime: 2 * 60 + 14, endTime: 16 * 60 + 48 });
+emitBytes("cyclic_fingerprint_add", built(cyclicFingerprintAdd));
+const cyclicCardClear4 = new commands.CyclicDate();
+cyclicCardClear4.clearIC("305419896");
+emitBytes("cyclic_card_clear_4", built(cyclicCardClear4));
+const cyclicCardClear8 = new commands.CyclicDate();
+cyclicCardClear8.clearIC("1234605616436508552");
+emitBytes("cyclic_card_clear_8", built(cyclicCardClear8));
+const cyclicFingerprintClear = new commands.CyclicDate();
+cyclicFingerprintClear.clearFR("1234567890123");
+emitBytes("cyclic_fingerprint_clear", built(cyclicFingerprintClear));
+function throwsFor(build: () => Buffer): boolean {
+  try {
+    build();
+    return false;
+  } catch {
+    return true;
+  }
+}
+const highBitAdd = new commands.CyclicDate();
+highBitAdd.addIC("3735928559", officeHours);
+const highBitClear = new commands.CyclicDate();
+highBitClear.clearIC("3735928559");
+emitNumber(
+  "cyclic_card_high_bit_kind3r_throws",
+  "int",
+  throwsFor(() => built(highBitAdd)) && throwsFor(() => built(highBitClear)) ? 1 : 0,
+);
+
 section("passage mode");
 const passageQuery = new commands.PassageMode();
 passageQuery.setSequence(0);
@@ -399,6 +442,20 @@ const remoteReply = parsed(commands.ControlRemoteUnlock, reply(0x37, remoteReply
 emitBytes("remote_unlock_reply_data", Buffer.from(remoteReplyData));
 emitNumber("remote_unlock_reply_value", "int", remoteReply.getValue());
 emitBytes("screen_passcode_query", built(new commands.ScreenPasscodeManage()));
+const screenShow = new commands.ScreenPasscodeManage();
+screenShow.setNewValue(1);
+emitBytes("screen_passcode_show", built(screenShow));
+const screenHide = new commands.ScreenPasscodeManage();
+screenHide.setNewValue(0);
+emitBytes("screen_passcode_hide", built(screenHide));
+const screenShownData = [0x01, 0x01];
+const screenShown = parsed(commands.ScreenPasscodeManage, reply(0x59, screenShownData));
+emitBytes("screen_passcode_reply_shown_data", Buffer.from(screenShownData));
+emitNumber("screen_passcode_reply_shown_value", "int", screenShown.opValue);
+const screenHiddenData = [0x01, 0x00];
+const screenHidden = parsed(commands.ScreenPasscodeManage, reply(0x59, screenHiddenData));
+emitBytes("screen_passcode_reply_hidden_data", Buffer.from(screenHiddenData));
+emitNumber("screen_passcode_reply_hidden_value", "int", screenHidden.opValue);
 
 section("operation log");
 const logNew = new commands.OperationLog();

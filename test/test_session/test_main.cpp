@@ -9,6 +9,7 @@
 #include <vector>
 
 #include "../fake_lock/fake_lock.h"
+#include "../vectors/kind3r_vectors.h"
 #include "ttlock/aes.h"
 #include "ttlock/commands.h"
 #include "ttlock/features.h"
@@ -31,6 +32,7 @@ using ttlock::Bytes;
 using ttlock::Feature;
 using ttlock::Status;
 namespace cmd = ttlock::command;
+namespace k3 = vectors::kind3r;
 
 static const AesKey kDefault = ttlock::kDefaultAesKey;
 static const AesKey kLockKey{0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77,
@@ -875,6 +877,11 @@ static void test_methods_before_attach_return_not_paired_without_traffic() {
     assertStatus(Status::NotPaired, rig.session.fetchLog(ttlock::kLogSinceLastRead, logs));
     assertStatus(Status::NotPaired, rig.session.factoryReset());
     assertStatus(Status::NotPaired, rig.session.receiveEvent(10));
+    bool visible = false;
+    assertStatus(Status::NotPaired, rig.session.screenPasscodeGet(visible));
+    assertStatus(Status::NotPaired, rig.session.privacyLockSet(true));
+    assertStatus(Status::NotPaired, rig.session.cardAddCycle(1, ttlock::WeeklyCycle{}));
+    assertStatus(Status::NotPaired, rig.session.fingerprintClearCycles(1));
     TEST_ASSERT_EQUAL_UINT(0, rig.lock.requests().size());
 }
 
@@ -1437,6 +1444,179 @@ static void test_passage_writes_send_the_documented_frames() {
     assertPayload(Bytes{0x04}, requests[8]);
 }
 
+static const ttlock::WeeklyCycle kOfficeHours{3, 8 * 60 + 30, 17 * 60 + 45};
+
+static void test_screen_passcode_reads_and_writes_the_keypad_display() {
+    Rig rig;
+    attach(rig);
+    for (const Bytes& reply : {Bytes{0x01, 0x01}, Bytes{0x01, 0x00}, Bytes{0x02}, Bytes{0x02}}) {
+        expectAdminLogin(rig.lock);
+        rig.lock.expect(cmd::kShowPassword, kLockKey, {success(kLockKey, cmd::kShowPassword, reply)});
+    }
+    bool visible = false;
+    assertStatus(Status::Ok, rig.session.screenPasscodeGet(visible));
+    TEST_ASSERT_TRUE(visible);
+    assertStatus(Status::Ok, rig.session.screenPasscodeGet(visible));
+    TEST_ASSERT_FALSE(visible);
+    assertStatus(Status::Ok, rig.session.screenPasscodeSet(false));
+    assertStatus(Status::Ok, rig.session.screenPasscodeSet(true));
+    const auto& requests = rig.lock.requests();
+    assertPayload(Bytes{0x01}, requests[2]);
+    assertPayload(Bytes{0x01}, requests[5]);
+    assertPayload(Bytes{0x02, 0x00}, requests[8]);
+    assertPayload(Bytes{0x02, 0x01}, requests[11]);
+    TEST_ASSERT_TRUE(rig.lock.scriptDone());
+    TEST_ASSERT_EQUAL_UINT(0, rig.lock.unexpected());
+
+    Rig malformed;
+    attach(malformed);
+    expectAdminLogin(malformed.lock);
+    malformed.lock.expect(cmd::kShowPassword, kLockKey, {success(kLockKey, cmd::kShowPassword, Bytes{0x01})});
+    assertStatus(Status::BadResponse, malformed.session.screenPasscodeGet(visible));
+}
+
+static void test_privacy_lock_and_tamper_alert_use_their_switch_items() {
+    Rig rig;
+    attach(rig);
+    const Bytes resetAndPrivacy{0x5A, 0x01, 0x00, 0x00, 0x00, 0x06};
+    const Bytes tamperOnly{0x5A, 0x01, 0x00, 0x00, 0x00, 0x01};
+    for (const Bytes& reply : {resetAndPrivacy, resetAndPrivacy, tamperOnly, Bytes{0x5A, 0x02}, Bytes{0x5A, 0x02}}) {
+        expectAdminLogin(rig.lock);
+        rig.lock.expect(cmd::kSwitch, kLockKey, {success(kLockKey, cmd::kSwitch, reply)});
+    }
+    bool privacy = false;
+    bool tamper = true;
+    assertStatus(Status::Ok, rig.session.privacyLockGet(privacy));
+    TEST_ASSERT_TRUE(privacy);
+    assertStatus(Status::Ok, rig.session.tamperAlertGet(tamper));
+    TEST_ASSERT_FALSE(tamper);
+    assertStatus(Status::Ok, rig.session.tamperAlertGet(tamper));
+    TEST_ASSERT_TRUE(tamper);
+    assertStatus(Status::Ok, rig.session.privacyLockSet(true));
+    assertStatus(Status::Ok, rig.session.tamperAlertSet(false));
+    const auto& requests = rig.lock.requests();
+    assertPayload(Bytes{0x01}, requests[2]);
+    assertPayload(Bytes{0x01}, requests[5]);
+    assertPayload(Bytes{0x01}, requests[8]);
+    assertPayload(Bytes{0x02, 0x00, 0x00, 0x00, 0x04, 0x00, 0x00, 0x00, 0x04}, requests[11]);
+    assertPayload(Bytes{0x02, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00}, requests[14]);
+    TEST_ASSERT_TRUE(rig.lock.scriptDone());
+}
+
+static void test_cycles_for_cards_and_fingerprints_send_the_kind3r_frames() {
+    Rig rig;
+    attach(rig);
+    const Bytes added{0x5A, 0x02};
+    const Bytes cleared{0x5A, 0x04};
+    for (const Bytes& reply : {added, added, cleared, added, cleared}) {
+        expectAdminLogin(rig.lock);
+        rig.lock.expect(cmd::kCyclic, kLockKey, {success(kLockKey, cmd::kCyclic, reply)});
+    }
+    assertStatus(Status::Ok, rig.session.cardAddCycle(305419896ULL, kOfficeHours));
+    assertStatus(Status::Ok, rig.session.cardAddCycle(1234605616436508552ULL, ttlock::WeeklyCycle{7, 0, 24 * 60}));
+    assertStatus(Status::Ok, rig.session.cardClearCycles(305419896ULL));
+    assertStatus(Status::Ok,
+                 rig.session.fingerprintAddCycle(1234567890123ULL, ttlock::WeeklyCycle{1, 2 * 60 + 14, 16 * 60 + 48}));
+    assertStatus(Status::Ok, rig.session.fingerprintClearCycles(1234567890123ULL));
+    assertCommands({0x41, 0x30, 0x70, 0x41, 0x30, 0x70, 0x41, 0x30, 0x70, 0x41, 0x30, 0x70, 0x41, 0x30, 0x70},
+                   rig.lock);
+    const auto& requests = rig.lock.requests();
+    assertPayload(Bytes(std::begin(k3::kCyclicCardAdd4), std::end(k3::kCyclicCardAdd4)), requests[2]);
+    assertPayload(Bytes(std::begin(k3::kCyclicCardAdd8), std::end(k3::kCyclicCardAdd8)), requests[5]);
+    assertPayload(Bytes(std::begin(k3::kCyclicCardClear4), std::end(k3::kCyclicCardClear4)), requests[8]);
+    assertPayload(Bytes(std::begin(k3::kCyclicFingerprintAdd), std::end(k3::kCyclicFingerprintAdd)), requests[11]);
+    assertPayload(Bytes(std::begin(k3::kCyclicFingerprintClear), std::end(k3::kCyclicFingerprintClear)), requests[14]);
+    TEST_ASSERT_TRUE(rig.lock.scriptDone());
+    TEST_ASSERT_EQUAL_UINT(0, rig.lock.unexpected());
+}
+
+static void test_cycle_windows_are_validated_before_sending() {
+    Rig rig;
+    attach(rig);
+    assertStatus(Status::InvalidArgument, rig.session.cardAddCycle(1, ttlock::WeeklyCycle{0, 0, 60}));
+    assertStatus(Status::InvalidArgument, rig.session.cardAddCycle(1, ttlock::WeeklyCycle{8, 0, 60}));
+    assertStatus(Status::InvalidArgument,
+                 rig.session.fingerprintAddCycle(1, ttlock::WeeklyCycle{1, 24 * 60 + 1, 24 * 60}));
+    assertStatus(Status::InvalidArgument, rig.session.fingerprintAddCycle(1, ttlock::WeeklyCycle{7, 0, 24 * 60 + 1}));
+    TEST_ASSERT_EQUAL_UINT(0, rig.lock.requests().size());
+}
+
+static uint64_t everyFeatureBut(Feature missing) {
+    return everyFeature() & ~ttlock::featureBit(missing);
+}
+
+template <typename Call>
+static void assertGatedOn(Feature feature, Call call) {
+    Rig rig;
+    attach(rig, everyFeatureBut(feature));
+    assertStatus(Status::Unsupported, call(rig.session));
+    TEST_ASSERT_EQUAL_UINT_MESSAGE(0, rig.lock.requests().size(), ttlock::toString(feature));
+}
+
+static void test_each_new_command_is_gated_on_its_feature_bits() {
+    bool flag = false;
+    const ttlock::WeeklyCycle noWeekDay{0, 0, 0};
+    assertGatedOn(Feature::PasswordDisplayOrHide,
+                  [&flag](ttlock::Session& session) { return session.screenPasscodeGet(flag); });
+    assertGatedOn(Feature::PasswordDisplayOrHide,
+                  [](ttlock::Session& session) { return session.screenPasscodeSet(true); });
+    assertGatedOn(Feature::PrivacyLock, [&flag](ttlock::Session& session) { return session.privacyLockGet(flag); });
+    assertGatedOn(Feature::PrivacyLock, [](ttlock::Session& session) { return session.privacyLockSet(true); });
+    assertGatedOn(Feature::TamperAlert, [&flag](ttlock::Session& session) { return session.tamperAlertGet(flag); });
+    assertGatedOn(Feature::TamperAlert, [](ttlock::Session& session) { return session.tamperAlertSet(true); });
+    for (Feature feature : {Feature::Ic, Feature::CyclicIcOrFingerPrint}) {
+        assertGatedOn(feature,
+                      [](ttlock::Session& session) { return session.cardAddCycle(305419896ULL, kOfficeHours); });
+        assertGatedOn(feature,
+                      [&noWeekDay](ttlock::Session& session) { return session.cardAddCycle(305419896ULL, noWeekDay); });
+        assertGatedOn(feature, [](ttlock::Session& session) { return session.cardClearCycles(305419896ULL); });
+    }
+    for (Feature feature : {Feature::FingerPrint, Feature::CyclicIcOrFingerPrint}) {
+        assertGatedOn(feature, [](ttlock::Session& session) {
+            return session.fingerprintAddCycle(1234567890123ULL, kOfficeHours);
+        });
+        assertGatedOn(feature, [&noWeekDay](ttlock::Session& session) {
+            return session.fingerprintAddCycle(1234567890123ULL, noWeekDay);
+        });
+        assertGatedOn(feature,
+                      [](ttlock::Session& session) { return session.fingerprintClearCycles(1234567890123ULL); });
+    }
+}
+
+template <typename Call>
+static void assertRefusedWithCode(uint8_t command, uint8_t code, Call call) {
+    Rig rig;
+    attach(rig);
+    expectAdminLogin(rig.lock);
+    rig.lock.expect(command, kLockKey, {failure(kLockKey, command, code)});
+    assertStatus(Status::LockError, call(rig.session));
+    TEST_ASSERT_EQUAL_HEX8(code, rig.session.lockErrorCode());
+    assertCommands({cmd::kCheckAdmin, cmd::kCheckRandom, command}, rig.lock);
+}
+
+static void test_refused_new_commands_are_lock_errors_with_the_lock_code() {
+    bool flag = false;
+    assertRefusedWithCode(cmd::kShowPassword, 0x02,
+                          [&flag](ttlock::Session& session) { return session.screenPasscodeGet(flag); });
+    assertRefusedWithCode(cmd::kShowPassword, 0x02,
+                          [](ttlock::Session& session) { return session.screenPasscodeSet(false); });
+    assertRefusedWithCode(cmd::kSwitch, 0x02,
+                          [&flag](ttlock::Session& session) { return session.privacyLockGet(flag); });
+    assertRefusedWithCode(cmd::kSwitch, 0x02, [](ttlock::Session& session) { return session.privacyLockSet(true); });
+    assertRefusedWithCode(cmd::kSwitch, 0x02,
+                          [&flag](ttlock::Session& session) { return session.tamperAlertGet(flag); });
+    assertRefusedWithCode(cmd::kSwitch, 0x02, [](ttlock::Session& session) { return session.tamperAlertSet(true); });
+    assertRefusedWithCode(cmd::kCyclic, 0x1A,
+                          [](ttlock::Session& session) { return session.cardAddCycle(305419896ULL, kOfficeHours); });
+    assertRefusedWithCode(cmd::kCyclic, 0x1A,
+                          [](ttlock::Session& session) { return session.cardClearCycles(305419896ULL); });
+    assertRefusedWithCode(cmd::kCyclic, 0x1A, [](ttlock::Session& session) {
+        return session.fingerprintAddCycle(1234567890123ULL, kOfficeHours);
+    });
+    assertRefusedWithCode(cmd::kCyclic, 0x1A,
+                          [](ttlock::Session& session) { return session.fingerprintClearCycles(1234567890123ULL); });
+}
+
 static void test_events_without_a_sink_are_dropped_quietly() {
     FakeLock lock;
     FakeClock clock;
@@ -1520,6 +1700,12 @@ int main() {
     RUN_TEST(test_passcode_writes_send_the_documented_frames);
     RUN_TEST(test_credential_writes_send_the_documented_frames);
     RUN_TEST(test_passage_writes_send_the_documented_frames);
+    RUN_TEST(test_screen_passcode_reads_and_writes_the_keypad_display);
+    RUN_TEST(test_privacy_lock_and_tamper_alert_use_their_switch_items);
+    RUN_TEST(test_cycles_for_cards_and_fingerprints_send_the_kind3r_frames);
+    RUN_TEST(test_cycle_windows_are_validated_before_sending);
+    RUN_TEST(test_each_new_command_is_gated_on_its_feature_bits);
+    RUN_TEST(test_refused_new_commands_are_lock_errors_with_the_lock_code);
     RUN_TEST(test_events_without_a_sink_are_dropped_quietly);
     return UNITY_END();
 }

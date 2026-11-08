@@ -467,6 +467,33 @@ static void test_kind3r_card_capture_decodes_to_enter_add_mode() {
     TEST_ASSERT_EQUAL_INT(k3::kCardCaptureBattery, reply.data[0]);
 }
 
+static const ttlock::WeeklyCycle kOfficeHours{3, 8 * 60 + 30, 17 * 60 + 45};
+
+static void test_cyclic_commands_match_kind3r() {
+    assertBytes(k3::kCyclicCardAdd4, ttlock::buildCardCycleAdd(305419896ULL, kOfficeHours), "card add 4");
+    assertBytes(k3::kCyclicCardAdd8,
+                ttlock::buildCardCycleAdd(1234605616436508552ULL, ttlock::WeeklyCycle{7, 0, 24 * 60}), "card add 8");
+    assertBytes(k3::kCyclicFingerprintAdd,
+                ttlock::buildFingerprintCycleAdd(1234567890123ULL, ttlock::WeeklyCycle{1, 2 * 60 + 14, 16 * 60 + 48}),
+                "fingerprint add");
+    assertBytes(k3::kCyclicCardClear4, ttlock::buildCardCycleClear(305419896ULL), "card clear 4");
+    assertBytes(k3::kCyclicCardClear8, ttlock::buildCardCycleClear(1234605616436508552ULL), "card clear 8");
+    assertBytes(k3::kCyclicFingerprintClear, ttlock::buildFingerprintCycleClear(1234567890123ULL), "fingerprint clear");
+}
+
+static void test_cyclic_card_numbers_from_2_31_go_out_unsigned_where_kind3r_throws() {
+    TEST_ASSERT_EQUAL_INT(1, k3::kCyclicCardHighBitKind3rThrows);
+    const uint8_t highBitId[] = {0xDE, 0xAD, 0xBE, 0xEF};
+    Bytes added = toBytes(k3::kCyclicCardAdd4);
+    Bytes cleared = toBytes(k3::kCyclicCardClear4);
+    std::copy(std::begin(highBitId), std::end(highBitId), added.begin() + 3);
+    std::copy(std::begin(highBitId), std::end(highBitId), cleared.begin() + 3);
+    assertBytes(added.data(), added.size(), ttlock::buildCardCycleAdd(0xDEADBEEFULL, kOfficeHours), "high bit add");
+    assertBytes(cleared.data(), cleared.size(), ttlock::buildCardCycleClear(0xDEADBEEFULL), "high bit clear");
+    TEST_ASSERT_EQUAL_UINT(sizeof(k3::kCyclicCardClear4), ttlock::buildCardCycleClear(0xFFFFFFFFULL).size());
+    TEST_ASSERT_EQUAL_UINT(sizeof(k3::kCyclicCardClear8), ttlock::buildCardCycleClear(0x100000000ULL).size());
+}
+
 static void test_passage_mode_requests_match_kind3r() {
     assertBytes(k3::kPassageQuery0, ttlock::buildPassageQuery(0), "query");
     const ttlock::PassageMode mode{ttlock::PassageType::Weekly, 5, 0, 8, 0, 17, 30};
@@ -553,6 +580,18 @@ static void test_remote_unlock_and_screen_passcode_match_kind3r() {
     TEST_ASSERT_EQUAL(k3::kRemoteUnlockReplyValue == 1, enabled);
     TEST_ASSERT_FALSE(ttlock::parseRemoteUnlock(Bytes{0x5A, 0x01}, enabled));
     assertBytes(k3::kScreenPasscodeQuery, ttlock::buildScreenPasscodeQuery(), "screen passcode");
+}
+
+static void test_screen_passcode_set_and_reply_match_kind3r() {
+    assertBytes(k3::kScreenPasscodeShow, ttlock::buildScreenPasscodeSet(true), "show");
+    assertBytes(k3::kScreenPasscodeHide, ttlock::buildScreenPasscodeSet(false), "hide");
+    bool visible = false;
+    TEST_ASSERT_TRUE(ttlock::parseScreenPasscode(toBytes(k3::kScreenPasscodeReplyShownData), visible));
+    TEST_ASSERT_EQUAL(k3::kScreenPasscodeReplyShownValue == 1, visible);
+    TEST_ASSERT_TRUE(ttlock::parseScreenPasscode(toBytes(k3::kScreenPasscodeReplyHiddenData), visible));
+    TEST_ASSERT_EQUAL(k3::kScreenPasscodeReplyHiddenValue == 1, visible);
+    TEST_ASSERT_FALSE(ttlock::parseScreenPasscode(Bytes{0x01}, visible));
+    TEST_ASSERT_FALSE(ttlock::parseScreenPasscode(Bytes{0x02, 0x01}, visible));
 }
 
 static void test_switch_commands_carry_the_item_mask_twice_when_enabling() {
@@ -707,11 +746,14 @@ int main() {
     RUN_TEST(test_card_pages_match_ttlock_ble_and_kind3r);
     RUN_TEST(test_card_enroll_replies_match_kind3r);
     RUN_TEST(test_kind3r_card_capture_decodes_to_enter_add_mode);
+    RUN_TEST(test_cyclic_commands_match_kind3r);
+    RUN_TEST(test_cyclic_card_numbers_from_2_31_go_out_unsigned_where_kind3r_throws);
     RUN_TEST(test_passage_mode_requests_match_kind3r);
     RUN_TEST(test_passage_pages_parse_every_seven_byte_entry);
     RUN_TEST(test_sound_commands_match_kind3r_and_ttlock_ble);
     RUN_TEST(test_auto_lock_commands_match_kind3r_and_ttlock_ble);
     RUN_TEST(test_remote_unlock_and_screen_passcode_match_kind3r);
+    RUN_TEST(test_screen_passcode_set_and_reply_match_kind3r);
     RUN_TEST(test_switch_commands_carry_the_item_mask_twice_when_enabling);
     RUN_TEST(test_log_requests_match_kind3r_and_ttlock_ble);
     RUN_TEST(test_log_records_match_ttlock_ble);

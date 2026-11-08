@@ -93,6 +93,17 @@ public:
     Status factoryReset();
     Status receiveEvent(uint32_t timeoutMs);
 
+    Status screenPasscodeGet(bool& visible);
+    Status screenPasscodeSet(bool visible);
+    Status privacyLockGet(bool& enabled);
+    Status privacyLockSet(bool enabled);
+    Status tamperAlertGet(bool& enabled);
+    Status tamperAlertSet(bool enabled);
+    Status cardAddCycle(uint64_t number, const WeeklyCycle& cycle);
+    Status cardClearCycles(uint64_t number);
+    Status fingerprintAddCycle(uint64_t id, const WeeklyCycle& cycle);
+    Status fingerprintClearCycles(uint64_t id);
+
 private:
     Status requireKeys() const;
     Status requireFeature(Feature feature) const;
@@ -124,6 +135,7 @@ private:
     Status enroll(bool fingerprint, const Validity& validity, const EnrollCallback& progress, uint64_t& id);
     Status switchGet(Feature feature, uint32_t item, bool& enabled);
     Status switchSet(Feature feature, uint32_t item, bool enabled);
+    Status requireCyclic(Feature credential) const;
 
     Transport& transport_;
     Clock& clock_;
