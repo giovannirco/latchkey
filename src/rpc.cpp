@@ -10,12 +10,15 @@
 
 #include "audit.h"
 #include "clock.h"
+#include "latchkey_util/json_depth.h"
 
 namespace rpc {
 
 namespace {
 
 constexpr const char* TAG = "rpc";
+constexpr size_t kMaxNesting = 8;
+constexpr const char* kOutOfMemoryLine = R"({"id":null,"error":{"code":"internal","message":"out of memory"}})";
 
 struct Method {
     Access access;
@@ -46,7 +49,7 @@ std::string render(const cJSON* id, Reply reply) {
     char* text = cJSON_PrintUnformatted(envelope.get());
     if (text == nullptr) {
         ESP_LOGE(TAG, "out of memory rendering a reply");
-        abort();
+        return kOutOfMemoryLine;
     }
     std::string line(text);
     cJSON_free(text);
@@ -89,6 +92,9 @@ void registerMethod(const char* name, Access access, Handler handler) {
 }
 
 std::string dispatch(const char* requestJson, Transport origin) {
+    if (!latchkey_util::jsonNestingWithin(requestJson, kMaxNesting)) {
+        return render(nullptr, fail("bad_request", "request nested too deeply"));
+    }
     Json request(cJSON_ParseWithOpts(requestJson, nullptr, true));
     if (request == nullptr || !cJSON_IsObject(request.get())) {
         return render(nullptr, fail("bad_request", "request must be a JSON object"));
