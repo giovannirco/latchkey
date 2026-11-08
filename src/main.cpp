@@ -13,8 +13,11 @@
 #include "auth.h"
 #include "ble_central.h"
 #include "board.h"
+#include "certs.h"
 #include "clock.h"
 #include "console.h"
+#include "http.h"
+#include "jobs.h"
 #include "lock_manager.h"
 #include "methods.h"
 #include "store.h"
@@ -37,6 +40,7 @@ extern "C" void app_main() {
     store::init();
     audit::init();
     auth::init();
+    certs::init();
     board::init();
     ESP_ERROR_CHECK(esp_netif_init());
     ESP_ERROR_CHECK(esp_event_loop_create_default());
@@ -49,5 +53,7 @@ extern "C" void app_main() {
     methods::registerSystem();
     methods::registerAuth();
     methods::registerLocks();
+    jobs::start();
+    http::start();
     console::start();
 }

@@ -323,26 +323,26 @@ def test_paired_lock_keeps_advertising_untouched(console: Console, held: dict[st
 def test_heap_holds_with_bluetooth_up(console: Console, board: dict[str, Any]) -> None:
     info = console.call("system.info")
     heap = info["heap"]
-    print(f"heap free={heap['free']} min_free={heap['min_free']} largest={heap['largest_block']}", file=sys.stderr)
+    print(f"heap free={heap['free']} minFree={heap['minFree']} largest={heap['largestBlock']}", file=sys.stderr)
     assert info["ble"]["ready"] is True
-    assert heap["min_free"] > 40_000
-    assert heap["largest_block"] > 20_000
+    assert heap["minFree"] > 40_000
+    assert heap["largestBlock"] > 20_000
 
 
 def test_every_lock_reply_passed_crc(console: Console, held: dict[str, Any]) -> None:
     ble = console.call("system.info")["ble"]
     assert ble["frames"] > 0
-    assert ble["bad_crc"] == 0
+    assert ble["badCrc"] == 0
 
 
 def test_board_reset_refuses_while_the_lock_is_stored(console: Console, held: dict[str, Any], lock_mac: str) -> None:
     started = time.monotonic()
-    uptime = console.call("system.info")["uptime_ms"]
+    uptime = console.call("system.info")["uptime"]
     assert error_code(console, "system.factoryReset", {}) == "locks_paired"
     assert error_code(console, "system.factoryReset", {"force": False}) == "locks_paired"
-    elapsed_ms = (time.monotonic() - started) * 1000.0
-    grown = console.call("system.info")["uptime_ms"] - uptime
-    assert grown >= elapsed_ms - 1000.0, "the board restarted"
+    elapsed = time.monotonic() - started
+    grown = console.call("system.info")["uptime"] - uptime
+    assert grown >= elapsed - 2.0, "the board restarted"
     assert stored(console, lock_mac) is not None
 
 

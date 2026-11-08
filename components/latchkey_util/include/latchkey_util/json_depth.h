@@ -8,4 +8,6 @@ namespace latchkey_util {
 
 bool jsonNestingWithin(std::string_view text, size_t maxDepth);
 
+bool jsonValuesWithin(std::string_view text, size_t maxValues);
+
 }

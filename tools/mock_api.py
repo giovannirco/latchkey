@@ -15,8 +15,10 @@ Served like the firmware serves them:
 The session is an HttpOnly, SameSite=Strict cookie set by auth.login. /api/rpc only accepts
 application/json and refuses a foreign Origin. A method that needs the board's button emits
 confirm.required, then confirm.result after 2 s (pressed) unless a test asks for a timeout.
-locks.pair runs as a job: the reply is {"job": id} and the outcome arrives as a job.done event
-{"job", "result"} or {"job", "error"}, the asynchronous shape the firmware may use for lock jobs.
+As on the board, the lock methods (locks.scan, locks.pair, lock.status, lock.info, lock.features,
+lock.unlock, lock.lock, lock.time.sync, lock.factoryReset) and the button-gated auth.rotateTotp and
+system.factoryReset run as jobs: the reply is {"job": id} and the outcome arrives as a job.done event
+{"job", "result"} or {"job", "error"}, sent only to the sockets of the session that asked.
 
 Test hooks used by tools/ui-tests/:
 
@@ -428,11 +430,12 @@ class EventHub:
         with self._lock:
             self._clients.pop(client, None)
 
-    def publish(self, event: str, data: Any) -> None:
+    def publish(self, event: str, data: Any, tokens: set[str | None] | None = None) -> None:
         message = json.dumps({"event": event, "data": data})
         with self._lock:
-            for _, inbox in self._clients.values():
-                inbox.put(message)
+            for token, inbox in self._clients.values():
+                if tokens is None or token in tokens:
+                    inbox.put(message)
 
     def disconnect(self, tokens: set[str | None] | None = None) -> None:
         with self._lock:
@@ -448,10 +451,21 @@ class Mock:
         self.events = EventHub()
         self.started = time.time()
         self.generation = 0
+        self.timers: list[threading.Timer] = []
         self.reset()
+
+    def later(self, seconds: float, action: Callable[[], None]) -> None:
+        timer = threading.Timer(seconds, action)
+        timer.daemon = True
+        with self.lock:
+            self.timers.append(timer)
+        timer.start()
 
     def reset(self) -> None:
         with self.lock:
+            for timer in self.timers:
+                timer.cancel()
+            self.timers = []
             self.generation += 1
             self.config = Config()
             self.password = MOCK_PASSWORD
@@ -500,10 +514,10 @@ class Mock:
                 entry["target"] = target
             self.audit.append(entry)
 
-    def emit(self, event: str, data: Any, generation: int | None = None) -> None:
+    def emit(self, event: str, data: Any, generation: int | None = None, tokens: set[str | None] | None = None) -> None:
         if generation is not None and generation != self.generation:
             return
-        self.events.publish(event, data)
+        self.events.publish(event, data, tokens)
 
     def wait(self, seconds: float, generation: int) -> bool:
         deadline = time.monotonic() + seconds
@@ -619,12 +633,12 @@ class Mock:
                 if generation == self.generation:
                     if method.audited:
                         self.append_audit(name, ctx, params, err.code)
-                    self.emit("job.done", {"job": job, "error": err.to_json()}, generation)
+                    self.emit("job.done", {"job": job, "error": err.to_json()}, generation, {ctx.token})
                 return
             if generation == self.generation:
                 if method.audited:
                     self.append_audit(name, ctx, params, "ok")
-                self.emit("job.done", {"job": job, "result": result}, generation)
+                self.emit("job.done", {"job": job, "result": result}, generation, {ctx.token})
 
         threading.Thread(target=run, daemon=True).start()
         if self.config.job_reply_delay_ms:
@@ -694,13 +708,13 @@ class Mock:
 
     @rpc("system.reboot")
     def system_reboot(self, ctx: Context, params: dict) -> dict:
-        threading.Timer(0.3, self.events.disconnect).start()
+        self.later(0.3, self.events.disconnect)
         return {"rebooting": True}
 
-    @rpc("system.factoryReset")
+    @rpc("system.factoryReset", job=True)
     def system_factory_reset(self, ctx: Context, params: dict) -> dict:
         self.confirm("system.factoryReset")
-        threading.Timer(0.3, self.reset).start()
+        self.later(0.3, self.reset)
         return {"rebooting": True}
 
     @rpc("auth.login", session=False)
@@ -762,7 +776,7 @@ class Mock:
         self.events.disconnect(ended)
         return {}
 
-    @rpc("auth.rotateTotp")
+    @rpc("auth.rotateTotp", job=True)
     def auth_rotate_totp(self, ctx: Context, params: dict) -> dict:
         self.confirm("auth.rotateTotp")
         secret = base64.b32encode(secrets.token_bytes(20)).decode().rstrip("=")
@@ -770,7 +784,7 @@ class Mock:
             "otpauth": f"otpauth://totp/Latchkey:owner?secret={secret}&issuer=Latchkey&algorithm=SHA1&digits=6&period=30"
         }
 
-    @rpc("locks.scan", audited=False)
+    @rpc("locks.scan", audited=False, job=True)
     def locks_scan(self, ctx: Context, params: dict) -> dict:
         seconds = int_param(params, "seconds", default=10, lo=1, hi=30)
         generation = self.generation
@@ -835,19 +849,19 @@ class Mock:
         self.emit("lock.state", {"lock": mac, "state": lock["state"], "battery": lock["battery"]})
         return {"lock": summary(lock)}
 
-    @rpc("lock.status", audited=False)
+    @rpc("lock.status", audited=False, job=True)
     def lock_status(self, ctx: Context, params: dict) -> dict:
         lock = self.get_lock(params)
         with self.radio():
             lock["lastSeen"] = now()
         return {"state": lock["state"], "battery": lock["battery"]}
 
-    @rpc("lock.info", audited=False)
+    @rpc("lock.info", audited=False, job=True)
     def lock_info(self, ctx: Context, params: dict) -> dict:
         lock = self.get_lock(params)
         return {key: lock[key] for key in ("mac", "model", "hardware", "firmware", "manufactureDate", "protocol")}
 
-    @rpc("lock.features", audited=False)
+    @rpc("lock.features", audited=False, job=True)
     def lock_features(self, ctx: Context, params: dict) -> dict:
         return {"features": list(self.get_lock(params)["features"])}
 
@@ -863,15 +877,15 @@ class Mock:
         self.emit("lock.event", {"lock": lock["id"], **event})
         return {"state": lock["state"], "battery": lock["battery"]}
 
-    @rpc("lock.unlock")
+    @rpc("lock.unlock", job=True)
     def lock_unlock(self, ctx: Context, params: dict) -> dict:
         return self._operate(params, "unlock")
 
-    @rpc("lock.lock")
+    @rpc("lock.lock", job=True)
     def lock_lock(self, ctx: Context, params: dict) -> dict:
         return self._operate(params, "lock")
 
-    @rpc("lock.time.sync")
+    @rpc("lock.time.sync", job=True)
     def lock_time_sync(self, ctx: Context, params: dict) -> dict:
         self.get_lock(params)
         if not self.config.time_synced:
@@ -1200,7 +1214,7 @@ class Mock:
             lock["hardened"] = True
         return {"steps": steps}
 
-    @rpc("lock.factoryReset")
+    @rpc("lock.factoryReset", job=True)
     def lock_factory_reset(self, ctx: Context, params: dict) -> dict:
         lock = self.get_lock(params)
         self.confirm("lock.factoryReset")
@@ -1482,7 +1496,7 @@ class Handler(BaseHTTPRequestHandler):
             mock.append_audit("ota", Context(token=None), {}, err.code)
             return self._error(403, err.code, err.message)
         mock.append_audit("ota", Context(token=None), {}, "ok")
-        threading.Timer(0.5, mock.events.disconnect).start()
+        mock.later(0.5, mock.events.disconnect)
         return self._json(200, {"result": {"bytes": len(image), "rebooting": True}})
 
     def _control(self) -> None:

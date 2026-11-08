@@ -165,6 +165,11 @@ esp_err_t apply(const store::cfg::Wifi& config) {
     return error;
 }
 
+uint32_t address() {
+    esp_netif_ip_info_t ip{};
+    return s_connected && esp_netif_get_ip_info(s_netif, &ip) == ESP_OK ? ntohl(ip.ip.addr) : 0;
+}
+
 Status status() {
     Status result;
     {

@@ -87,8 +87,10 @@ def held_locks(console: Console) -> list[dict[str, Any]]:
 
 
 @pytest.fixture
-def fresh(console: Console) -> list[str]:
+def fresh(console: Console, board_settings: dict[str, Any]) -> list[str]:
     console.wait_ready()
+    if board_settings.get("totp_uri"):
+        pytest.skip("the owner holds this board's login (totp_uri in secrets.local.json): no factory reset")
     if held_locks(console):
         pytest.skip("the board holds lock keys, which a factory reset would erase")
     console.lines.clear()

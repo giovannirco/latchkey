@@ -124,3 +124,43 @@ test('locks.pair answers with a job id and reports the outcome as job.done', asy
   expect(outcome.data.job).toBe(outcome.reply.result.job);
   expect(outcome.data.result.lock).toMatchObject({ id: '00:00:5E:00:53:21', name: 'Porch', hardened: false });
 });
+
+async function recordEvents(page) {
+  await page.evaluate(
+    () =>
+      new Promise((resolve) => {
+        window.__events = [];
+        const socket = new WebSocket(`ws://${location.host}/api/events`);
+        socket.addEventListener('message', (message) => window.__events.push(JSON.parse(message.data)));
+        socket.addEventListener('open', resolve);
+      }),
+  );
+}
+
+function sawJobDone(page, job) {
+  return page.evaluate(
+    (id) => window.__events.some((event) => event.event === 'job.done' && event.data.job === id),
+    job,
+  );
+}
+
+test('lock methods answer with a job whose job.done reaches only the session that asked', async ({ page, browser }) => {
+  await login(page);
+  const otherContext = await browser.newContext();
+  const other = await otherContext.newPage();
+  await login(other);
+  await recordEvents(page);
+  await recordEvents(other);
+  const reply = await page.evaluate(async () => {
+    const response = await fetch('/api/rpc', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id: 3, method: 'lock.unlock', params: { lock: '00:00:5E:00:53:02' } }),
+    });
+    return response.json();
+  });
+  expect(reply).toEqual({ id: 3, result: { job: expect.any(String) } });
+  await expect.poll(() => sawJobDone(page, reply.result.job)).toBe(true);
+  expect(await sawJobDone(other, reply.result.job)).toBe(false);
+  await otherContext.close();
+});

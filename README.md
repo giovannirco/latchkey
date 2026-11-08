@@ -5,7 +5,7 @@
 
 Latchkey is firmware for ESP32 boards that takes a TTLock Bluetooth LE smart lock off the TTLock cloud and puts it under one owner's control: the board pairs with the lock by itself, manages what the TTLock app can manage on that lock, and serves an owner-only web UI, with no phone app, TTLock account or computer Bluetooth involved.
 
-Latchkey is in early development. The TTLock protocol core, the USB serial console, claiming the board, Wi-Fi, time and the time zone, the audit log and the owner login checks (password, TOTP code and rate limit, run over USB for now; web sessions come with the HTTPS login) are in place; pairing from the board, the web UI on the board, HTTPS, button confirmation, hardening and key backup are being built.
+Latchkey is in early development. The TTLock protocol core, the USB serial console, claiming the board, Wi-Fi, time and the time zone, the audit log, the owner login with web sessions, and the web UI served by the board over HTTPS with live events and button confirmation are in place; pairing from the board, hardening, over-the-air updates and key backup are being built.
 
 ## Why
 
@@ -18,17 +18,17 @@ Latchkey is in early development. The TTLock protocol core, the USB serial conso
 Works today:
 
 - TTLock protocol core (`components/ttlock`), tested on the host: pairing, lock and unlock, status and battery, device info and feature bits, time sync, passcodes, IC cards and fingerprints with validity periods and weekly windows, auto-lock, passage mode, sound, remote unlock, the reset button, privacy lock and tamper alert switches, the passcode display, the operation log and factory reset. A command the lock does not report in its feature bits answers `unsupported` without touching the radio.
-- Firmware for the classic ESP32 and the ESP32-S3: a JSON-lines console over USB, claiming the board, Wi-Fi with a static address, SNTP time with a configurable time zone, an audit log, and the owner login checks the web login will use: password, TOTP code and rate limit, tested over USB. The session table is ready too, but only the HTTPS login (in progress) opens sessions.
-- The owner web UI (`web/`), built and tested against a mock of the board API.
+- Firmware for the classic ESP32 and the ESP32-S3: a JSON-lines console over USB, claiming the board, Wi-Fi with a static address, SNTP time with a configurable time zone, an audit log, the owner login (password, TOTP code and rate limit) with web sessions, and HTTPS with a certificate the board makes itself: the web UI, the JSON API behind a session cookie, live events over a WebSocket, and a press of the board's button before destructive actions from the web.
+- The owner web UI (`web/`), served by the board and tested against a mock of the board API.
 
-In progress: the Bluetooth link and lock manager on the board, the web UI and its login served by the board over HTTPS, button confirmation, over-the-air updates, lock hardening and the encrypted key backup.
+In progress: the Bluetooth link and lock manager on the board, over-the-air updates, lock hardening and the encrypted key backup.
 
 ## Security model
 
 - The board is claimed only over its USB serial console, which counts as physical presence.
-- Web login with the owner password (PBKDF2-HMAC-SHA256) and a TOTP code, with a growing wait after failed attempts. The board checks both today, over USB; the HTTPS login is in progress.
-- Destructive actions from the web also need a press of the board's button (in progress).
-- HTTPS with a certificate the board generates, whose fingerprint you check once (in progress).
+- Web login with the owner password (PBKDF2-HMAC-SHA256) and a TOTP code, with a growing wait after failed attempts.
+- Destructive actions from the web also need a press of the board's button.
+- HTTPS with a certificate the board generates, whose fingerprint you check once.
 - An audit log of every action, never containing secrets.
 - Hardening (in progress): a random admin passcode on the lock, unknown passcodes removed, the lock's reset button disabled only after an encrypted backup of its keys.
 - No cloud: the board only reaches the internet for DNS and SNTP.
@@ -41,10 +41,10 @@ In progress: the Bluetooth link and lock manager on the board, the web UI and it
 | Env | Board name | Flash | Button | Console |
 |---|---|---|---|---|
 | `esp32` | `esp32-devkit` (classic ESP32) | 4 MB | GPIO0 | UART0, 115200 baud |
-| `esp32s3` | `esp32s3-atom` (ESP32-S3, AtomS3-class) | 8 MB | GPIO41 | USB-Serial/JTAG |
+| `esp32s3` | `esp32s3-atom` (ESP32-S3, such as the M5Stack StampS3) | 8 MB | GPIO0 | USB-Serial/JTAG |
 | `native` | host unit tests for `components/ttlock` and `components/latchkey_util` | | | |
 
-An M5 ATOM runs the `esp32` build with `LATCHKEY_BUTTON_GPIO=39`. The ESP8266 cannot work: it has no Bluetooth. [docs/hardware.md](docs/hardware.md) covers the button pins, flashing, power and where to put the board.
+An M5 ATOM runs the `esp32` build with `LATCHKEY_BUTTON_GPIO=39`, and an M5Stack AtomS3 the `esp32s3` build with `LATCHKEY_BUTTON_GPIO=41`. The ESP8266 cannot work: it has no Bluetooth. [docs/hardware.md](docs/hardware.md) covers the button pins, flashing, power and where to put the board.
 
 ## Quick start
 
@@ -91,20 +91,31 @@ The console speaks JSON lines: send one request per line, `{"id": 1, "method": "
 
 ### Owner login
 
-- `auth.login {"password", "totp"}` checks the owner password and the current six-digit code (one 30 s step of drift either way; a code whose step was already accepted is refused). Over the web (HTTPS, in progress) it opens a session; over the console, where the owner needs none, it takes `"dryRun": true` and answers `{"ok": true}`, so the checks can be tested over USB. It answers `unauthorized` for a wrong password or code, `time_unsynced` until the clock is set, and `rate_limited` with `retryAfter` seconds once five attempts in a row have failed: the wait starts at 30 s and doubles up to 15 minutes, survives a reboot, and the next successful login resets the count.
-- Web sessions, opened only by a web login (HTTPS, in progress), live in RAM only (a reboot ends them all): at most four, 15 minutes idle and 12 hours at most. `auth.sessions` lists them, `auth.revoke {"id"}` ends one and `auth.logout {"all"?}` ends the caller's own or all of them.
+- `auth.login {"password", "totp"}` checks the owner password and the current six-digit code (one 30 s step of drift either way; a code whose step was already accepted is refused). Over HTTPS it opens a session and sets the session cookie; over the console, where the owner needs none, it takes `"dryRun": true` and answers `{"ok": true}`, so the checks can be tested over USB. It answers `unauthorized` for a wrong password or code, `time_unsynced` until the clock is set, and `rate_limited` with `retryAfter` seconds once five attempts in a row have failed: the wait starts at 30 s and doubles up to 15 minutes, survives a reboot, and the next successful login resets the count.
+- Web sessions, opened only by a login over HTTPS, live in RAM only (a reboot ends them all): at most four, 15 minutes idle and 12 hours at most. `auth.sessions` lists them, `auth.revoke {"id"}` ends one and `auth.logout {"all"?}` ends the caller's own or all of them.
 - `auth.changePassword {"current", "new"}` re-hashes with a new salt and ends the other sessions; a wrong current password answers `invalid_argument` and counts as a failed attempt. `auth.rotateTotp` (a press of the board's button from the web) returns the new `otpauth://` URI once, retires the old secret at once and ends the other sessions.
+
+### Web
+
+The first time the board has an address it starts HTTPS on port 443 and, on port 80, a server that only redirects to `https://<address>/`. It makes its certificate once: an EC P-256 key and a self-signed certificate for the board name and its static address, valid from 2024-01-01 with no expiry date (9999-12-31, as RFC 5280 allows), kept in NVS until a factory reset. Compare the SHA-256 fingerprint the browser shows the first time with `certFingerprint` in `system.info` or the `HTTPS certificate SHA-256` line on the console. The certificate keeps the address it was made for: after `system.wifi.set` moves the board elsewhere, browsers also report a name mismatch until a factory reset makes a new one.
+
+- `GET /` serves the web UI. Every response carries its Content-Security-Policy (with `frame-ancestors 'none'`), `X-Frame-Options: DENY`, `Referrer-Policy: no-referrer`, `X-Content-Type-Options: nosniff` and `Cache-Control: no-store`, and every error answers with the JSON error envelope.
+- Open the UI at `https://<board IP address>/`. The API and the event socket answer only requests whose `Host`, and `Origin` when present, name that address (403 otherwise), so a page on another name that resolves to the board cannot use them.
+- `POST /api/rpc` takes the same JSON requests as the console, with `Content-Type: application/json`, at most 8 KiB and at most 256 JSON values (object keys included). A web login sets the `lk_session` cookie (`Path=/; Secure; HttpOnly; SameSite=Strict`) and never returns the token; `auth.logout` clears it.
+- `GET /api/events` is a WebSocket of `{"event", "data"}` messages: the events the console prints, plus `job.done` for that session's jobs. It opens only with a valid session cookie, and closes when that session ends.
+- From the web, the lock methods (`locks.scan`, `locks.pair`, `lock.*`) and the methods that need the board's button answer `{"job": "<id>"}` at once and end with a `job.done {job, result|error}` event on the sockets of the session that asked. A job ends `unauthorized` if its session ends before it runs. A method that needs the button first checks its parameters and preconditions (a bad address, a lock the board does not hold, `locks_paired`) and fails without asking; then it emits `confirm.required {action, timeoutMs}`, waits up to 30 s for a press, emits `confirm.result {action, confirmed}`, and fails with `confirm_timeout` without one, or `unauthorized` if the session ends during the wait: today `locks.pair`, `lock.factoryReset`, `auth.rotateTotp` and `system.factoryReset`. A button request that cannot start at once, because another web job is running or queued, answers `busy`.
+- The classic ESP32 keeps at most three HTTPS connections, enough for two browser tabs, each holding an event socket; the ESP32-S3 keeps four. A new connection beyond that closes the least recently used one. With Bluetooth scanning, one tab and its event socket, the classic kept at least 40 KB of free heap in testing.
 
 ## Locks
 
 The board is a Bluetooth LE central for TTLock locks (service `0x1910`, protocol 3). Lock methods take `{"lock": "<MAC>"}`, the address `locks.list` reports as `id`:
 
 - `locks.scan {"seconds": 1-30}` answers `{"seconds"}` at once and streams one `scan.result {mac, name, rssi, paired, lock?}` event per lock it hears.
-- `locks.pair {"mac", "name"?, "wait"?}` waits up to `wait` seconds (default 30, at most 600) for that lock to advertise, then pairs it. A factory-fresh lock advertises for about 15 s after a touch on its keypad. The keys are stored in the NVS `locks` namespace the moment the lock accepts the board as its admin, and again when pairing ends.
+- `locks.pair {"mac", "name"?, "wait"?}` waits up to `wait` seconds (at most 600) for that lock to advertise, then pairs it. Without `wait` it waits 30 s over USB and 120 s from the web, where the wait starts after the press on the board's button and leaves time to walk to the lock. A factory-fresh lock advertises for about 15 s after a touch on its keypad. The keys are stored in the NVS `locks` namespace the moment the lock accepts the board as its admin, and again when pairing ends.
 - `locks.list`, `locks.rename {"lock", "name"}` and `locks.forget` (drops the keys on the board only) need no Bluetooth.
 - `lock.status`, `lock.info`, `lock.features`, `lock.unlock`, `lock.lock`, `lock.time.sync` and `lock.factoryReset` connect to the lock. Unlock and lock emit `lock.state` and `lock.event`, and keep the link for 25 s for the events the lock pushes.
 
-One worker runs every lock job in the order they arrive; a job that waits more than 60 s fails with `busy`. Between jobs the board tracks its stored locks from their adverts and emits `lock.state` when the state or the battery changes. `locks.pair` and `lock.factoryReset` will need the board's button from the web; over serial they run at once. `system.factoryReset` also erases the lock keys, and refuses with `locks_paired` while any lock is stored unless it gets `{"force": true}`. `system.log.set {"tag", "level"}` (serial only) sets a log tag's level: `{"tag": "ble", "level": "debug"}` logs the length and CRC check of every frame, never its content.
+One worker runs every lock job in the order they arrive; a job that waits more than 60 s fails with `busy`. Between jobs the board tracks its stored locks from their adverts and emits `lock.state` when the state or the battery changes. From the web, `locks.pair` and `lock.factoryReset` wait for a press of the board's button; over serial they run at once. `system.factoryReset` also erases the lock keys, and refuses with `locks_paired` while any lock is stored unless it gets `{"force": true}`. `system.log.set {"tag", "level"}` (serial only) sets a log tag's level: `{"tag": "ble", "level": "debug"}` logs the length and CRC check of every frame, never its content.
 
 ```sh
 uv run -q --no-project --python 3.14 --with pyserial==3.5 python -I tools/latchkey_cli.py --port <port> system.info
@@ -112,7 +123,7 @@ uv run -q --no-project --python 3.14 --with pytest==9.1.1 --with pyserial==3.5 p
 uv run -q --no-project --python 3.14 --with pytest==9.1.1 --with pyserial==3.5 pytest tools/hil/test_lock_core.py -s --port <port> --touch-file <path>
 ```
 
-`tools/latchkey_cli.py` reads params as a JSON argument or from stdin with `-`. The hardware-in-the-loop suites in `tools/hil/` read the Wi-Fi settings, the owner password, each board's static IP and the lock's address (`lock_mac`) from the gitignored `secrets.local.json` (shape in `secrets.example.json`). `test_system.py` factory-resets the board it runs on, and skips those tests on a board that holds lock keys. `test_lock_core.py` pairs the lock only on an ESP32-S3 that holds no keys for it, writing the UTC time into the `--touch-file` while someone must touch the keypad, and keeps the lock paired; on any other board it only scans. It factory-resets the lock only with `--allow-lock-reset`.
+`tools/latchkey_cli.py` reads params as a JSON argument or from stdin with `-`. The hardware-in-the-loop suites in `tools/hil/` read the Wi-Fi settings, the owner password, each board's static IP and the lock's address (`lock_mac`) from the gitignored `secrets.local.json` (shape in `secrets.example.json`). `test_system.py` factory-resets the board it runs on, and skips those tests on a board that holds lock keys. `test_lock_core.py` pairs the lock only on an ESP32-S3 that holds no keys for it, writing the UTC time into the `--touch-file` while someone must touch the keypad, and keeps the lock paired; on any other board it only scans. It factory-resets the lock only with `--allow-lock-reset`. `test_http.py` checks HTTPS, the redirect, the headers, the cookie, the CSRF refusals, the events, web jobs and the button from a host on the boards' network: the optional `hil_relay` key names a command that runs a Python 3 script from its standard input there (see `tools/hil/relay.py`), and the suite skips without it. A board whose entry has a `totp_uri` belongs to its owner: the suites compute its codes from that URI and never reset, re-claim or rotate it.
 
 `sdkconfig.<env>` is generated and not tracked. After editing `sdkconfig.defaults` or `sdkconfig.defaults.<target>`, delete `sdkconfig.<env>` and `.pio/build/<env>`. After adding source files to a component or dependencies to `src/idf_component.yml`, delete `.pio/build/<env>`: PlatformIO does not re-run the CMake configure for those changes.
 

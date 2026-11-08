@@ -21,6 +21,37 @@ static std::string nestedObjects(size_t depth) {
     return repeated("{\"a\":", depth - 1) + "{}" + repeated("}", depth - 1);
 }
 
+static std::string zeros(size_t bytes) {
+    std::string out = "[0";
+    while (out.size() + 3 <= bytes) {
+        out += ",0";
+    }
+    return out + "]";
+}
+
+static void test_a_request_has_few_values() {
+    const char* request = "{\"id\":7,\"method\":\"auth.login\",\"params\":{\"password\":\"x\",\"totp\":\"123456\"}}";
+    TEST_ASSERT_TRUE(latchkey_util::jsonValuesWithin(request, 16));
+    TEST_ASSERT_FALSE(latchkey_util::jsonValuesWithin(request, 8));
+    TEST_ASSERT_TRUE(latchkey_util::jsonValuesWithin("", 1));
+}
+
+static void test_values_are_counted_outside_strings_only() {
+    TEST_ASSERT_TRUE(latchkey_util::jsonValuesWithin("[\"0,0,0,0,0,0,[{\\\"\"]", 2));
+    TEST_ASSERT_FALSE(latchkey_util::jsonValuesWithin("[0,0]", 2));
+    TEST_ASSERT_TRUE(latchkey_util::jsonValuesWithin("[0,0]", 3));
+    TEST_ASSERT_TRUE(latchkey_util::jsonValuesWithin("[12345,-6.5e7,true,null]", 5));
+    TEST_ASSERT_FALSE(latchkey_util::jsonValuesWithin("[12345,-6.5e7,true,null]", 4));
+}
+
+static void test_an_8_kib_array_of_zeros_is_far_over_the_limit() {
+    const std::string payload = zeros(8192);
+    TEST_ASSERT_TRUE(payload.size() <= 8192);
+    TEST_ASSERT_TRUE(payload.size() > 8000);
+    TEST_ASSERT_FALSE(latchkey_util::jsonValuesWithin(payload, 256));
+    TEST_ASSERT_TRUE(latchkey_util::jsonValuesWithin(zeros(500), 256));
+}
+
 static void test_flat_and_empty_input() {
     TEST_ASSERT_TRUE(latchkey_util::jsonNestingWithin("", 1));
     TEST_ASSERT_TRUE(latchkey_util::jsonNestingWithin("not json at all", 1));
@@ -77,6 +108,9 @@ static void test_an_unterminated_string_hides_nothing_after_it() {
 
 int main() {
     UNITY_BEGIN();
+    RUN_TEST(test_a_request_has_few_values);
+    RUN_TEST(test_values_are_counted_outside_strings_only);
+    RUN_TEST(test_an_8_kib_array_of_zeros_is_far_over_the_limit);
     RUN_TEST(test_flat_and_empty_input);
     RUN_TEST(test_deep_arrays);
     RUN_TEST(test_deep_objects);

@@ -18,6 +18,7 @@ constexpr const char* kAuditNamespace = "audit";
 constexpr const char* kLocksNamespace = "locks";
 constexpr const char* kPasswordKey = "password";
 constexpr const char* kTotpKey = "totp";
+constexpr const char* kTlsKey = "tls";
 constexpr size_t kLockKeySize = 13;
 
 class Handle {
@@ -162,6 +163,36 @@ esp_err_t saveTimezone(const std::string& timezone) {
     }
     const esp_err_t error = nvs_set_str(handle.get(), "tz", timezone.c_str());
     return error == ESP_OK ? nvs_commit(handle.get()) : error;
+}
+
+bool loadTlsIdentity(latchkey_util::TlsIdentity& out) {
+    Handle handle(kCfgNamespace, NVS_READONLY);
+    size_t length = 0;
+    if (!handle.ok() || nvs_get_blob(handle.get(), kTlsKey, nullptr, &length) != ESP_OK || length == 0) {
+        return false;
+    }
+    std::vector<uint8_t> bytes(length);
+    const bool loaded = nvs_get_blob(handle.get(), kTlsKey, bytes.data(), &length) == ESP_OK &&
+                        latchkey_util::decodeTlsIdentity(bytes.data(), length, out);
+    mbedtls_platform_zeroize(bytes.data(), bytes.size());
+    return loaded;
+}
+
+esp_err_t saveTlsIdentity(const latchkey_util::TlsIdentity& identity) {
+    std::vector<uint8_t> bytes = latchkey_util::encodeTlsIdentity(identity);
+    if (bytes.empty()) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    Handle handle(kCfgNamespace, NVS_READWRITE);
+    esp_err_t error = handle.error();
+    if (handle.ok()) {
+        error = nvs_set_blob(handle.get(), kTlsKey, bytes.data(), bytes.size());
+        if (error == ESP_OK) {
+            error = nvs_commit(handle.get());
+        }
+    }
+    mbedtls_platform_zeroize(bytes.data(), bytes.size());
+    return error;
 }
 
 esp_err_t erase() { return eraseNamespace(kCfgNamespace); }

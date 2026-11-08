@@ -2,6 +2,7 @@
 #include "auth.h"
 
 #include <array>
+#include <atomic>
 #include <mutex>
 
 #include "esp_log.h"
@@ -33,6 +34,14 @@ std::mutex s_sessionMutex;
 latchkey_util::RateLimiter s_limiter(kLoginPolicy);
 latchkey_util::TotpReplayGuard s_replay;
 latchkey_util::SessionTable s_sessions(kIdleTimeoutSeconds, kSessionLifetimeSeconds, 1);
+std::atomic<void (*)()> s_sessionsEnded{nullptr};
+
+void sessionsEnded() {
+    void (*hook)() = s_sessionsEnded.load();
+    if (hook != nullptr) {
+        hook();
+    }
+}
 
 int64_t monotonicMs() { return esp_timer_get_time() / 1000; }
 
@@ -268,6 +277,16 @@ std::optional<uint32_t> sessionFor(std::string_view token) {
     return s_sessions.touch(digest, monotonicSeconds());
 }
 
+bool sessionOpen(uint32_t id) {
+    std::lock_guard<std::mutex> lock(s_sessionMutex);
+    for (const latchkey_util::SessionInfo& info : s_sessions.list(monotonicSeconds())) {
+        if (info.id == id) {
+            return true;
+        }
+    }
+    return false;
+}
+
 std::vector<Session> sessions() {
     std::lock_guard<std::mutex> lock(s_sessionMutex);
     std::vector<Session> out;
@@ -277,14 +296,26 @@ std::vector<Session> sessions() {
     return out;
 }
 
+void onSessionsEnded(void (*hook)()) { s_sessionsEnded.store(hook); }
+
 bool revoke(uint32_t id) {
-    std::lock_guard<std::mutex> lock(s_sessionMutex);
-    return s_sessions.close(id);
+    bool closed = false;
+    {
+        std::lock_guard<std::mutex> lock(s_sessionMutex);
+        closed = s_sessions.close(id);
+    }
+    if (closed) {
+        sessionsEnded();
+    }
+    return closed;
 }
 
 void endSessions(std::optional<uint32_t> keep) {
-    std::lock_guard<std::mutex> lock(s_sessionMutex);
-    s_sessions.closeAllExcept(keep);
+    {
+        std::lock_guard<std::mutex> lock(s_sessionMutex);
+        s_sessions.closeAllExcept(keep);
+    }
+    sessionsEnded();
 }
 
 Change changePassword(std::string_view current, std::string_view next, std::optional<uint32_t> keep) {

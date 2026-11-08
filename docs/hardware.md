@@ -7,11 +7,12 @@
 |---|---|---|---|---|---|---|
 | ESP32 DevKit, or any classic ESP32 board with 4 MB of flash | ESP32 | 4 MB | `esp32` | `latchkey-<version>-esp32-*.bin` | GPIO0 (BOOT) | UART0 through the board's USB-to-serial chip, 115200 baud |
 | M5 ATOM | ESP32-PICO-D4 | 4 MB | `esp32`, built with `LATCHKEY_BUTTON_GPIO=39` | none | GPIO39 | UART0 through the board's USB-to-serial chip, 115200 baud |
-| AtomS3-class ESP32-S3 boards | ESP32-S3 | 8 MB | `esp32s3` | `latchkey-<version>-esp32s3-*.bin` | GPIO41 | USB Serial/JTAG on the chip's own USB port |
+| M5Stack StampS3, or another ESP32-S3 board with 8 MB of flash and its button on GPIO0 | ESP32-S3FN8 | 8 MB | `esp32s3` | `latchkey-<version>-esp32s3-*.bin` | GPIO0 (BOOT) | USB Serial/JTAG on the chip's own USB port |
+| M5Stack AtomS3 | ESP32-S3 | 8 MB | `esp32s3`, built with `LATCHKEY_BUTTON_GPIO=41` | none | GPIO41 | USB Serial/JTAG on the chip's own USB port |
 
-- The button pin is a build setting: `LATCHKEY_BUTTON_GPIO` in the env's `build_flags` in `platformio.ini`. The firmware reads it with the internal pull-up enabled and treats low as pressed. The release image for the classic ESP32 reads GPIO0, so an M5 ATOM needs its own build with GPIO39; GPIO39 is input-only and has no internal pull-up, so a button there relies on the pull-up of the board's own circuit.
-- The button confirms destructive actions requested from the web UI (in progress: the web side is not in the firmware yet). Requests over USB serial need no press, because USB counts as physical presence.
-- GPIO0 is a strapping pin on the classic ESP32: holding it while the board resets starts the ROM download mode instead of Latchkey. Do not hold the button while plugging the board in or resetting it.
+- The button pin is a build setting: `LATCHKEY_BUTTON_GPIO` in the env's `build_flags` in `platformio.ini`. The firmware reads it with the internal pull-up enabled and treats low as pressed. The release image for the classic ESP32 reads GPIO0, so an M5 ATOM needs its own build with GPIO39; GPIO39 is input-only and has no internal pull-up, so a button there relies on the pull-up of the board's own circuit. The ESP32-S3 release image reads GPIO0 too, the StampS3's button, so an AtomS3 needs its own build with `-DLATCHKEY_BUTTON_GPIO=41`.
+- The button confirms destructive actions requested from the web UI: pairing or resetting a lock, a new TOTP secret and a factory reset of the board wait up to 30 s for a press. Requests over USB serial need no press, because USB counts as physical presence.
+- GPIO0 is a strapping pin on the ESP32 and the ESP32-S3: holding it while the board resets starts the ROM download mode instead of Latchkey. On boards whose button is GPIO0, such as the DevKit and the StampS3, do not hold the button while plugging the board in or resetting it.
 - `system.info` reports the board as `esp32-devkit` or `esp32s3-atom`, the names the two envs build in.
 
 ### Flash layout

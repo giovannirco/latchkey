@@ -8,6 +8,7 @@
 #include <vector>
 
 #include "esp_err.h"
+#include "latchkey_util/certificate.h"
 #include "latchkey_util/password_record.h"
 
 namespace store {
@@ -40,6 +41,10 @@ esp_err_t saveWifi(const Wifi& wifi);
 bool loadTimezone(std::string& out);
 
 esp_err_t saveTimezone(const std::string& timezone);
+
+bool loadTlsIdentity(latchkey_util::TlsIdentity& out);
+
+esp_err_t saveTlsIdentity(const latchkey_util::TlsIdentity& identity);
 
 esp_err_t erase();
 

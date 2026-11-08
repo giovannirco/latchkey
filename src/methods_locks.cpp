@@ -6,6 +6,7 @@
 
 #include "latchkey_util/ble_adv.h"
 #include "latchkey_util/label.h"
+#include "latchkey_util/pair_wait.h"
 #include "lock_manager.h"
 #include "methods.h"
 #include "rpc.h"
@@ -19,8 +20,6 @@ constexpr size_t kMaxNameCodePoints = 32;
 constexpr size_t kMaxNameBytes = sizeof(store::locks::Record::name) - 1;
 constexpr uint32_t kDefaultScanSeconds = 10;
 constexpr uint32_t kMaxScanSeconds = 30;
-constexpr uint32_t kDefaultPairWaitSeconds = 30;
-constexpr uint32_t kMaxPairWaitSeconds = 600;
 constexpr const char* kDefaultLockName = "New lock";
 constexpr const char* kMacMessage = "must be a Bluetooth address like AA:BB:CC:DD:EE:FF";
 constexpr const char* kNameMessage = "name must be 1 to 32 characters (at most 99 bytes)";
@@ -113,20 +112,51 @@ rpc::Reply scan(const cJSON* params, const rpc::Context&) {
 
 rpc::Reply list(const cJSON*, const rpc::Context&) { return lock_manager::list(); }
 
-rpc::Reply pair(const cJSON* params, const rpc::Context&) {
+struct PairRequest {
     std::string mac;
-    if (!readMac(params, "mac", mac)) {
+    std::string name;
+    uint32_t wait = 0;
+};
+
+static_assert(latchkey_util::kMaxPairWaitSeconds == 600, "readPair's wait message states this limit");
+
+rpc::Reply readPair(const cJSON* params, const rpc::Context& context, PairRequest& out) {
+    if (!readMac(params, "mac", out.mac)) {
         return invalid(std::string("mac ") + kMacMessage);
     }
-    std::string name;
-    if (!readOptionalName(member(params, "name"), name)) {
-        return withTarget(invalid(kNameMessage), mac);
+    if (!readOptionalName(member(params, "name"), out.name)) {
+        return withTarget(invalid(kNameMessage), out.mac);
     }
-    uint32_t wait = 0;
-    if (!readSeconds(member(params, "wait"), kDefaultPairWaitSeconds, kMaxPairWaitSeconds, wait)) {
-        return withTarget(invalid("wait must be a whole number of seconds from 1 to 600"), mac);
+    const uint32_t fallback = latchkey_util::defaultPairWaitSeconds(context.origin == rpc::Transport::Serial);
+    if (!readSeconds(member(params, "wait"), fallback, latchkey_util::kMaxPairWaitSeconds, out.wait)) {
+        return withTarget(invalid("wait must be a whole number of seconds from 1 to 600"), out.mac);
     }
-    return withTarget(lock_manager::pair(mac, name, wait), mac);
+    return withTarget(rpc::ok(), out.mac);
+}
+
+rpc::Reply checkPair(const cJSON* params, const rpc::Context& context) {
+    PairRequest request;
+    return readPair(params, context, request);
+}
+
+rpc::Reply pair(const cJSON* params, const rpc::Context& context) {
+    PairRequest request;
+    rpc::Reply problem = readPair(params, context, request);
+    if (!problem.error.empty()) {
+        return problem;
+    }
+    return withTarget(lock_manager::pair(request.mac, request.name, request.wait), request.mac);
+}
+
+rpc::Reply checkHeldLock(const cJSON* params, const rpc::Context&) {
+    std::string mac;
+    if (!readMac(params, "lock", mac)) {
+        return invalid(std::string("lock ") + kMacMessage);
+    }
+    if (!lock_manager::holds(mac)) {
+        return withTarget(rpc::fail("not_paired", "the board has no keys for this lock"), mac);
+    }
+    return withTarget(rpc::ok(), mac);
 }
 
 rpc::Reply rename(const cJSON* params, const rpc::Context&) {
@@ -144,18 +174,19 @@ rpc::Reply rename(const cJSON* params, const rpc::Context&) {
 }
 
 void registerLocks() {
-    rpc::registerMethod("locks.scan", {.audited = false}, scan);
+    rpc::registerMethod("locks.scan", {.audited = false, .job = true}, scan);
     rpc::registerMethod("locks.list", {.audited = false}, list);
     rpc::registerMethod("locks.rename", {}, rename);
     rpc::registerMethod("locks.forget", {}, forLock(lock_manager::forget));
-    rpc::registerMethod("locks.pair", {.needsButton = true}, pair);
-    rpc::registerMethod("lock.status", {.audited = false}, forLock(lock_manager::status));
-    rpc::registerMethod("lock.info", {.audited = false}, forLock(lock_manager::info));
-    rpc::registerMethod("lock.features", {.audited = false}, forLock(lock_manager::features));
-    rpc::registerMethod("lock.unlock", {}, forLock(lock_manager::unlock));
-    rpc::registerMethod("lock.lock", {}, forLock(lock_manager::lock));
-    rpc::registerMethod("lock.time.sync", {}, forLock(lock_manager::syncTime));
-    rpc::registerMethod("lock.factoryReset", {.needsButton = true}, forLock(lock_manager::factoryReset));
+    rpc::registerMethod("locks.pair", {.needsButton = true, .job = true}, pair, checkPair);
+    rpc::registerMethod("lock.status", {.audited = false, .job = true}, forLock(lock_manager::status));
+    rpc::registerMethod("lock.info", {.audited = false, .job = true}, forLock(lock_manager::info));
+    rpc::registerMethod("lock.features", {.audited = false, .job = true}, forLock(lock_manager::features));
+    rpc::registerMethod("lock.unlock", {.job = true}, forLock(lock_manager::unlock));
+    rpc::registerMethod("lock.lock", {.job = true}, forLock(lock_manager::lock));
+    rpc::registerMethod("lock.time.sync", {.job = true}, forLock(lock_manager::syncTime));
+    rpc::registerMethod("lock.factoryReset", {.needsButton = true, .job = true}, forLock(lock_manager::factoryReset),
+                        checkHeldLock);
 }
 
 }

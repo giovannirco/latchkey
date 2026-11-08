@@ -23,4 +23,6 @@ esp_err_t apply(const store::cfg::Wifi& config);
 
 Status status();
 
+uint32_t address();
+
 }
