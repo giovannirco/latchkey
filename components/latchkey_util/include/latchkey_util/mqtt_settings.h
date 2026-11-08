@@ -14,6 +14,14 @@ inline constexpr size_t kMaxHaPrefix = 32;
 inline constexpr uint16_t kDefaultMqttPort = 1883;
 inline constexpr char kDefaultHaPrefix[] = "homeassistant";
 
+struct MqttBroker {
+    std::string_view host;
+    uint16_t port = kDefaultMqttPort;
+    std::string_view username;
+};
+
 bool isMqttHost(std::string_view host);
+
+bool keepsPassword(const MqttBroker& stored, const MqttBroker& next);
 
 }

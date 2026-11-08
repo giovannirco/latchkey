@@ -32,4 +32,8 @@ bool isMqttHost(std::string_view host) {
     return !labelStart;
 }
 
+bool keepsPassword(const MqttBroker& stored, const MqttBroker& next) {
+    return stored.host == next.host && stored.port == next.port && stored.username == next.username;
+}
+
 }
