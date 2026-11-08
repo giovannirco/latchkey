@@ -21,6 +21,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
 #include "freertos/task.h"
+#include "mbedtls/platform_util.h"
 
 #include "ble_central.h"
 #include "clock.h"
@@ -29,6 +30,7 @@
 #include "latchkey_util/job_queue.h"
 #include "latchkey_util/pair_verdict.h"
 #include "latchkey_util/repeat_filter.h"
+#include "latchkey_util/seed_table.h"
 #include "store.h"
 #include "ttlock/advert.h"
 #include "ttlock/errors.h"
@@ -78,6 +80,7 @@ struct Job {
     std::string mac;
     std::string name;
     uint32_t seconds = 0;
+    std::string adminPasscode;
     rpc::Reply reply;
     StaticSemaphore_t doneBuffer{};
     SemaphoreHandle_t done = nullptr;
@@ -923,6 +926,36 @@ struct PairStores {
     bool storeFailed = false;
 };
 
+struct SeedStore {
+    latchkey_util::SeedTable table;
+    bool taken = false;
+    bool stored = false;
+
+    ~SeedStore() { mbedtls_platform_zeroize(&table, sizeof(table)); }
+};
+
+rpc::Reply mismatchReply(const ttlock::LockVersion& answered, const ttlock::LockVersion& advertised) {
+    char message[160];
+    std::snprintf(message, sizeof(message),
+                  "the lock answered as lock type %u.%u scene %u, but its advert said %u.%u scene %u: this board "
+                  "only pairs the lock type it advertises",
+                  answered.protocolType, answered.protocolVersion, answered.scene, advertised.protocolType,
+                  advertised.protocolVersion, advertised.scene);
+    return rpc::fail("unsupported", message);
+}
+
+std::string pairingWarning(bool keysCopyFailed, bool seedsLost) {
+    std::string warning;
+    if (keysCopyFailed) {
+        warning = "an intermediate copy of the keys could not be stored; the final copy was stored";
+    }
+    if (seedsLost) {
+        warning += warning.empty() ? "" : ". ";
+        warning += "the offline-code seed table the lock was sent could not be stored";
+    }
+    return warning;
+}
+
 rpc::Reply incompleteReply(bool lockFinished, bool storeFailed) {
     if (lockFinished) {
         return rpc::fail("pair_incomplete",
@@ -946,7 +979,7 @@ latchkey_util::PairEnd pairEnd(Status status) {
     return status == Status::PairIncomplete ? latchkey_util::PairEnd::Incomplete : latchkey_util::PairEnd::Failed;
 }
 
-void finishPairing(Job& job, Record& record, const ttlock::PairResult& result, bool storeFailed) {
+void finishPairing(Job& job, Record& record, const ttlock::PairResult& result, const std::string& warning) {
     ttlock::Session& session = *s_link.session;
     ttlock::LockStatus status;
     const Status statusRead = session.status(status);
@@ -987,9 +1020,8 @@ void finishPairing(Job& job, Record& record, const ttlock::PairResult& result, b
     }
     cJSON* reply = cJSON_CreateObject();
     cJSON_AddItemToObject(reply, "lock", summaryJson(view));
-    if (storeFailed) {
-        cJSON_AddStringToObject(reply, "warning",
-                                "an intermediate copy of the keys could not be stored; the final copy was stored");
+    if (!warning.empty()) {
+        cJSON_AddStringToObject(reply, "warning", warning.c_str());
     }
     finish(job, rpc::ok(reply));
 }
@@ -1050,19 +1082,39 @@ void runPair(Job& job) {
             ESP_LOGI(TAG, "lock keys stored");
         }
     };
+    SeedStore seeds;
+    ttlock::PairOptions options;
+    options.adminPasscode = job.adminPasscode;
+    options.persistSeeds = [&job, &seeds](uint16_t year,
+                                          const std::array<ttlock::CodeSecret, ttlock::kCodeSecretCount>& table) {
+        seeds.table = latchkey_util::SeedTable{year, false, table};
+        seeds.taken = true;
+        const esp_err_t error = store::seeds::save(job.mac.c_str(), seeds.table);
+        seeds.stored = error == ESP_OK;
+        if (seeds.stored) {
+            ESP_LOGI(TAG, "offline-code seed table stored");
+        } else {
+            ESP_LOGE(TAG, "cannot store the offline-code seed table: %s", esp_err_to_name(error));
+        }
+    };
     ttlock::LockKeys keys;
     keys.mac = job.mac;
     ttlock::PairResult result;
-    Status paired = session->pair(frames, keys, persistEarly, result);
-    if (paired != Status::Ok && paired != Status::LockError && !stores.keysTaken) {
+    size_t mismatchesBefore = session->lockTypeMismatches();
+    Status paired = session->pair(frames, options, keys, persistEarly, result);
+    bool mismatched = paired == Status::Unsupported && session->lockTypeMismatches() > mismatchesBefore;
+    if (paired != Status::Ok && paired != Status::LockError && !stores.keysTaken && !mismatched) {
         ESP_LOGW(TAG, "pairing failed before the lock took keys (%s); trying once more", ttlock::toString(paired));
         if (ble::connected() || connectWithRetries(addressOf(record)) == 0) {
             s_transport.reset();
             keys = ttlock::LockKeys{};
             keys.mac = job.mac;
-            paired = session->pair(frames, keys, persistEarly, result);
+            mismatchesBefore = session->lockTypeMismatches();
+            paired = session->pair(frames, options, keys, persistEarly, result);
+            mismatched = paired == Status::Unsupported && session->lockTypeMismatches() > mismatchesBefore;
         }
     }
+    mbedtls_platform_zeroize(options.adminPasscode.data(), options.adminPasscode.size());
     bool resultStored = false;
     if (paired == Status::Ok) {
         record.flags = store::locks::kFlagPairComplete;
@@ -1078,22 +1130,37 @@ void runPair(Job& job) {
         if (!resultStored) {
             ESP_LOGE(TAG, "cannot store the pairing result: %s", esp_err_to_name(error));
         }
+        if (seeds.stored && result.passcodeSeedsConfirmed) {
+            seeds.table.confirmed = true;
+            const esp_err_t confirmed = store::seeds::save(job.mac.c_str(), seeds.table);
+            if (confirmed != ESP_OK) {
+                ESP_LOGE(TAG, "cannot mark the offline-code seed table as taken: %s", esp_err_to_name(confirmed));
+            }
+        }
     }
     const latchkey_util::PairVerdict verdict =
         latchkey_util::judgePairing(pairEnd(paired), stores.keysStored, resultStored);
     if (verdict != latchkey_util::PairVerdict::Paired) {
         const uint8_t lockError = session->lockErrorCode();
-        ESP_LOGW(TAG, "pairing ended %s, lock error 0x%02x, %u frames dropped, keys %s", ttlock::toString(paired),
-                 lockError, static_cast<unsigned>(session->droppedFrames()),
+        const ttlock::LockVersion answered = session->lastMismatchedVersion();
+        ESP_LOGW(TAG, "pairing ended %s, lock error 0x%02x, %u frames dropped, %u of another lock type, keys %s",
+                 ttlock::toString(paired), lockError, static_cast<unsigned>(session->droppedFrames()),
+                 static_cast<unsigned>(session->lockTypeMismatches()),
                  stores.keysStored ? "stored" : (stores.keysTaken ? "NOT stored" : "not taken"));
         session.reset();
         ble::disconnect();
         if (verdict == latchkey_util::PairVerdict::KeysNotStored) {
+            const esp_err_t erased = store::seeds::erase(job.mac.c_str());
+            if (erased != ESP_OK) {
+                ESP_LOGE(TAG, "cannot erase the seed table of keys that were not stored: %s", esp_err_to_name(erased));
+            }
             finish(job, rpc::fail("internal",
                                   "the lock may now be paired to this board, but its keys could not be stored: "
                                   "reset the lock with its reset button, then pair it again"));
         } else if (verdict == latchkey_util::PairVerdict::Incomplete) {
             finish(job, incompleteReply(paired == Status::Ok, stores.storeFailed));
+        } else if (mismatched) {
+            finish(job, mismatchReply(answered, advert.version));
         } else {
             finish(job, failure(paired, lockError));
         }
@@ -1104,7 +1171,7 @@ void runPair(Job& job) {
              result.adminPasscodeConfirmed ? "confirmed" : "not confirmed",
              static_cast<unsigned>(session->droppedFrames()));
     keepLink(job.mac, std::move(session), kLingerMs);
-    finishPairing(job, record, result, stores.storeFailed);
+    finishPairing(job, record, result, pairingWarning(stores.storeFailed, seeds.taken && !seeds.stored));
 }
 
 void runScan(Job& job) {
@@ -1211,12 +1278,7 @@ void worker(void*) {
     }
 }
 
-rpc::Reply submit(Kind kind, const std::string& mac, const std::string& name, uint32_t seconds) {
-    Job job;
-    job.kind = kind;
-    job.mac = mac;
-    job.name = name;
-    job.seconds = seconds;
+rpc::Reply submit(Job& job) {
     job.done = xSemaphoreCreateBinaryStatic(&job.doneBuffer);
     {
         std::lock_guard<std::mutex> guard(s_mutex);
@@ -1229,6 +1291,15 @@ rpc::Reply submit(Kind kind, const std::string& mac, const std::string& name, ui
         failExpired();
     }
     return std::move(job.reply);
+}
+
+rpc::Reply submit(Kind kind, const std::string& mac, const std::string& name, uint32_t seconds) {
+    Job job;
+    job.kind = kind;
+    job.mac = mac;
+    job.name = name;
+    job.seconds = seconds;
+    return submit(job);
 }
 
 rpc::Reply submitFor(Kind kind, const std::string& mac) {
@@ -1267,8 +1338,17 @@ void start() {
 
 rpc::Reply scan(uint32_t seconds) { return submit(Kind::Scan, {}, {}, seconds); }
 
-rpc::Reply pair(const std::string& mac, const std::string& name, uint32_t waitSeconds) {
-    return submit(Kind::Pair, mac, name, waitSeconds);
+rpc::Reply pair(const std::string& mac, const std::string& name, uint32_t waitSeconds,
+                const std::string& adminPasscode) {
+    Job job;
+    job.kind = Kind::Pair;
+    job.mac = mac;
+    job.name = name;
+    job.seconds = waitSeconds;
+    job.adminPasscode = adminPasscode;
+    rpc::Reply reply = submit(job);
+    mbedtls_platform_zeroize(job.adminPasscode.data(), job.adminPasscode.size());
+    return reply;
 }
 
 rpc::Reply list() {

@@ -4,6 +4,8 @@
 #include <cstring>
 #include <string>
 
+#include "mbedtls/platform_util.h"
+
 #include "latchkey_util/ble_adv.h"
 #include "latchkey_util/label.h"
 #include "latchkey_util/pair_wait.h"
@@ -11,6 +13,7 @@
 #include "methods.h"
 #include "rpc.h"
 #include "store.h"
+#include "ttlock/types.h"
 
 namespace methods {
 
@@ -23,6 +26,7 @@ constexpr uint32_t kMaxScanSeconds = 30;
 constexpr const char* kDefaultLockName = "New lock";
 constexpr const char* kMacMessage = "must be a Bluetooth address like AA:BB:CC:DD:EE:FF";
 constexpr const char* kNameMessage = "name must be 1 to 32 characters (at most 99 bytes)";
+constexpr const char* kAdminPasscodeMessage = "adminPasscode must be 4 to 9 digits, or left out for a random one";
 
 static_assert(kMaxNameCodePoints == 32 && kMaxNameBytes == 99, "kNameMessage states these limits");
 
@@ -116,7 +120,22 @@ struct PairRequest {
     std::string mac;
     std::string name;
     uint32_t wait = 0;
+    std::string adminPasscode;
+
+    ~PairRequest() { mbedtls_platform_zeroize(adminPasscode.data(), adminPasscode.size()); }
 };
+
+bool readAdminPasscode(const cJSON* item, std::string& out) {
+    if (absent(item) || (cJSON_IsString(item) && item->valuestring != nullptr && item->valuestring[0] == '\0')) {
+        out.clear();
+        return true;
+    }
+    if (!cJSON_IsString(item) || item->valuestring == nullptr || !ttlock::isPasscode(item->valuestring)) {
+        return false;
+    }
+    out = item->valuestring;
+    return true;
+}
 
 static_assert(latchkey_util::kMaxPairWaitSeconds == 600, "readPair's wait message states this limit");
 
@@ -130,6 +149,9 @@ rpc::Reply readPair(const cJSON* params, const rpc::Context& context, PairReques
     const uint32_t fallback = latchkey_util::defaultPairWaitSeconds(context.origin == rpc::Transport::Serial);
     if (!readSeconds(member(params, "wait"), fallback, latchkey_util::kMaxPairWaitSeconds, out.wait)) {
         return withTarget(invalid("wait must be a whole number of seconds from 1 to 600"), out.mac);
+    }
+    if (!readAdminPasscode(member(params, "adminPasscode"), out.adminPasscode)) {
+        return withTarget(invalid(kAdminPasscodeMessage), out.mac);
     }
     return withTarget(rpc::ok(), out.mac);
 }
@@ -145,7 +167,7 @@ rpc::Reply pair(const cJSON* params, const rpc::Context& context) {
     if (!problem.error.empty()) {
         return problem;
     }
-    return withTarget(lock_manager::pair(request.mac, request.name, request.wait), request.mac);
+    return withTarget(lock_manager::pair(request.mac, request.name, request.wait, request.adminPasscode), request.mac);
 }
 
 rpc::Reply checkHeldLock(const cJSON* params, const rpc::Context&) {

@@ -14,7 +14,8 @@ void start();
 
 rpc::Reply scan(uint32_t seconds);
 
-rpc::Reply pair(const std::string& mac, const std::string& name, uint32_t waitSeconds);
+rpc::Reply pair(const std::string& mac, const std::string& name, uint32_t waitSeconds,
+                const std::string& adminPasscode);
 
 rpc::Reply list();
 
