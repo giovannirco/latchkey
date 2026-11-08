@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 const { test, expect, calls, login, openLock, openTab, SHED } = require('./support.cjs');
 
-const GATED = /^lock\.(fingerprints|cards|passage|sound|resetButton|remoteUnlock)\./;
+const GATED = /^lock\.(fingerprints|cards|passage|sound|resetButton|privacyLock|tamperAlert)\./;
 
 async function headings(page) {
   return page.locator('#main h2').allInnerTexts();
@@ -19,7 +19,8 @@ test('controls for features a lock does not report are hidden', async ({ page, r
       'Passage mode',
       'Sound',
       'Reset button',
-      'Remote unlock',
+      'Privacy lock',
+      'Tamper alert',
       'Super admin passcode',
       'Clock',
     ]),

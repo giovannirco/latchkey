@@ -64,19 +64,20 @@ test('a confirmed press shows the confirmation then the result', async ({ page }
   await expect(secret).toBeHidden();
 });
 
-test('enabling the reset button needs the board button, disabling does not', async ({ page }) => {
+test('the reset button switch needs the board button both ways once the keys are backed up', async ({ page }) => {
   await login(page);
   await openLock(page, 'Front door', 'Settings');
   const reset = page.getByRole('switch', { name: 'Physical reset button' });
   await expect(reset).not.toBeChecked();
   await reset.check();
   await expect(boardButton(page)).toBeVisible();
-  await expect(boardButton(page)).toContainText('Enable the reset button');
+  await expect(boardButton(page)).toContainText('Turn the reset button on or off');
   await expect(boardButton(page)).toBeHidden();
   await expect(reset).toBeChecked();
 
   await reset.uncheck();
-  await expect(page.locator('#toasts')).toContainText('Reset button turned off');
+  await expect(boardButton(page)).toBeVisible();
   await expect(boardButton(page)).toBeHidden();
+  await expect(page.locator('#toasts')).toContainText('Reset button turned off');
   await expect(reset).not.toBeChecked();
 });
