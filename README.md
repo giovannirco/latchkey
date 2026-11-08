@@ -41,10 +41,10 @@ In progress: the Bluetooth link and lock manager on the board, over-the-air upda
 | Env | Board name | Flash | Button | Console |
 |---|---|---|---|---|
 | `esp32` | `esp32-devkit` (classic ESP32) | 4 MB | GPIO0 | UART0, 115200 baud |
-| `esp32s3` | `esp32s3-atom` (ESP32-S3, AtomS3-class) | 8 MB | GPIO41 | USB-Serial/JTAG |
+| `esp32s3` | `esp32s3-atom` (ESP32-S3, such as the M5Stack StampS3) | 8 MB | GPIO0 | USB-Serial/JTAG |
 | `native` | host unit tests for `components/ttlock` and `components/latchkey_util` | | | |
 
-An M5 ATOM runs the `esp32` build with `LATCHKEY_BUTTON_GPIO=39`. The ESP8266 cannot work: it has no Bluetooth. [docs/hardware.md](docs/hardware.md) covers the button pins, flashing, power and where to put the board.
+An M5 ATOM runs the `esp32` build with `LATCHKEY_BUTTON_GPIO=39`, and an M5Stack AtomS3 the `esp32s3` build with `LATCHKEY_BUTTON_GPIO=41`. The ESP8266 cannot work: it has no Bluetooth. [docs/hardware.md](docs/hardware.md) covers the button pins, flashing, power and where to put the board.
 
 ## Quick start
 

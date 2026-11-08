@@ -239,10 +239,10 @@ if (/^[0-9]+\.[0-9]+\.[0-9]+$/.test(version)) {
       </label>
       <label class="board">
         <input type="radio" name="board" value="esp32s3">
-        <span><strong>ESP32-S3</strong> AtomS3-class boards with 8 MB of flash and the native USB port. The board button is GPIO41.</span>
+        <span><strong>ESP32-S3</strong> M5Stack StampS3, or another ESP32-S3 board with 8 MB of flash and the native USB port. The board button is GPIO0 (BOOT).</span>
       </label>
     </fieldset>
-    <p class="muted">An M5 ATOM is a classic ESP32, but its button is on GPIO39: the classic image reads GPIO0, so the ATOM needs a build with <code>LATCHKEY_BUTTON_GPIO=39</code>. See <a href="https://github.com/giovannirco/latchkey/blob/main/docs/hardware.md">the hardware notes</a>.</p>
+    <p class="muted">An M5 ATOM is a classic ESP32 with its button on GPIO39, and an M5Stack AtomS3 an ESP32-S3 with its button on GPIO41: both images read GPIO0, so these boards need a build with <code>LATCHKEY_BUTTON_GPIO=39</code> or <code>LATCHKEY_BUTTON_GPIO=41</code>. See <a href="https://github.com/giovannirco/latchkey/blob/main/docs/hardware.md">the hardware notes</a>.</p>
   </section>
 
   <section aria-labelledby="install-title">

@@ -17,7 +17,7 @@ from board import error_code, is_json_object, set_clock
 from latchkey_cli import Console
 from owner import claim_secret, holds_no_secret, setup_params, wifi_params
 
-BOARDS = {"esp32": ("esp32-devkit", 0), "esp32s3": ("esp32s3-atom", 41)}
+BOARDS = {"esp32": ("esp32-devkit", 0), "esp32s3": ("esp32s3-atom", 0)}
 AUDIT_CAPACITY = 200
 MIN_UTC = 1704067200
 SYNC_TOLERANCE_S = 10

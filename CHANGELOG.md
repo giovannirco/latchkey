@@ -24,3 +24,4 @@ Notable changes to Latchkey, in the format of [Keep a Changelog](https://keepach
 
 - Wrong or missing parameters answer `invalid_argument` in every method; the `system.*` methods and `audit.list` answered `invalid_params`.
 - `system.info` reports `uptime` in seconds, `heap.{free, minFree, largestBlock}`, `time.{utc, synced}` and its other fields in camelCase (`stackFree`, `ble.badCrc`, `nvs.availableEntries`, ...), as the web UI reads them; audit entries carry `time` and `source` instead of `utc` and `origin`, and `audit.list` adds `more` and returns 50 entries by default.
+- The ESP32-S3 image reads its button on GPIO0, the button of the M5Stack StampS3, instead of GPIO41; an AtomS3 needs a build with `LATCHKEY_BUTTON_GPIO=41`.
