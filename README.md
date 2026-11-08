@@ -5,7 +5,7 @@
 
 Latchkey is firmware for ESP32 boards that takes a TTLock Bluetooth LE smart lock off the TTLock cloud and puts it under one owner's control: the board pairs with the lock by itself, manages what the TTLock app can manage on that lock, and serves an owner-only web UI, with no phone app, TTLock account or computer Bluetooth involved.
 
-Latchkey is in early development. The TTLock protocol core, the USB serial console, claiming the board, Wi-Fi, time and the time zone, the audit log and the owner login checks (password, TOTP code, rate limit and sessions, exercised over USB for now) are in place; pairing from the board, the web UI on the board, HTTPS, button confirmation, hardening and key backup are being built.
+Latchkey is in early development. The TTLock protocol core, the USB serial console, claiming the board, Wi-Fi, time and the time zone, the audit log and the owner login checks (password, TOTP code and rate limit, run over USB for now; web sessions come with the HTTPS login) are in place; pairing from the board, the web UI on the board, HTTPS, button confirmation, hardening and key backup are being built.
 
 ## Why
 
@@ -18,7 +18,7 @@ Latchkey is in early development. The TTLock protocol core, the USB serial conso
 Works today:
 
 - TTLock protocol core (`components/ttlock`), tested on the host: pairing, lock and unlock, status and battery, device info and feature bits, time sync, passcodes, IC cards and fingerprints with validity periods and weekly windows, auto-lock, passage mode, sound, remote unlock, the reset button, privacy lock and tamper alert switches, the passcode display, the operation log and factory reset. A command the lock does not report in its feature bits answers `unsupported` without touching the radio.
-- Firmware for the classic ESP32 and the ESP32-S3: a JSON-lines console over USB, claiming the board, Wi-Fi with a static address, SNTP time with a configurable time zone, an audit log, and the owner login checks the web login will use: password, TOTP code, rate limit and sessions.
+- Firmware for the classic ESP32 and the ESP32-S3: a JSON-lines console over USB, claiming the board, Wi-Fi with a static address, SNTP time with a configurable time zone, an audit log, and the owner login checks the web login will use: password, TOTP code and rate limit, tested over USB. The session table is ready too, but only the HTTPS login (in progress) opens sessions.
 - The owner web UI (`web/`), built and tested against a mock of the board API.
 
 In progress: the Bluetooth link and lock manager on the board, the web UI and its login served by the board over HTTPS, button confirmation, over-the-air updates, lock hardening and the encrypted key backup.
@@ -92,8 +92,8 @@ The console speaks JSON lines: send one request per line, `{"id": 1, "method": "
 ### Owner login
 
 - `auth.login {"password", "totp"}` checks the owner password and the current six-digit code (one 30 s step of drift either way; a code whose step was already accepted is refused). Over the web (HTTPS, in progress) it opens a session; over the console, where the owner needs none, it takes `"dryRun": true` and answers `{"ok": true}`, so the checks can be tested over USB. It answers `unauthorized` for a wrong password or code, `time_unsynced` until the clock is set, and `rate_limited` with `retryAfter` seconds once five attempts in a row have failed: the wait starts at 30 s and doubles up to 15 minutes, survives a reboot, and the next successful login resets the count.
-- Web sessions live in RAM only (a reboot ends them all): at most four, 15 minutes idle and 12 hours at most. `auth.sessions` lists them, `auth.revoke {"id"}` ends one and `auth.logout {"all"?}` ends the caller's own or all of them.
-- `auth.changePassword {"current", "new"}` re-hashes with a new salt and ends the other sessions; a wrong current password answers `invalid_argument` and counts as a failed attempt. `auth.rotateTotp` (a press of the board's button from the web) returns the new `otpauth://` URI once and retires the old secret at once.
+- Web sessions, opened only by a web login (HTTPS, in progress), live in RAM only (a reboot ends them all): at most four, 15 minutes idle and 12 hours at most. `auth.sessions` lists them, `auth.revoke {"id"}` ends one and `auth.logout {"all"?}` ends the caller's own or all of them.
+- `auth.changePassword {"current", "new"}` re-hashes with a new salt and ends the other sessions; a wrong current password answers `invalid_argument` and counts as a failed attempt. `auth.rotateTotp` (a press of the board's button from the web) returns the new `otpauth://` URI once, retires the old secret at once and ends the other sessions.
 
 ## Locks
 
