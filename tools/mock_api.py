@@ -448,10 +448,21 @@ class Mock:
         self.events = EventHub()
         self.started = time.time()
         self.generation = 0
+        self.timers: list[threading.Timer] = []
         self.reset()
+
+    def later(self, seconds: float, action: Callable[[], None]) -> None:
+        timer = threading.Timer(seconds, action)
+        timer.daemon = True
+        with self.lock:
+            self.timers.append(timer)
+        timer.start()
 
     def reset(self) -> None:
         with self.lock:
+            for timer in self.timers:
+                timer.cancel()
+            self.timers = []
             self.generation += 1
             self.config = Config()
             self.password = MOCK_PASSWORD
@@ -694,13 +705,13 @@ class Mock:
 
     @rpc("system.reboot")
     def system_reboot(self, ctx: Context, params: dict) -> dict:
-        threading.Timer(0.3, self.events.disconnect).start()
+        self.later(0.3, self.events.disconnect)
         return {"rebooting": True}
 
     @rpc("system.factoryReset")
     def system_factory_reset(self, ctx: Context, params: dict) -> dict:
         self.confirm("system.factoryReset")
-        threading.Timer(0.3, self.reset).start()
+        self.later(0.3, self.reset)
         return {"rebooting": True}
 
     @rpc("auth.login", session=False)
@@ -1482,7 +1493,7 @@ class Handler(BaseHTTPRequestHandler):
             mock.append_audit("ota", Context(token=None), {}, err.code)
             return self._error(403, err.code, err.message)
         mock.append_audit("ota", Context(token=None), {}, "ok")
-        threading.Timer(0.5, mock.events.disconnect).start()
+        mock.later(0.5, mock.events.disconnect)
         return self._json(200, {"result": {"bytes": len(image), "rebooting": True}})
 
     def _control(self) -> None:
