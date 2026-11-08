@@ -18,7 +18,7 @@ struct Usage {
 
 void init();
 
-Usage usage();
+esp_err_t usage(Usage& out);
 
 namespace cfg {
 

@@ -21,7 +21,12 @@ void onSntpSync(struct timeval* tv) {
     ESP_LOGI(TAG, "SNTP synced, utc %lld", static_cast<long long>(tv->tv_sec));
 }
 
-void onGotIp(void*, esp_event_base_t, int32_t, void*) { ESP_ERROR_CHECK(esp_netif_sntp_start()); }
+void onGotIp(void*, esp_event_base_t, int32_t, void*) {
+    const esp_err_t error = esp_netif_sntp_start();
+    if (error != ESP_OK) {
+        ESP_LOGE(TAG, "SNTP start: %s", esp_err_to_name(error));
+    }
+}
 
 }
 

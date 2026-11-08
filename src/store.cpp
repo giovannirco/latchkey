@@ -76,10 +76,13 @@ void slotKey(uint32_t seq, char (&key)[8]) {
 
 void init() { ESP_ERROR_CHECK(nvs_flash_init()); }
 
-Usage usage() {
+esp_err_t usage(Usage& out) {
     nvs_stats_t stats{};
-    ESP_ERROR_CHECK(nvs_get_stats(nullptr, &stats));
-    return Usage{stats.used_entries, stats.available_entries, stats.total_entries};
+    const esp_err_t error = nvs_get_stats(nullptr, &stats);
+    if (error == ESP_OK) {
+        out = Usage{stats.used_entries, stats.available_entries, stats.total_entries};
+    }
+    return error;
 }
 
 namespace cfg {

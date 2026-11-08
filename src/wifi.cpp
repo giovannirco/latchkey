@@ -49,7 +49,10 @@ void scheduleRetry() {
     const uint32_t delayMs = s_retryMs;
     s_retryMs = std::min(delayMs * 2, kMaxRetryMs);
     esp_timer_stop(s_retryTimer);
-    ESP_ERROR_CHECK(esp_timer_start_once(s_retryTimer, static_cast<uint64_t>(delayMs) * 1000));
+    const esp_err_t error = esp_timer_start_once(s_retryTimer, static_cast<uint64_t>(delayMs) * 1000);
+    if (error != ESP_OK) {
+        ESP_LOGE(TAG, "retry timer: %s", esp_err_to_name(error));
+    }
 }
 
 void onWifiEvent(void*, esp_event_base_t, int32_t id, void* data) {
@@ -80,27 +83,32 @@ void onGotIp(void*, esp_event_base_t, int32_t, void* data) {
     ESP_LOGI(TAG, "connected, ip " IPSTR, IP2STR(&event->ip_info.ip));
 }
 
-void configureInterface(const store::cfg::Wifi& config) {
+esp_err_t configureInterface(const store::cfg::Wifi& config) {
     const esp_err_t stopped = esp_netif_dhcpc_stop(s_netif);
     if (stopped != ESP_OK && stopped != ESP_ERR_ESP_NETIF_DHCP_ALREADY_STOPPED) {
-        ESP_ERROR_CHECK(stopped);
+        return stopped;
     }
     esp_netif_ip_info_t ip{};
     ip.ip.addr = htonl(config.ip);
     ip.gw.addr = htonl(config.gateway);
     ip.netmask.addr = htonl(config.netmask);
-    ESP_ERROR_CHECK(esp_netif_set_ip_info(s_netif, &ip));
+    esp_err_t error = esp_netif_set_ip_info(s_netif, &ip);
+    if (error != ESP_OK) {
+        return error;
+    }
     esp_netif_dns_info_t dns{};
     dns.ip.type = ESP_IPADDR_TYPE_V4;
     dns.ip.u_addr.ip4.addr = htonl(config.dns);
-    ESP_ERROR_CHECK(esp_netif_set_dns_info(s_netif, ESP_NETIF_DNS_MAIN, &dns));
-
+    error = esp_netif_set_dns_info(s_netif, ESP_NETIF_DNS_MAIN, &dns);
+    if (error != ESP_OK) {
+        return error;
+    }
     wifi_config_t station{};
     std::memcpy(station.sta.ssid, config.ssid.data(), std::min(config.ssid.size(), sizeof(station.sta.ssid)));
     std::memcpy(station.sta.password, config.password.data(),
                 std::min(config.password.size(), sizeof(station.sta.password)));
     station.sta.threshold.authmode = config.password.empty() ? WIFI_AUTH_OPEN : WIFI_AUTH_WPA2_PSK;
-    ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &station));
+    return esp_wifi_set_config(WIFI_IF_STA, &station);
 }
 
 void remember(const store::cfg::Wifi& config) {
@@ -128,18 +136,33 @@ void start(const store::cfg::Wifi* config) {
     ESP_ERROR_CHECK(esp_timer_create(&retry, &s_retryTimer));
     ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
     if (config != nullptr) {
-        remember(*config);
-        configureInterface(*config);
+        const esp_err_t error = configureInterface(*config);
+        if (error == ESP_OK) {
+            remember(*config);
+        } else {
+            ESP_LOGE(TAG, "stored config not applied: %s", esp_err_to_name(error));
+        }
     }
     ESP_ERROR_CHECK(esp_wifi_start());
 }
 
-void apply(const store::cfg::Wifi& config) {
+esp_err_t apply(const store::cfg::Wifi& config) {
     std::lock_guard<std::mutex> lock(s_applyMutex);
-    ESP_ERROR_CHECK(esp_wifi_stop());
-    remember(config);
-    configureInterface(config);
-    ESP_ERROR_CHECK(esp_wifi_start());
+    esp_err_t error = esp_wifi_stop();
+    if (error == ESP_OK) {
+        error = configureInterface(config);
+    }
+    if (error == ESP_OK) {
+        remember(config);
+    }
+    const esp_err_t started = esp_wifi_start();
+    if (error == ESP_OK) {
+        error = started;
+    }
+    if (error != ESP_OK) {
+        ESP_LOGE(TAG, "apply: %s", esp_err_to_name(error));
+    }
+    return error;
 }
 
 Status status() {

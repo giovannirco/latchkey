@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <string>
 
+#include "esp_err.h"
 #include "store.h"
 
 namespace wifi {
@@ -18,7 +19,7 @@ struct Status {
 
 void start(const store::cfg::Wifi* config);
 
-void apply(const store::cfg::Wifi& config);
+esp_err_t apply(const store::cfg::Wifi& config);
 
 Status status();
 

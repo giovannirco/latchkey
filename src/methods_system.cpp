@@ -44,6 +44,7 @@ constexpr uint64_t kRestartDelayUs = 500 * 1000;
 constexpr const char* kWifiParamsMessage = "wifi needs ssid, password, ip, gateway, netmask and dns";
 
 std::mutex s_claimMutex;
+esp_timer_handle_t s_restartTimer = nullptr;
 
 const cJSON* member(const cJSON* object, const char* key) { return cJSON_GetObjectItemCaseSensitive(object, key); }
 
@@ -111,24 +112,18 @@ bool hashPassword(const std::string& password, store::auth::Owner& owner) {
     return derived;
 }
 
-void restartLater() {
-    static esp_timer_handle_t timer = nullptr;
-    if (timer == nullptr) {
-        const esp_timer_create_args_t args = {
-            .callback =
-                [](void*) {
-                    console::flush();
-                    esp_restart();
-                },
-            .arg = nullptr,
-            .dispatch_method = ESP_TIMER_TASK,
-            .name = "restart",
-            .skip_unhandled_events = true,
-        };
-        ESP_ERROR_CHECK(esp_timer_create(&args, &timer));
+void restartNow(void*) {
+    console::flush();
+    esp_restart();
+}
+
+esp_err_t restartLater() {
+    esp_timer_stop(s_restartTimer);
+    const esp_err_t error = esp_timer_start_once(s_restartTimer, kRestartDelayUs);
+    if (error != ESP_OK) {
+        ESP_LOGE(TAG, "restart timer: %s", esp_err_to_name(error));
     }
-    esp_timer_stop(timer);
-    ESP_ERROR_CHECK(esp_timer_start_once(timer, kRestartDelayUs));
+    return error;
 }
 
 void addIpv4(cJSON* object, const char* key, uint32_t address) {
@@ -167,7 +162,11 @@ rpc::Reply info(const cJSON*, const rpc::Context&) {
     cJSON* heap = cJSON_AddObjectToObject(result, "heap");
     cJSON_AddNumberToObject(heap, "free", esp_get_free_heap_size());
     cJSON_AddNumberToObject(heap, "min_free", esp_get_minimum_free_heap_size());
-    const store::Usage usage = store::usage();
+    store::Usage usage;
+    if (store::usage(usage) != ESP_OK) {
+        cJSON_Delete(result);
+        return rpc::fail("internal", "cannot read NVS usage");
+    }
     cJSON* nvs = cJSON_AddObjectToObject(result, "nvs");
     cJSON_AddNumberToObject(nvs, "used_entries", usage.usedEntries);
     cJSON_AddNumberToObject(nvs, "available_entries", usage.availableEntries);
@@ -213,14 +212,17 @@ rpc::Reply setup(const cJSON* params, const rpc::Context&) {
     }
     ESP_LOGI(TAG, "owner password hashed with %u iterations in %lld ms", static_cast<unsigned>(owner.iterations),
              static_cast<long long>((esp_timer_get_time() - started) / 1000));
-    const bool stored = store::cfg::saveWifi(wifi) == ESP_OK && store::auth::saveOwner(owner) == ESP_OK;
+    if (store::cfg::saveWifi(wifi) != ESP_OK || wifi::apply(wifi) != ESP_OK) {
+        mbedtls_platform_zeroize(&owner, sizeof(owner));
+        return rpc::fail("internal", "cannot store or apply the Wi-Fi configuration");
+    }
+    const bool stored = store::auth::saveOwner(owner) == ESP_OK;
     const std::string uri =
         latchkey_util::otpauthUri(board::name(), owner.totpSecret.data(), owner.totpSecret.size());
     mbedtls_platform_zeroize(&owner, sizeof(owner));
     if (!stored) {
         return rpc::fail("internal", "cannot store the owner");
     }
-    wifi::apply(wifi);
     cJSON* result = cJSON_CreateObject();
     cJSON_AddStringToObject(result, "otpauth", uri.c_str());
     return rpc::ok(result);
@@ -234,13 +236,14 @@ rpc::Reply wifiSet(const cJSON* params, const rpc::Context&) {
     if (store::cfg::saveWifi(wifi) != ESP_OK) {
         return rpc::fail("internal", "cannot store the Wi-Fi configuration");
     }
-    wifi::apply(wifi);
+    if (wifi::apply(wifi) != ESP_OK) {
+        return rpc::fail("internal", "cannot apply the Wi-Fi configuration");
+    }
     return rpc::ok();
 }
 
 rpc::Reply reboot(const cJSON*, const rpc::Context&) {
-    restartLater();
-    return rpc::ok();
+    return restartLater() == ESP_OK ? rpc::ok() : rpc::fail("internal", "cannot schedule the restart");
 }
 
 rpc::Reply factoryReset(const cJSON*, const rpc::Context&) {
@@ -251,8 +254,7 @@ rpc::Reply factoryReset(const cJSON*, const rpc::Context&) {
         return rpc::fail("internal", "erase failed");
     }
     ESP_LOGW(TAG, "factory reset: owner, Wi-Fi and audit erased");
-    restartLater();
-    return rpc::ok();
+    return restartLater() == ESP_OK ? rpc::ok() : rpc::fail("internal", "erased, but cannot schedule the restart");
 }
 
 rpc::Reply timeSet(const cJSON* params, const rpc::Context&) {
@@ -294,6 +296,14 @@ rpc::Reply auditList(const cJSON* params, const rpc::Context&) {
 }
 
 void registerSystem() {
+    const esp_timer_create_args_t restart = {
+        .callback = restartNow,
+        .arg = nullptr,
+        .dispatch_method = ESP_TIMER_TASK,
+        .name = "restart",
+        .skip_unhandled_events = true,
+    };
+    ESP_ERROR_CHECK(esp_timer_create(&restart, &s_restartTimer));
     rpc::registerMethod("system.info", {.audited = false}, info);
     rpc::registerMethod("system.setup", {.needsSession = false, .serialOnly = true}, setup);
     rpc::registerMethod("system.wifi.set", {}, wifiSet);

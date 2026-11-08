@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "events.h"
 
-#include <cstdlib>
 #include <mutex>
 #include <utility>
 #include <vector>
@@ -34,17 +33,24 @@ void addSink(Sink sink) {
 void publish(const char* name, cJSON* data) {
     cJSON* event = cJSON_CreateObject();
     cJSON_AddStringToObject(event, "event", name);
-    cJSON_AddItemToObject(event, "data", data != nullptr ? data : cJSON_CreateObject());
+    cJSON* payload = data != nullptr ? data : cJSON_CreateObject();
+    if (!cJSON_AddItemToObject(event, "data", payload)) {
+        cJSON_Delete(payload);
+    }
     char* text = cJSON_PrintUnformatted(event);
     cJSON_Delete(event);
     if (text == nullptr) {
-        ESP_LOGE(TAG, "out of memory rendering event %s", name);
-        abort();
+        ESP_LOGE(TAG, "out of memory rendering event %s, dropped", name);
+        return;
     }
     const std::string line(text);
     cJSON_free(text);
-    std::lock_guard<std::mutex> lock(sinksMutex());
-    for (const Sink& sink : sinks()) {
+    std::vector<Sink> targets;
+    {
+        std::lock_guard<std::mutex> lock(sinksMutex());
+        targets = sinks();
+    }
+    for (const Sink& sink : targets) {
         sink(line);
     }
 }
