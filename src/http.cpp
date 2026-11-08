@@ -24,6 +24,7 @@
 #include "certs.h"
 #include "latchkey_util/web.h"
 #include "rpc.h"
+#include "ws.h"
 
 extern const uint8_t kPageStart[] asm("_binary_index_html_gz_start");
 extern const uint8_t kPageEnd[] asm("_binary_index_html_gz_end");
@@ -230,6 +231,7 @@ void answer(Request& request) {
     mbedtls_platform_zeroize(cookie.data(), cookie.size());
     mbedtls_platform_zeroize(response.sessionToken.data(), response.sessionToken.size());
     httpd_req_async_handler_complete(req);
+    ws::service();
 }
 
 void serveRequests(void*) {
@@ -282,6 +284,12 @@ esp_err_t startHttps(const latchkey_util::TlsIdentity& identity) {
     if (started != ESP_OK) {
         return started;
     }
+    httpd_uri_t events{};
+    events.uri = "/api/events";
+    events.method = HTTP_GET;
+    events.handler = ws::receive;
+    events.is_websocket = true;
+    events.ws_pre_handshake_cb = ws::admit;
     httpd_uri_t api{};
     api.uri = "/api/rpc";
     api.method = HTTP_POST;
@@ -290,13 +298,14 @@ esp_err_t startHttps(const latchkey_util::TlsIdentity& identity) {
     page.uri = "/*";
     page.method = HTTP_GET;
     page.handler = servePage;
-    for (const httpd_uri_t* uri : {&api, &page}) {
+    for (const httpd_uri_t* uri : {&events, &api, &page}) {
         const esp_err_t registered = httpd_register_uri_handler(s_https, uri);
         if (registered != ESP_OK) {
             return registered;
         }
     }
     registerErrors(s_https);
+    ws::attach(s_https, kHttpsSockets);
     return ESP_OK;
 }
 
@@ -356,6 +365,7 @@ void onGotIp(void*, esp_event_base_t, int32_t, void* data) {
 }
 
 void start() {
+    ws::init();
     s_requests = xQueueCreate(kHttpsSockets, sizeof(Request*));
     if (s_requests == nullptr ||
         xTaskCreate(serveRequests, "rpc_web", kWorkerStack, nullptr, kTaskPriority, &s_worker) != pdPASS) {

@@ -18,6 +18,7 @@ idf_component_register(
         "rpc.cpp"
         "store.cpp"
         "wifi.cpp"
+        "ws.cpp"
     INCLUDE_DIRS "."
     PRIV_REQUIRES
         bt

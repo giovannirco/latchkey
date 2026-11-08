@@ -1,0 +1,214 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+#include "ws.h"
+
+#include <cstdlib>
+#include <deque>
+#include <mutex>
+#include <utility>
+#include <vector>
+
+#include "esp_log.h"
+#include "mbedtls/platform_util.h"
+
+#include "auth.h"
+#include "events.h"
+#include "latchkey_util/web.h"
+
+namespace ws {
+
+namespace {
+
+constexpr const char* TAG = "ws";
+constexpr size_t kMaxPending = 32;
+constexpr size_t kMaxClientFrame = 128;
+constexpr size_t kHeaderValue = 300;
+constexpr size_t kTokenBuffer = 65;
+
+struct Outgoing {
+    bool broadcast = true;
+    uint32_t session = 0;
+    std::string line;
+};
+
+std::mutex s_mutex;
+std::deque<Outgoing> s_pending;
+httpd_handle_t s_server = nullptr;
+size_t s_maxSockets = 0;
+bool s_queued = false;
+
+void discard(Outgoing& out) {
+    if (!out.broadcast) {
+        mbedtls_platform_zeroize(out.line.data(), out.line.size());
+    }
+}
+
+bool sendTo(int fd, const std::string& line) {
+    httpd_ws_frame_t frame{};
+    frame.final = true;
+    frame.type = HTTPD_WS_TYPE_TEXT;
+    frame.payload = reinterpret_cast<uint8_t*>(const_cast<char*>(line.data()));
+    frame.len = line.size();
+    return httpd_ws_send_frame_async(s_server, fd, &frame) == ESP_OK;
+}
+
+void serve(int fd, const std::deque<Outgoing>& batch) {
+    const auto* session = static_cast<const uint32_t*>(httpd_sess_get_ctx(s_server, fd));
+    if (session == nullptr || !auth::sessionOpen(*session)) {
+        httpd_sess_trigger_close(s_server, fd);
+        return;
+    }
+    httpd_sess_update_lru_counter(s_server, fd);
+    for (const Outgoing& out : batch) {
+        if ((out.broadcast || out.session == *session) && !sendTo(fd, out.line)) {
+            ESP_LOGW(TAG, "event socket %d does not take frames: closing it", fd);
+            httpd_sess_trigger_close(s_server, fd);
+            return;
+        }
+    }
+}
+
+void pass(void*) {
+    std::deque<Outgoing> batch;
+    {
+        std::lock_guard<std::mutex> lock(s_mutex);
+        batch.swap(s_pending);
+        s_queued = false;
+    }
+    std::vector<int> fds(s_maxSockets);
+    size_t count = fds.size();
+    if (httpd_get_client_list(s_server, &count, fds.data()) == ESP_OK) {
+        for (size_t i = 0; i < count; ++i) {
+            if (httpd_ws_get_fd_info(s_server, fds[i]) == HTTPD_WS_CLIENT_WEBSOCKET) {
+                serve(fds[i], batch);
+            }
+        }
+    }
+    for (Outgoing& out : batch) {
+        discard(out);
+    }
+}
+
+void schedule(bool due) {
+    if (!due) {
+        return;
+    }
+    if (httpd_queue_work(s_server, pass, nullptr) != ESP_OK) {
+        std::lock_guard<std::mutex> lock(s_mutex);
+        s_queued = false;
+        ESP_LOGE(TAG, "the web server's work queue is full: events wait for the next one");
+    }
+}
+
+void enqueue(Outgoing out) {
+    bool due = false;
+    {
+        std::lock_guard<std::mutex> lock(s_mutex);
+        if (s_server == nullptr) {
+            discard(out);
+            return;
+        }
+        if (s_pending.size() >= kMaxPending) {
+            ESP_LOGW(TAG, "event queue full: dropped the oldest event");
+            discard(s_pending.front());
+            s_pending.pop_front();
+        }
+        s_pending.push_back(std::move(out));
+        due = !s_queued;
+        s_queued = true;
+    }
+    schedule(due);
+}
+
+bool header(httpd_req_t* req, const char* name, char (&value)[kHeaderValue]) {
+    return httpd_req_get_hdr_value_str(req, name, value, sizeof(value)) == ESP_OK;
+}
+
+bool originAllowed(httpd_req_t* req) {
+    if (httpd_req_get_hdr_value_len(req, "Origin") == 0) {
+        return true;
+    }
+    char origin[kHeaderValue];
+    char host[kHeaderValue];
+    return header(req, "Origin", origin) && header(req, "Host", host) && latchkey_util::sameOrigin(origin, host);
+}
+
+std::optional<uint32_t> sessionOf(httpd_req_t* req) {
+    char token[kTokenBuffer] = {};
+    size_t length = sizeof(token);
+    std::optional<uint32_t> session;
+    if (httpd_req_get_cookie_val(req, latchkey_util::kSessionCookieName, token, &length) == ESP_OK) {
+        session = auth::sessionFor(token);
+    }
+    mbedtls_platform_zeroize(token, sizeof(token));
+    return session;
+}
+
+}
+
+void init() {
+    events::addSink([](const std::string& line) { enqueue(Outgoing{true, 0, line}); });
+}
+
+void attach(httpd_handle_t server, size_t maxSockets) {
+    std::lock_guard<std::mutex> lock(s_mutex);
+    s_maxSockets = maxSockets;
+    s_server = server;
+}
+
+esp_err_t admit(httpd_req_t* req) {
+    if (!originAllowed(req)) {
+        ESP_LOGW(TAG, "refused an event socket from another origin");
+        return ESP_FAIL;
+    }
+    const std::optional<uint32_t> session = sessionOf(req);
+    if (!session.has_value()) {
+        return ESP_FAIL;
+    }
+    auto* id = static_cast<uint32_t*>(malloc(sizeof(uint32_t)));
+    if (id == nullptr) {
+        return ESP_FAIL;
+    }
+    *id = *session;
+    req->sess_ctx = id;
+    req->free_ctx = free;
+    return ESP_OK;
+}
+
+esp_err_t receive(httpd_req_t* req) {
+    httpd_ws_frame_t frame{};
+    if (httpd_ws_recv_frame(req, &frame, 0) != ESP_OK) {
+        return ESP_FAIL;
+    }
+    if (frame.len == 0) {
+        return ESP_OK;
+    }
+    if (frame.len > kMaxClientFrame) {
+        return ESP_FAIL;
+    }
+    uint8_t payload[kMaxClientFrame];
+    frame.payload = payload;
+    return httpd_ws_recv_frame(req, &frame, frame.len);
+}
+
+void deliver(std::optional<uint32_t> session, std::string line) {
+    if (!session.has_value()) {
+        mbedtls_platform_zeroize(line.data(), line.size());
+        return;
+    }
+    enqueue(Outgoing{false, *session, std::move(line)});
+}
+
+void service() {
+    bool due = false;
+    {
+        std::lock_guard<std::mutex> lock(s_mutex);
+        if (s_server == nullptr) {
+            return;
+        }
+        due = !s_queued;
+        s_queued = true;
+    }
+    schedule(due);
+}
+
+}

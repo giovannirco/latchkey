@@ -66,6 +66,8 @@ Login login(const std::optional<Credentials>& credentials, bool openSession);
 
 std::optional<uint32_t> sessionFor(std::string_view token);
 
+bool sessionOpen(uint32_t id);
+
 std::vector<Session> sessions();
 
 bool revoke(uint32_t id);

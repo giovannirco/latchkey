@@ -268,6 +268,16 @@ std::optional<uint32_t> sessionFor(std::string_view token) {
     return s_sessions.touch(digest, monotonicSeconds());
 }
 
+bool sessionOpen(uint32_t id) {
+    std::lock_guard<std::mutex> lock(s_sessionMutex);
+    for (const latchkey_util::SessionInfo& info : s_sessions.list(monotonicSeconds())) {
+        if (info.id == id) {
+            return true;
+        }
+    }
+    return false;
+}
+
 std::vector<Session> sessions() {
     std::lock_guard<std::mutex> lock(s_sessionMutex);
     std::vector<Session> out;
