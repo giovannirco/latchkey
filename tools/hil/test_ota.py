@@ -141,6 +141,10 @@ class ButtonRequest:
         self.chip = chip
         self.unanswered = False
 
+    def expect(self) -> None:
+        if self.unanswered:
+            pytest.skip("nobody pressed the board button during an earlier wait")
+
     def open(self, purpose: str) -> None:
         if self.path is None:
             print(f"press the {self.chip} board button now ({purpose})", file=sys.stderr, flush=True)
@@ -315,8 +319,6 @@ def attempt_install(target: Target, image: bytes, cookie: str, events: Events) -
 def install_with_press(
     target: Target, image: bytes, cookie: str, events: Events, button: ButtonRequest, purpose: str
 ) -> Reply:
-    if button.unanswered:
-        pytest.skip("nobody pressed the board button during an earlier wait")
     deadline = time.monotonic() + BUTTON_WAIT_S
     button.open(purpose)
     try:
@@ -533,6 +535,7 @@ def test_a_pressed_update_restarts_into_the_image_and_keeps_the_board(
     button: ButtonRequest,
     lock_mac: str,
 ) -> None:
+    button.expect()
     before = ota_status(console)
     assert before["running"]["state"] != "pending_verify", "the board is still checking its last update"
     state = board_state(console)
@@ -583,6 +586,7 @@ def test_an_image_that_fails_its_first_boot_is_rolled_back(
 ) -> None:
     if target.chip != ROLLBACK_CHIP:
         pytest.skip("the rollback runs on the classic ESP32, which holds no lock")
+    button.expect()
     failing = firmware(ROLLBACK_ENV)
     before = ota_status(console)
     assert before["running"]["state"] != "pending_verify", "the board is still checking its last update"
