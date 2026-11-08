@@ -773,11 +773,13 @@ Status resetLock(ttlock::Session& session, const Lock& lock, rpc::Reply& reply) 
         return status;
     }
     closeLink();
+    ESP_LOGW(TAG, "lock %s reset to factory state", lock.record.mac);
     const esp_err_t error = removeRecord(lock.record.mac);
     if (error != ESP_OK) {
         ESP_LOGE(TAG, "the lock was reset but its keys could not be erased: %s", esp_err_to_name(error));
+        reply = rpc::fail("internal", "lock reset, keys still stored on the board: run locks.forget");
+        return Status::Ok;
     }
-    ESP_LOGW(TAG, "lock %s reset to factory state", lock.record.mac);
     reply = rpc::ok();
     return Status::Ok;
 }
