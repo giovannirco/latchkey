@@ -28,6 +28,16 @@ static void test_other_content_types_are_refused() {
     TEST_ASSERT_FALSE(latchkey_util::isJsonContentType("multipart/form-data; boundary=application/json"));
 }
 
+static void test_firmware_uploads_are_octet_streams() {
+    TEST_ASSERT_TRUE(latchkey_util::isOctetStreamContentType("application/octet-stream"));
+    TEST_ASSERT_TRUE(latchkey_util::isOctetStreamContentType("Application/Octet-Stream"));
+    TEST_ASSERT_TRUE(latchkey_util::isOctetStreamContentType(" application/octet-stream ; x=1"));
+    TEST_ASSERT_FALSE(latchkey_util::isOctetStreamContentType(""));
+    TEST_ASSERT_FALSE(latchkey_util::isOctetStreamContentType("application/json"));
+    TEST_ASSERT_FALSE(latchkey_util::isOctetStreamContentType("multipart/form-data; boundary=application/octet-stream"));
+    TEST_ASSERT_FALSE(latchkey_util::isOctetStreamContentType("text/plain"));
+}
+
 static constexpr uint32_t kBoard = 0xC000023F;
 
 static void test_the_board_address_is_its_own_host() {
@@ -98,6 +108,7 @@ int main() {
     UNITY_BEGIN();
     RUN_TEST(test_json_content_types_are_recognised);
     RUN_TEST(test_other_content_types_are_refused);
+    RUN_TEST(test_firmware_uploads_are_octet_streams);
     RUN_TEST(test_the_board_address_is_its_own_host);
     RUN_TEST(test_other_hosts_are_not_the_board);
     RUN_TEST(test_the_board_address_is_its_own_origin);

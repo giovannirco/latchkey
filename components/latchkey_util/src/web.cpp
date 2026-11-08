@@ -78,12 +78,16 @@ bool splitAuthority(std::string_view text, Authority& out) {
 
 std::string_view effectivePort(std::string_view port) { return port.empty() ? kDefaultPort : port; }
 
+bool hasMediaType(std::string_view value, std::string_view type) {
+    const std::string_view trimmed = trim(value);
+    return equalsIgnoringCase(trim(trimmed.substr(0, trimmed.find(';'))), type);
 }
 
-bool isJsonContentType(std::string_view value) {
-    const std::string_view trimmed = trim(value);
-    return equalsIgnoringCase(trim(trimmed.substr(0, trimmed.find(';'))), "application/json");
 }
+
+bool isJsonContentType(std::string_view value) { return hasMediaType(value, "application/json"); }
+
+bool isOctetStreamContentType(std::string_view value) { return hasMediaType(value, "application/octet-stream"); }
 
 bool isOwnHost(std::string_view host, uint32_t address) {
     Authority authority;

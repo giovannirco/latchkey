@@ -13,6 +13,8 @@ inline constexpr const char* kClearedSessionCookie = "lk_session=; Path=/; Max-A
 
 bool isJsonContentType(std::string_view value);
 
+bool isOctetStreamContentType(std::string_view value);
+
 bool isOwnHost(std::string_view host, uint32_t address);
 
 bool isOwnOrigin(std::string_view origin, uint32_t address);
