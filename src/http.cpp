@@ -137,6 +137,15 @@ bool header(httpd_req_t* req, const char* name, char (&value)[kHeaderValue]) {
 
 void noteServerTask() { s_server.store(xTaskGetCurrentTaskHandle()); }
 
+esp_err_t answerEvents(httpd_req_t* req) {
+    if (httpd_ws_get_fd_info(req->handle, httpd_req_to_sockfd(req)) == HTTPD_WS_CLIENT_WEBSOCKET) {
+        return ws::receive(req);
+    }
+    httpd_resp_set_hdr(req, "Upgrade", "websocket");
+    return sendJson(req, "426 Upgrade Required",
+                    rpc::errorLine("upgrade_required", "this address takes WebSocket connections only"));
+}
+
 esp_err_t servePage(httpd_req_t* req) {
     noteServerTask();
     const std::string_view uri(req->uri);
@@ -296,7 +305,7 @@ esp_err_t startHttps(const latchkey_util::TlsIdentity& identity) {
     httpd_uri_t events{};
     events.uri = "/api/events";
     events.method = HTTP_GET;
-    events.handler = ws::receive;
+    events.handler = answerEvents;
     events.is_websocket = true;
     events.ws_pre_handshake_cb = ws::admit;
     httpd_uri_t api{};
