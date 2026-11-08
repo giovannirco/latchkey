@@ -5,6 +5,8 @@ Notable changes to Latchkey, in the format of [Keep a Changelog](https://keepach
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-11-08
+
 ### Added
 
 - Passcodes on the lock from the board: `lock.passcodes.list`, `add`, `update`, `delete` and `clear`, with ids derived from the lock's key, names and a managed flag kept on the board, and codes shown once when added and never listed. Duplicates and the admin passcode are refused before anything is sent; cyclic passcodes answer `unsupported`.
