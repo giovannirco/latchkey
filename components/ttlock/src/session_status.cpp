@@ -70,6 +70,24 @@ Status Session::features(uint64_t& out) {
     return Status::Ok;
 }
 
+Status Session::fetchLogPage(uint16_t sequence, LogPage& out) {
+    Status status = requireKeys();
+    if (status != Status::Ok) {
+        return status;
+    }
+    Bytes data;
+    status = request(command::kGetOperateLog, buildOperateLogRequest(sequence), data);
+    if (status != Status::Ok) {
+        return status;
+    }
+    LogPage page;
+    if (!parseLogPage(data, page)) {
+        return Status::BadResponse;
+    }
+    out = std::move(page);
+    return Status::Ok;
+}
+
 Status Session::fetchLog(uint16_t fromSequence, std::vector<LogEntry>& out) {
     const Status status = requireKeys();
     if (status != Status::Ok) {
@@ -79,14 +97,10 @@ Status Session::fetchLog(uint16_t fromSequence, std::vector<LogEntry>& out) {
     std::set<uint16_t> seen;
     uint16_t next = fromSequence;
     for (size_t pages = 0; pages < kMaxListPages; ++pages) {
-        Bytes data;
-        const Status fetched = request(command::kGetOperateLog, buildOperateLogRequest(next), data);
+        LogPage page;
+        const Status fetched = fetchLogPage(next, page);
         if (fetched != Status::Ok) {
             return fetched;
-        }
-        LogPage page;
-        if (!parseLogPage(data, page)) {
-            return Status::BadResponse;
         }
         size_t fresh = 0;
         for (LogEntry& entry : page.entries) {

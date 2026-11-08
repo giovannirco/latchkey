@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #pragma once
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <functional>
@@ -24,14 +25,24 @@ inline constexpr int64_t kEarliestUsableUtc = 1704067200;
 inline constexpr size_t kAdminPasscodeDigits = 7;
 
 struct Reply;
+struct LogPage;
 
 using EventSink = std::function<void(const LockEvent&)>;
 using EnrollCallback = std::function<void(const EnrollProgress&)>;
 using PersistCallback = std::function<void(const LockKeys&)>;
+using SeedsCallback = std::function<void(uint16_t year, const std::array<CodeSecret, kCodeSecretCount>& seeds)>;
 
 struct PairResult {
     bool timeCalibrated = false;
     bool adminPasscodeConfirmed = false;
+    bool passcodeSeedsConfirmed = false;
+    uint16_t passcodeSeedYear = 0;
+    std::array<CodeSecret, kCodeSecretCount> passcodeSeeds{};
+};
+
+struct PairOptions {
+    std::string adminPasscode;
+    SeedsCallback persistSeeds;
 };
 
 class Session {
@@ -41,10 +52,14 @@ public:
     void setEventSink(EventSink sink);
 
     Status pair(const LockVersion& version, LockKeys& out, PersistCallback persistEarly, PairResult& result);
+    Status pair(const LockVersion& version, const PairOptions& options, LockKeys& out, PersistCallback persistEarly,
+                PairResult& result);
     Status attach(const LockKeys& keys);
     const LockKeys& keys() const;
     uint8_t lockErrorCode() const;
     size_t droppedFrames() const;
+    size_t lockTypeMismatches() const;
+    LockVersion lastMismatchedVersion() const;
 
     Status unlock(OperationResult& out);
     Status lock(OperationResult& out);
@@ -67,6 +82,8 @@ public:
     Status passcodeDelete(PasscodeType type, const std::string& code);
     Status passcodeClear();
     Status setAdminPasscode(const std::string& code);
+    Status adminPasscodeGet(std::string& out);
+    Status adminPasscodeGetRaw(Bytes& out);
 
     Status fingerprintList(std::vector<Credential>& out);
     Status fingerprintEnroll(const Validity& validity, const EnrollCallback& progress, uint64_t& id);
@@ -81,6 +98,7 @@ public:
     Status cardSetValidity(uint64_t number, const Validity& validity);
 
     Status fetchLog(uint16_t fromSequence, std::vector<LogEntry>& out);
+    Status fetchLogPage(uint16_t sequence, LogPage& out);
 
     Status soundGet(SoundSetting& out);
     Status soundSet(bool enabled);
@@ -126,11 +144,12 @@ private:
     Status beginAdmin(Feature feature);
     Status adminRequest(Feature feature, uint8_t command, const Bytes& payload, Bytes& data);
 
+    Status beforeKeysFailure(Status status, size_t mismatchesBefore) const;
     Status initialize();
     Status fetchAesKey();
     Status addAdmin();
-    Status finishPairing(const std::function<void()>& persist, PairResult& result);
-    Status initPasswords();
+    Status finishPairing(const PairOptions& options, const std::function<void()>& persist, PairResult& result);
+    Status initPasswords(const SeedsCallback& persistSeeds, PairResult& result);
     Status controlLock(uint8_t command, OperationResult& out);
     Status enroll(bool fingerprint, const Validity& validity, const EnrollCallback& progress, uint64_t& id);
     Status switchGet(Feature feature, uint32_t item, bool& enabled);
@@ -145,6 +164,8 @@ private:
     bool attached_ = false;
     uint8_t lockErrorCode_ = 0;
     size_t droppedFrames_ = 0;
+    size_t lockTypeMismatches_ = 0;
+    LockVersion lastMismatchedVersion_;
 };
 
 }

@@ -3,6 +3,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <string>
 #include <utility>
 #include <vector>
 
@@ -20,6 +21,21 @@ inline bool usesV3Frames(const LockVersion& version) {
 
 inline Bytes noPayload() {
     return Bytes{};
+}
+
+inline constexpr size_t kMinPasscodeDigits = 4;
+inline constexpr size_t kMaxPasscodeDigits = 9;
+
+inline bool isPasscode(const std::string& code) {
+    if (code.size() < kMinPasscodeDigits || code.size() > kMaxPasscodeDigits) {
+        return false;
+    }
+    for (char digit : code) {
+        if (digit < '0' || digit > '9') {
+            return false;
+        }
+    }
+    return true;
 }
 
 template <typename Page, typename Item, typename Fetch>

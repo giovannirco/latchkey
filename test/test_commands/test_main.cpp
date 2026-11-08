@@ -11,6 +11,7 @@
 #include <string>
 
 #include "../vectors/command_vectors.h"
+#include "../vectors/kind3r_admin_code_vectors.h"
 #include "../vectors/kind3r_vectors.h"
 #include "ttlock/aes.h"
 #include "ttlock/commands.h"
@@ -20,6 +21,7 @@
 #include "ttlock/types.h"
 
 namespace k3 = vectors::kind3r;
+namespace k3a = vectors::kind3r_admin;
 namespace tb = vectors::command;
 
 using ttlock::Bytes;
@@ -234,6 +236,32 @@ static void test_device_info_requests_and_strings() {
 
 static void test_admin_passcode_digits_are_raw_values_like_kind3r() {
     assertBytes(k3::kSetAdminPasscode, ttlock::buildSetAdminPasscode(k3::kSetAdminPasscodeCode), "admin passcode");
+}
+
+static void test_admin_code_parses_like_kind3r_where_kind3r_is_consistent() {
+    std::string code = "unchanged";
+    TEST_ASSERT_TRUE(ttlock::parseAdminCode(toBytes(k3a::kAdminCodeEmpty), code));
+    TEST_ASSERT_EQUAL_STRING(k3a::kAdminCodeEmptyKind3r, code.c_str());
+    TEST_ASSERT_TRUE(ttlock::parseAdminCode(toBytes(k3a::kAdminCodeTrailed), code));
+    TEST_ASSERT_EQUAL_STRING(k3a::kAdminCodeTrailedKind3r, code.c_str());
+}
+
+static void test_admin_code_takes_the_declared_length_where_kind3r_drops_two_digits() {
+    std::string code;
+    TEST_ASSERT_TRUE(ttlock::parseAdminCode(toBytes(k3a::kAdminCodeExact), code));
+    TEST_ASSERT_EQUAL_UINT(k3a::kAdminCodeExact[1], code.size());
+    TEST_ASSERT_EQUAL_STRING("3141592", code.c_str());
+    TEST_ASSERT_EQUAL_UINT(code.size() - 2, std::strlen(k3a::kAdminCodeExactKind3r));
+}
+
+static void test_admin_code_refuses_short_or_non_digit_replies() {
+    std::string code = "unchanged";
+    TEST_ASSERT_FALSE(ttlock::parseAdminCode(Bytes{}, code));
+    TEST_ASSERT_FALSE(ttlock::parseAdminCode(Bytes{0x5A}, code));
+    TEST_ASSERT_FALSE(ttlock::parseAdminCode(Bytes{0x5A, 0x08, '1', '2'}, code));
+    TEST_ASSERT_FALSE(ttlock::parseAdminCode(Bytes{0x5A, 0x04, 0x03, 0x01, 0x04, 0x01}, code));
+    TEST_ASSERT_FALSE(ttlock::parseAdminCode(Bytes{0x5A, 0x09, '3', '1', '4', '1', '5', '9', '2', 0x00, 0x00}, code));
+    TEST_ASSERT_EQUAL_STRING("unchanged", code.c_str());
 }
 
 static void test_init_passwords_matches_kind3r() {
@@ -730,6 +758,9 @@ int main() {
     RUN_TEST(test_features_stitch_words_low_word_first);
     RUN_TEST(test_device_info_requests_and_strings);
     RUN_TEST(test_admin_passcode_digits_are_raw_values_like_kind3r);
+    RUN_TEST(test_admin_code_parses_like_kind3r_where_kind3r_is_consistent);
+    RUN_TEST(test_admin_code_takes_the_declared_length_where_kind3r_drops_two_digits);
+    RUN_TEST(test_admin_code_refuses_short_or_non_digit_replies);
     RUN_TEST(test_init_passwords_matches_kind3r);
     RUN_TEST(test_empty_payload_commands_match_kind3r);
     RUN_TEST(test_passcode_add_follows_ttlock_ble);

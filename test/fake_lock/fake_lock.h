@@ -70,6 +70,7 @@ struct Request {
     bool decoded = false;
     bool crcOk = false;
     bool crlf = false;
+    Bytes raw;
 };
 
 enum class After : uint8_t {
@@ -163,6 +164,7 @@ private:
             return request;
         }
         const Bytes raw(wire.begin(), wire.end() - 2);
+        request.raw = raw;
         ttlock::DecodedFrame frame;
         if (ttlock::decodeFrame(raw, key, frame) != Status::Ok) {
             return request;

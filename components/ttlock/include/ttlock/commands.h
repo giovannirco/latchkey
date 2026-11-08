@@ -49,7 +49,6 @@ inline constexpr uint8_t kReadDeviceInfo = 0x90;
 
 inline constexpr uint8_t kReplySuccess = 0x01;
 inline constexpr uint16_t kLogSinceLastRead = 0xFFFF;
-inline constexpr size_t kCodeSecretCount = 10;
 inline constexpr uint32_t kSwitchTamperAlert = 0x01;
 inline constexpr uint32_t kSwitchResetButton = 0x02;
 inline constexpr uint32_t kSwitchPrivacyLock = 0x04;
@@ -89,11 +88,7 @@ enum class DeviceInfoItem : uint8_t {
 Bytes buildReadDeviceInfo(DeviceInfoItem item);
 std::string parseDeviceInfoString(const Bytes& data);
 Bytes buildSetAdminPasscode(const std::string& digits);
-
-struct CodeSecret {
-    uint16_t code = 0;
-    uint64_t secret = 0;
-};
+bool parseAdminCode(const Bytes& data, std::string& out);
 
 Bytes buildInitPasswords(uint8_t yearOfCentury, const std::array<CodeSecret, kCodeSecretCount>& seeds);
 

@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include <unity.h>
 
+#include <algorithm>
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <initializer_list>
@@ -9,9 +11,12 @@
 #include <vector>
 
 #include "../fake_lock/fake_lock.h"
+#include "../vectors/kind3r_admin_code_vectors.h"
 #include "../vectors/kind3r_vectors.h"
 #include "ttlock/aes.h"
+#include "ttlock/codec_xor.h"
 #include "ttlock/commands.h"
+#include "ttlock/crc8.h"
 #include "ttlock/features.h"
 #include "ttlock/session.h"
 #include "ttlock/status.h"
@@ -33,6 +38,7 @@ using ttlock::Feature;
 using ttlock::Status;
 namespace cmd = ttlock::command;
 namespace k3 = vectors::kind3r;
+namespace k3a = vectors::kind3r_admin;
 
 static const AesKey kDefault = ttlock::kDefaultAesKey;
 static const AesKey kLockKey{0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77,
@@ -198,15 +204,47 @@ struct Persisted {
     ttlock::PairResult result;
 };
 
+static ttlock::PersistCallback recorder(Rig& rig, Persisted& persisted) {
+    return [&persisted, &rig](const ttlock::LockKeys& keys) {
+        persisted.calls.push_back(keys);
+        persisted.requestsSeen.push_back(rig.lock.requests().size());
+    };
+}
+
 static Status pair(Rig& rig, ttlock::LockKeys& out, Persisted& persisted) {
     out.mac = kMac;
-    return rig.session.pair(
-        fake::kRequestVersion, out,
-        [&persisted, &rig](const ttlock::LockKeys& keys) {
-            persisted.calls.push_back(keys);
-            persisted.requestsSeen.push_back(rig.lock.requests().size());
-        },
-        persisted.result);
+    return rig.session.pair(fake::kRequestVersion, out, recorder(rig, persisted), persisted.result);
+}
+
+static Status pairWithOptions(Rig& rig, const ttlock::PairOptions& options, ttlock::LockKeys& out,
+                              Persisted& persisted) {
+    out.mac = kMac;
+    return rig.session.pair(fake::kRequestVersion, options, out, recorder(rig, persisted), persisted.result);
+}
+
+static Status pairWith(Rig& rig, const std::string& adminPasscode, ttlock::LockKeys& out, Persisted& persisted) {
+    ttlock::PairOptions options;
+    options.adminPasscode = adminPasscode;
+    return pairWithOptions(rig, options, out, persisted);
+}
+
+struct SeedHook {
+    size_t calls = 0;
+    size_t requestsSeen = 0;
+    uint16_t year = 0;
+    std::array<ttlock::CodeSecret, ttlock::kCodeSecretCount> seeds{};
+};
+
+static ttlock::PairOptions withSeedHook(Rig& rig, SeedHook& hook) {
+    ttlock::PairOptions options;
+    options.persistSeeds = [&rig, &hook](uint16_t year,
+                                         const std::array<ttlock::CodeSecret, ttlock::kCodeSecretCount>& seeds) {
+        ++hook.calls;
+        hook.requestsSeen = rig.lock.requests().size();
+        hook.year = year;
+        hook.seeds = seeds;
+    };
+    return options;
 }
 
 static size_t indexOf(const FakeLock& lock, uint8_t command) {
@@ -365,7 +403,122 @@ static void test_pair_calibrates_the_lock_to_local_wall_time() {
     assertPayload(Bytes{25, 11, 7, 11, 0, 0}, rig.lock.requests()[3]);
 }
 
-static void assertInitPasswordsYear(int64_t utc, int32_t offset, uint8_t year) {
+static ttlock::CodeSecret seedInFrame(const Bytes& payload, size_t index) {
+    const uint8_t* combo = payload.data() + 1 + index * 6;
+    ttlock::CodeSecret seed;
+    seed.code = static_cast<uint16_t>(combo[0] << 4 | combo[1] >> 4);
+    seed.secret = static_cast<uint64_t>(combo[1] & 0x0F) << 32 | static_cast<uint64_t>(combo[2]) << 24 |
+                  static_cast<uint64_t>(combo[3]) << 16 | static_cast<uint64_t>(combo[4]) << 8 | combo[5];
+    return seed;
+}
+
+static void assertSeedsAreTheOnesSent(const ttlock::PairResult& result, const fake::Request& request) {
+    TEST_ASSERT_EQUAL_HEX8(cmd::kInitPasswords, request.command);
+    TEST_ASSERT_EQUAL_UINT(1 + ttlock::kCodeSecretCount * 6, request.payload.size());
+    TEST_ASSERT_EQUAL_UINT8(result.passcodeSeedYear % 100, request.payload[0]);
+    for (size_t i = 0; i < ttlock::kCodeSecretCount; ++i) {
+        const ttlock::CodeSecret sent = seedInFrame(request.payload, i);
+        TEST_ASSERT_EQUAL_UINT16(sent.code, result.passcodeSeeds[i].code);
+        TEST_ASSERT_EQUAL_UINT64(sent.secret, result.passcodeSeeds[i].secret);
+    }
+}
+
+static void test_pair_returns_the_offline_passcode_seeds_it_sent() {
+    Rig rig;
+    load(rig.lock, pairingSteps(kAllOptionalReads));
+    ttlock::LockKeys keys;
+    Persisted persisted;
+    assertStatus(Status::Ok, pair(rig, keys, persisted));
+    TEST_ASSERT_EQUAL_UINT16(2025, persisted.result.passcodeSeedYear);
+    TEST_ASSERT_TRUE(persisted.result.passcodeSeedsConfirmed);
+    assertSeedsAreTheOnesSent(persisted.result, rig.lock.requests()[indexOf(rig.lock, cmd::kInitPasswords)]);
+    size_t nonZero = 0;
+    for (const ttlock::CodeSecret& seed : persisted.result.passcodeSeeds) {
+        TEST_ASSERT_TRUE(seed.code < 1071);
+        TEST_ASSERT_TRUE(seed.secret < 10000000000ULL);
+        nonZero += seed.secret != 0 ? 1 : 0;
+    }
+    TEST_ASSERT_EQUAL_UINT(ttlock::kCodeSecretCount, nonZero);
+}
+
+static void test_refused_seeds_are_returned_unconfirmed() {
+    Rig rig;
+    std::vector<PairStep> steps = pairingSteps(bits({Feature::Passcode}));
+    stepFor(steps, cmd::kInitPasswords).replies = {failure(kLockKey, cmd::kInitPasswords, 0x04)};
+    load(rig.lock, std::move(steps));
+    ttlock::LockKeys keys;
+    Persisted persisted;
+    assertStatus(Status::PairIncomplete, pair(rig, keys, persisted));
+    TEST_ASSERT_FALSE(persisted.result.passcodeSeedsConfirmed);
+    TEST_ASSERT_EQUAL_UINT16(2025, persisted.result.passcodeSeedYear);
+    assertSeedsAreTheOnesSent(persisted.result, rig.lock.requests().back());
+
+    Rig early;
+    std::vector<PairStep> before = pairingSteps(bits({Feature::Passcode}));
+    stepFor(before, cmd::kSearchDeviceFeature).replies = {failure(kLockKey, cmd::kSearchDeviceFeature, 0x04)};
+    load(early.lock, std::move(before));
+    ttlock::LockKeys earlyKeys;
+    Persisted earlyPersisted;
+    assertStatus(Status::PairIncomplete, pair(early, earlyKeys, earlyPersisted));
+    TEST_ASSERT_FALSE(earlyPersisted.result.passcodeSeedsConfirmed);
+    TEST_ASSERT_EQUAL_UINT16(0, earlyPersisted.result.passcodeSeedYear);
+    for (const ttlock::CodeSecret& seed : earlyPersisted.result.passcodeSeeds) {
+        TEST_ASSERT_EQUAL_UINT16(0, seed.code);
+        TEST_ASSERT_EQUAL_UINT64(0, seed.secret);
+    }
+}
+
+static void assertHookHeldTheFrameTable(const SeedHook& hook, const fake::Request& request) {
+    TEST_ASSERT_EQUAL_HEX8(cmd::kInitPasswords, request.command);
+    TEST_ASSERT_EQUAL_UINT8(hook.year % 100, request.payload[0]);
+    for (size_t i = 0; i < ttlock::kCodeSecretCount; ++i) {
+        const ttlock::CodeSecret sent = seedInFrame(request.payload, i);
+        TEST_ASSERT_EQUAL_UINT16(sent.code, hook.seeds[i].code);
+        TEST_ASSERT_EQUAL_UINT64(sent.secret, hook.seeds[i].secret);
+    }
+}
+
+static void test_the_seed_hook_holds_the_exact_table_before_init_passwords_goes_out() {
+    Rig rig;
+    load(rig.lock, pairingSteps(kAllOptionalReads));
+    SeedHook hook;
+    ttlock::LockKeys keys;
+    Persisted persisted;
+    assertStatus(Status::Ok, pairWithOptions(rig, withSeedHook(rig, hook), keys, persisted));
+    const size_t sent = indexOf(rig.lock, cmd::kInitPasswords);
+    TEST_ASSERT_EQUAL_UINT(1, hook.calls);
+    TEST_ASSERT_EQUAL_UINT(sent, hook.requestsSeen);
+    TEST_ASSERT_EQUAL_UINT16(2025, hook.year);
+    TEST_ASSERT_EQUAL_UINT16(persisted.result.passcodeSeedYear, hook.year);
+    assertHookHeldTheFrameTable(hook, rig.lock.requests()[sent]);
+}
+
+static void test_the_seed_hook_runs_only_once_the_table_is_about_to_be_sent() {
+    Rig early;
+    std::vector<PairStep> before = pairingSteps(bits({Feature::Passcode}));
+    stepFor(before, cmd::kSearchDeviceFeature).replies = {failure(kLockKey, cmd::kSearchDeviceFeature, 0x04)};
+    load(early.lock, std::move(before));
+    SeedHook earlyHook;
+    ttlock::LockKeys earlyKeys;
+    Persisted earlyPersisted;
+    assertStatus(Status::PairIncomplete, pairWithOptions(early, withSeedHook(early, earlyHook), earlyKeys,
+                                                         earlyPersisted));
+    TEST_ASSERT_EQUAL_UINT(0, earlyHook.calls);
+
+    Rig refused;
+    std::vector<PairStep> steps = pairingSteps(bits({Feature::Passcode}));
+    stepFor(steps, cmd::kInitPasswords).replies = {failure(kLockKey, cmd::kInitPasswords, 0x04)};
+    load(refused.lock, std::move(steps));
+    SeedHook hook;
+    ttlock::LockKeys keys;
+    Persisted persisted;
+    assertStatus(Status::PairIncomplete, pairWithOptions(refused, withSeedHook(refused, hook), keys, persisted));
+    TEST_ASSERT_EQUAL_UINT(1, hook.calls);
+    TEST_ASSERT_FALSE(persisted.result.passcodeSeedsConfirmed);
+    assertHookHeldTheFrameTable(hook, refused.lock.requests().back());
+}
+
+static void assertInitPasswordsYear(int64_t utc, int32_t offset, uint16_t year) {
     Rig rig;
     rig.clock.utc = utc;
     rig.clock.offset = offset;
@@ -376,7 +529,9 @@ static void assertInitPasswordsYear(int64_t utc, int32_t offset, uint8_t year) {
     const fake::Request& request = rig.lock.requests()[6];
     TEST_ASSERT_EQUAL_HEX8(cmd::kInitPasswords, request.command);
     TEST_ASSERT_EQUAL_UINT(1 + 10 * 6, request.payload.size());
-    TEST_ASSERT_EQUAL_UINT8(year, request.payload[0]);
+    TEST_ASSERT_EQUAL_UINT8(year % 100, request.payload[0]);
+    TEST_ASSERT_EQUAL_UINT16(year, persisted.result.passcodeSeedYear);
+    assertSeedsAreTheOnesSent(persisted.result, request);
     for (size_t i = 0; i < 10; ++i) {
         const uint8_t* combo = request.payload.data() + 1 + i * 6;
         const unsigned code = static_cast<unsigned>(combo[0]) << 4 | combo[1] >> 4;
@@ -388,10 +543,10 @@ static void assertInitPasswordsYear(int64_t utc, int32_t offset, uint8_t year) {
 }
 
 static void test_init_passwords_uses_the_local_year_except_on_new_years_day() {
-    assertInitPasswordsYear(1762524000, -3 * 3600, 25);
-    assertInitPasswordsYear(1767236400, -3 * 3600, 25);
-    assertInitPasswordsYear(1767236400, 0, 25);
-    assertInitPasswordsYear(1767322800, -3 * 3600, 26);
+    assertInitPasswordsYear(1762524000, -3 * 3600, 2025);
+    assertInitPasswordsYear(1767236400, -3 * 3600, 2025);
+    assertInitPasswordsYear(1767236400, 0, 2025);
+    assertInitPasswordsYear(1767322800, -3 * 3600, 2026);
 }
 
 static void test_link_drop_after_add_admin_is_pair_incomplete_with_keys_persisted() {
@@ -618,6 +773,44 @@ static void test_a_silent_admin_passcode_keeps_the_tentative_code() {
     TEST_ASSERT_EQUAL_STRING(keys.adminPasscode.c_str(), persisted.calls.back().adminPasscode.c_str());
     assertCommands({0x45, 0x19, 0x56, 0x43, 0x01, 0x53, 0x31, 0x57}, rig.lock);
     TEST_ASSERT_TRUE(rig.lock.scriptDone());
+}
+
+static void test_pair_sends_the_admin_passcode_the_owner_chose() {
+    Rig rig;
+    load(rig.lock, pairingSteps(bits({Feature::Passcode})));
+    ttlock::LockKeys keys;
+    Persisted persisted;
+    assertStatus(Status::Ok, pairWith(rig, k3::kSetAdminPasscodeCode, keys, persisted));
+    const size_t sent = indexOf(rig.lock, cmd::kSetAdminKeyboardPassword);
+    assertPayload(Bytes(std::begin(k3::kSetAdminPasscode), std::end(k3::kSetAdminPasscode)), rig.lock.requests()[sent]);
+    TEST_ASSERT_EQUAL_STRING(k3::kSetAdminPasscodeCode, keys.adminPasscode.c_str());
+    TEST_ASSERT_EQUAL_STRING(k3::kSetAdminPasscodeCode, rig.session.keys().adminPasscode.c_str());
+    TEST_ASSERT_EQUAL_UINT(sent, persisted.requestsSeen[1]);
+    TEST_ASSERT_EQUAL_STRING(k3::kSetAdminPasscodeCode, persisted.calls[1].adminPasscode.c_str());
+    TEST_ASSERT_TRUE(persisted.result.adminPasscodeConfirmed);
+    TEST_ASSERT_TRUE(rig.lock.scriptDone());
+
+    Rig drawn;
+    load(drawn.lock, pairingSteps(bits({Feature::Passcode})));
+    ttlock::LockKeys drawnKeys;
+    Persisted drawnPersisted;
+    assertStatus(Status::Ok, pair(drawn, drawnKeys, drawnPersisted));
+    TEST_ASSERT_EQUAL_UINT(drawn.random.drawn() - ttlock::kAdminPasscodeDigits * 4, rig.random.drawn());
+}
+
+static const char* const kInvalidAdminPasscodes[] = {"123",      "1234567890", "12a4567",
+                                                     " 123456",  "1234567\n",  "\xEF\xBC\x91\xEF\xBC\x92\xEF\xBC\x93"};
+
+static void test_pair_refuses_an_invalid_admin_passcode_before_any_frame() {
+    for (const char* code : kInvalidAdminPasscodes) {
+        Rig rig;
+        ttlock::LockKeys keys;
+        Persisted persisted;
+        assertStatus(Status::InvalidArgument, pairWith(rig, code, keys, persisted));
+        TEST_ASSERT_EQUAL_UINT_MESSAGE(0, rig.lock.requests().size(), code);
+        TEST_ASSERT_EQUAL_UINT_MESSAGE(0, rig.random.drawn(), code);
+        TEST_ASSERT_EQUAL_UINT_MESSAGE(0, persisted.calls.size(), code);
+    }
 }
 
 static void assertMandatoryStepFailure(uint8_t command, size_t persists) {
@@ -875,6 +1068,12 @@ static void test_methods_before_attach_return_not_paired_without_traffic() {
     assertStatus(Status::NotPaired, rig.session.autolockGet(autolock));
     assertStatus(Status::NotPaired, rig.session.passcodeList(passcodes));
     assertStatus(Status::NotPaired, rig.session.fetchLog(ttlock::kLogSinceLastRead, logs));
+    ttlock::LogPage page;
+    assertStatus(Status::NotPaired, rig.session.fetchLogPage(ttlock::kLogSinceLastRead, page));
+    std::string adminCode;
+    assertStatus(Status::NotPaired, rig.session.adminPasscodeGet(adminCode));
+    Bytes adminRaw;
+    assertStatus(Status::NotPaired, rig.session.adminPasscodeGetRaw(adminRaw));
     assertStatus(Status::NotPaired, rig.session.factoryReset());
     assertStatus(Status::NotPaired, rig.session.receiveEvent(10));
     bool visible = false;
@@ -1185,6 +1384,127 @@ static void test_fetch_log_stops_when_the_cursor_repeats_or_reaches_zero() {
     TEST_ASSERT_EQUAL_UINT(1, single.size());
     assertPayload(Bytes{0x00, 0x07}, zero.lock.requests()[0]);
     TEST_ASSERT_TRUE(zero.lock.scriptDone());
+}
+
+static Bytes vectorBytes(const uint8_t* data, size_t size) {
+    return Bytes(data, data + size);
+}
+
+static void test_fetch_log_page_reads_one_page_from_the_cursor_like_kind3r() {
+    Rig rig;
+    attach(rig);
+    rig.lock.expect(cmd::kGetOperateLog, kLockKey,
+                    {success(kLockKey, cmd::kGetOperateLog, vectorBytes(k3::kLogPageData, sizeof(k3::kLogPageData)))});
+    ttlock::LogPage page;
+    assertStatus(Status::Ok, rig.session.fetchLogPage(5, page));
+    assertCommands({cmd::kGetOperateLog}, rig.lock);
+    assertPayload(vectorBytes(k3::kLogRequest5, sizeof(k3::kLogRequest5)), rig.lock.requests()[0]);
+    TEST_ASSERT_EQUAL_UINT16(k3::kLogPageSequence, page.sequence);
+    TEST_ASSERT_EQUAL_UINT(k3::kLogPageCount, page.entries.size());
+    const ttlock::LogEntry& entry = page.entries[0];
+    TEST_ASSERT_EQUAL_INT(k3::kLogPageRecordNumber, entry.recordNumber);
+    TEST_ASSERT_EQUAL_INT(k3::kLogPageRecordType, entry.type);
+    TEST_ASSERT_TRUE(entry.time == (ttlock::LockTime{2025, 11, 7, 14, 0, 5}));
+    TEST_ASSERT_EQUAL_INT(k3::kLogPageBattery, entry.battery);
+    TEST_ASSERT_EQUAL_UINT32(k3::kLogPageUid, entry.uid);
+    TEST_ASSERT_EQUAL_UINT32(k3::kLogPageRecordId, entry.recordId);
+    TEST_ASSERT_TRUE(rig.lock.scriptDone());
+}
+
+static void test_fetch_log_page_from_the_unread_cursor_and_its_failures() {
+    Rig rig;
+    attach(rig);
+    rig.lock.expect(cmd::kGetOperateLog, kLockKey, {success(kLockKey, cmd::kGetOperateLog, Bytes{0x00, 0x00})});
+    rig.lock.expect(cmd::kGetOperateLog, kLockKey, {failure(kLockKey, cmd::kGetOperateLog, 0x09)});
+    rig.lock.expect(cmd::kGetOperateLog, kLockKey, {success(kLockKey, cmd::kGetOperateLog, Bytes{0x00})});
+    ttlock::LogPage page;
+    page.sequence = 77;
+    assertStatus(Status::Ok, rig.session.fetchLogPage(ttlock::kLogSinceLastRead, page));
+    assertCommands({cmd::kGetOperateLog}, rig.lock);
+    assertPayload(vectorBytes(k3::kLogRequestNew, sizeof(k3::kLogRequestNew)), rig.lock.requests()[0]);
+    TEST_ASSERT_TRUE(page.entries.empty());
+    TEST_ASSERT_EQUAL_UINT16(0, page.sequence);
+    assertStatus(Status::LockError, rig.session.fetchLogPage(3, page));
+    TEST_ASSERT_EQUAL_HEX8(0x09, rig.session.lockErrorCode());
+    assertStatus(Status::BadResponse, rig.session.fetchLogPage(3, page));
+    assertCommands({cmd::kGetOperateLog, cmd::kGetOperateLog, cmd::kGetOperateLog}, rig.lock);
+}
+
+static void test_admin_passcode_get_logs_in_and_reads_get_admin_code() {
+    Rig rig;
+    attach(rig);
+    expectAdminLogin(rig.lock);
+    rig.lock.expect(cmd::kGetAdminCode, kLockKey,
+                    {success(kLockKey, cmd::kGetAdminCode,
+                             vectorBytes(k3a::kAdminCodeTrailed, sizeof(k3a::kAdminCodeTrailed)))});
+    std::string code;
+    assertStatus(Status::Ok, rig.session.adminPasscodeGet(code));
+    TEST_ASSERT_EQUAL_STRING(k3a::kAdminCodeTrailedKind3r, code.c_str());
+    assertCommands({cmd::kCheckAdmin, cmd::kCheckRandom, cmd::kGetAdminCode}, rig.lock);
+    TEST_ASSERT_EQUAL_UINT(k3::kGetAdminCodePayloadSize, rig.lock.requests()[2].payload.size());
+
+    Rig none;
+    attach(none);
+    expectAdminLogin(none.lock);
+    const Bytes empty = vectorBytes(k3a::kAdminCodeEmpty, sizeof(k3a::kAdminCodeEmpty));
+    none.lock.expect(cmd::kGetAdminCode, kLockKey, {success(kLockKey, cmd::kGetAdminCode, empty)});
+    code = "unchanged";
+    assertStatus(Status::Ok, none.session.adminPasscodeGet(code));
+    TEST_ASSERT_TRUE(code.empty());
+    TEST_ASSERT_EQUAL_STRING(pairedKeys().adminPasscode.c_str(), none.session.keys().adminPasscode.c_str());
+}
+
+static void test_admin_passcode_get_failures() {
+    Rig rig;
+    attach(rig);
+    expectAdminLogin(rig.lock);
+    rig.lock.expect(cmd::kGetAdminCode, kLockKey, {failure(kLockKey, cmd::kGetAdminCode, 0x02)});
+    expectAdminLogin(rig.lock);
+    const Bytes truncated{0x5A, 0x08, '1', '2'};
+    rig.lock.expect(cmd::kGetAdminCode, kLockKey, {success(kLockKey, cmd::kGetAdminCode, truncated)});
+    std::string code = "unchanged";
+    assertStatus(Status::LockError, rig.session.adminPasscodeGet(code));
+    TEST_ASSERT_EQUAL_HEX8(0x02, rig.session.lockErrorCode());
+    assertStatus(Status::BadResponse, rig.session.adminPasscodeGet(code));
+    TEST_ASSERT_EQUAL_STRING("unchanged", code.c_str());
+    TEST_ASSERT_TRUE(rig.lock.scriptDone());
+}
+
+static const Bytes kRawDigitAdminCode{0x5A, 0x07, 3, 1, 4, 1, 5, 9, 2};
+
+static void test_admin_passcode_get_raw_keeps_a_reply_the_parser_refuses() {
+    Rig rig;
+    attach(rig);
+    expectAdminLogin(rig.lock);
+    rig.lock.expect(cmd::kGetAdminCode, kLockKey, {success(kLockKey, cmd::kGetAdminCode, kRawDigitAdminCode)});
+    Bytes raw{0xEE};
+    assertStatus(Status::Ok, rig.session.adminPasscodeGetRaw(raw));
+    TEST_ASSERT_EQUAL_UINT(kRawDigitAdminCode.size(), raw.size());
+    TEST_ASSERT_EQUAL_HEX8_ARRAY(kRawDigitAdminCode.data(), raw.data(), raw.size());
+    assertCommands({cmd::kCheckAdmin, cmd::kCheckRandom, cmd::kGetAdminCode}, rig.lock);
+    assertPayload(Bytes{}, rig.lock.requests()[2]);
+    TEST_ASSERT_EQUAL_STRING(pairedKeys().adminPasscode.c_str(), rig.session.keys().adminPasscode.c_str());
+
+    Rig parsed;
+    attach(parsed);
+    expectAdminLogin(parsed.lock);
+    parsed.lock.expect(cmd::kGetAdminCode, kLockKey, {success(kLockKey, cmd::kGetAdminCode, kRawDigitAdminCode)});
+    std::string code = "unchanged";
+    assertStatus(Status::BadResponse, parsed.session.adminPasscodeGet(code));
+    TEST_ASSERT_EQUAL_STRING("unchanged", code.c_str());
+}
+
+static void test_admin_passcode_get_raw_failures_leave_the_output_alone() {
+    Rig rig;
+    attach(rig);
+    expectAdminLogin(rig.lock);
+    rig.lock.expect(cmd::kGetAdminCode, kLockKey, {failure(kLockKey, cmd::kGetAdminCode, 0x02)});
+    Bytes raw{0xEE};
+    assertStatus(Status::LockError, rig.session.adminPasscodeGetRaw(raw));
+    TEST_ASSERT_EQUAL_HEX8(0x02, rig.session.lockErrorCode());
+    TEST_ASSERT_EQUAL_UINT(1, raw.size());
+    TEST_ASSERT_EQUAL_HEX8(0xEE, raw[0]);
+    TEST_ASSERT_TRUE(rig.lock.scriptDone());
 }
 
 static void test_factory_reset_logs_in_accepts_an_empty_reply_and_detaches() {
@@ -1564,6 +1884,12 @@ static void test_each_new_command_is_gated_on_its_feature_bits() {
     assertGatedOn(Feature::PrivacyLock, [](ttlock::Session& session) { return session.privacyLockSet(true); });
     assertGatedOn(Feature::TamperAlert, [&flag](ttlock::Session& session) { return session.tamperAlertGet(flag); });
     assertGatedOn(Feature::TamperAlert, [](ttlock::Session& session) { return session.tamperAlertSet(true); });
+    std::string adminCode;
+    assertGatedOn(Feature::GetAdminCode,
+                  [&adminCode](ttlock::Session& session) { return session.adminPasscodeGet(adminCode); });
+    Bytes adminRaw;
+    assertGatedOn(Feature::GetAdminCode,
+                  [&adminRaw](ttlock::Session& session) { return session.adminPasscodeGetRaw(adminRaw); });
     for (Feature feature : {Feature::Ic, Feature::CyclicIcOrFingerPrint}) {
         assertGatedOn(feature,
                       [](ttlock::Session& session) { return session.cardAddCycle(305419896ULL, kOfficeHours); });
@@ -1627,6 +1953,308 @@ static void test_events_without_a_sink_are_dropped_quietly() {
     assertStatus(Status::Ok, session.receiveEvent(100));
 }
 
+static constexpr uint32_t kForgedPs = 0x11111111;
+
+static Bytes userTimeReply(uint32_t ps) {
+    return concat({Bytes{cmd::kCheckUserTime, fake::kSuccess}, be32(ps)});
+}
+
+static Bytes withCrc(Bytes frame) {
+    frame.push_back(ttlock::crc8(frame.data(), frame.size()));
+    return frame;
+}
+
+static Bytes unencryptedV3Frame(uint8_t encrypt, const Bytes& payload) {
+    const ttlock::LockVersion& version = fake::kReplyVersion;
+    Bytes frame{0x7F,
+                0x5A,
+                version.protocolType,
+                version.protocolVersion,
+                version.scene,
+                static_cast<uint8_t>(version.groupId >> 8),
+                static_cast<uint8_t>(version.groupId),
+                static_cast<uint8_t>(version.orgId >> 8),
+                static_cast<uint8_t>(version.orgId),
+                fake::kReplyCommand,
+                encrypt,
+                static_cast<uint8_t>(payload.size())};
+    frame.insert(frame.end(), payload.begin(), payload.end());
+    return withCrc(std::move(frame));
+}
+
+static Bytes legacyFrame(uint8_t seed, const Bytes& payload) {
+    Bytes frame{0x7F, 0x5A, 0x03, fake::kReplyCommand, seed, static_cast<uint8_t>(payload.size())};
+    frame.insert(frame.end(), payload.begin(), payload.end());
+    return withCrc(std::move(frame));
+}
+
+static void expectUnlockAfter(FakeLock& lock, std::vector<Bytes> userTimeReplies) {
+    userTimeReplies.push_back(success(kLockKey, cmd::kCheckUserTime, be32(kPs)));
+    lock.expect(cmd::kCheckUserTime, kLockKey, std::move(userTimeReplies));
+    lock.expect(cmd::kUnlock, kLockKey, {success(kLockKey, cmd::kUnlock, kUnlockReplyData)});
+}
+
+static void assertUnlockUsedTheGenuinePs(Rig& rig, size_t dropped) {
+    ttlock::OperationResult result;
+    assertStatus(Status::Ok, rig.session.unlock(result));
+    assertCommands({cmd::kCheckUserTime, cmd::kUnlock}, rig.lock);
+    assertPayload(concat({be32(kPs + kUnlockKey), be32(static_cast<uint32_t>(rig.clock.utc))}), rig.lock.requests()[1]);
+    TEST_ASSERT_EQUAL_UINT(dropped, rig.session.droppedFrames());
+    TEST_ASSERT_TRUE(rig.lock.scriptDone());
+}
+
+static void test_a_paired_session_drops_replies_under_the_default_key() {
+    const Bytes forged = success(kDefault, cmd::kCheckUserTime, be32(kForgedPs));
+    TEST_ASSERT_TRUE(undecodable(forged, kLockKey));
+    Rig rig;
+    attach(rig);
+    expectUnlockAfter(rig.lock, {forged});
+    assertUnlockUsedTheGenuinePs(rig, 1);
+
+    Rig alone;
+    attach(alone);
+    alone.lock.expect(cmd::kCheckUserTime, kLockKey, {forged});
+    ttlock::OperationResult result;
+    assertStatus(Status::Timeout, alone.session.unlock(result));
+    assertCommands({cmd::kCheckUserTime}, alone.lock);
+}
+
+static void test_a_paired_session_drops_plaintext_replies() {
+    const Bytes unaligned = unencryptedV3Frame(0xAA, userTimeReply(kForgedPs));
+    const Bytes blockSized = unencryptedV3Frame(0xAA, concat({userTimeReply(kForgedPs), Bytes(10, 0x0A)}));
+    const Bytes markedPlain = unencryptedV3Frame(0x02, userTimeReply(kForgedPs));
+    for (const Bytes& frame : {unaligned, blockSized, markedPlain}) {
+        TEST_ASSERT_TRUE(undecodable(frame, kLockKey));
+    }
+    Rig rig;
+    attach(rig);
+    expectUnlockAfter(rig.lock, {unaligned, blockSized, markedPlain});
+    assertUnlockUsedTheGenuinePs(rig, 3);
+}
+
+static void test_a_paired_session_never_switches_to_the_xor_codec() {
+    const uint8_t seed = 0x5A;
+    const Bytes coded = ttlock::xorCodec(userTimeReply(kForgedPs), seed);
+    const Bytes legacy = legacyFrame(seed, coded);
+    const Bytes v3Header = unencryptedV3Frame(seed, coded);
+    TEST_ASSERT_TRUE(undecodable(legacy, kLockKey));
+    TEST_ASSERT_TRUE(undecodable(v3Header, kLockKey));
+    Rig rig;
+    attach(rig);
+    expectUnlockAfter(rig.lock, {legacy, v3Header});
+    assertUnlockUsedTheGenuinePs(rig, 2);
+
+    Rig pushes;
+    attach(pushes);
+    const Bytes statePlain{cmd::kSearchStatus, fake::kSuccess, 0x5A, 0x01, 0x00};
+    pushes.lock.push(legacyFrame(seed, ttlock::xorCodec(statePlain, seed)));
+    assertStatus(Status::Timeout, pushes.session.receiveEvent(100));
+    TEST_ASSERT_EQUAL_UINT(0, pushes.events.size());
+    TEST_ASSERT_EQUAL_UINT(1, pushes.session.droppedFrames());
+}
+
+static bool containsWord(const Bytes& haystack, uint32_t word) {
+    const Bytes needle = be32(word);
+    return std::search(haystack.begin(), haystack.end(), needle.begin(), needle.end()) != haystack.end();
+}
+
+static bool readableUnder(const AesKey& key, const fake::Request& request) {
+    ttlock::DecodedFrame frame;
+    return ttlock::decodeFrame(request.raw, key, frame) == Status::Ok && frame.payload == request.payload;
+}
+
+static void assertHiddenFromEavesdroppers(const fake::Request& request, uint32_t secretWord) {
+    TEST_ASSERT_TRUE_MESSAGE(request.decoded, "the lock decodes it with its own key");
+    TEST_ASSERT_FALSE_MESSAGE(readableUnder(kDefault, request), "the default key does not open it");
+    TEST_ASSERT_FALSE_MESSAGE(containsWord(request.raw, secretWord), "the secret is not on the wire in clear");
+}
+
+static void test_unlock_key_derived_values_travel_only_under_the_lock_key() {
+    Rig rig;
+    load(rig.lock, pairingSteps(kAllOptionalReads));
+    ttlock::LockKeys keys;
+    Persisted persisted;
+    assertStatus(Status::Ok, pair(rig, keys, persisted));
+    expectUserTime(rig.lock);
+    rig.lock.expect(cmd::kUnlock, kLockKey, {success(kLockKey, cmd::kUnlock, kUnlockReplyData)});
+    ttlock::OperationResult result;
+    assertStatus(Status::Ok, rig.session.unlock(result));
+    expectAdminLogin(rig.lock);
+    rig.lock.expect(cmd::kAutoLockManage, kLockKey,
+                    {success(kLockKey, cmd::kAutoLockManage, Bytes{0x5A, 0x01, 0x00, 0x1E, 0x00, 0x05, 0x03, 0x84})});
+    ttlock::AutoLockSetting autolock;
+    assertStatus(Status::Ok, rig.session.autolockGet(autolock));
+    TEST_ASSERT_TRUE(rig.lock.scriptDone());
+    size_t secretFrames = 0;
+    for (const fake::Request& request : rig.lock.requests()) {
+        uint32_t secret = 0;
+        if (request.command == cmd::kAddAdmin) {
+            assertPayload(concat({be32(keys.adminPs), be32(keys.unlockKey), text("SCIENER")}), request);
+            secret = keys.unlockKey;
+        } else if (request.command == cmd::kUnlock) {
+            secret = kPs + keys.unlockKey;
+        } else if (request.command == cmd::kCheckRandom) {
+            secret = 0x01020304 + keys.unlockKey;
+        } else {
+            continue;
+        }
+        ++secretFrames;
+        TEST_ASSERT_TRUE(containsWord(request.payload, secret));
+        assertHiddenFromEavesdroppers(request, secret);
+    }
+    TEST_ASSERT_EQUAL_UINT(3, secretFrames);
+}
+
+static Bytes replyUnderKey(const ttlock::LockVersion& version, const AesKey& key, const Bytes& plain) {
+    Bytes wire = ttlock::encodeFrame(version, fake::kReplyCommand, plain, key);
+    wire.resize(wire.size() - 2);
+    return wire;
+}
+
+static Bytes replyUnder(const ttlock::LockVersion& version, const Bytes& plain) {
+    return replyUnderKey(version, kLockKey, plain);
+}
+
+static void assertVersion(const ttlock::LockVersion& expected, const ttlock::LockVersion& actual) {
+    TEST_ASSERT_EQUAL_UINT8(expected.protocolType, actual.protocolType);
+    TEST_ASSERT_EQUAL_UINT8(expected.protocolVersion, actual.protocolVersion);
+    TEST_ASSERT_EQUAL_UINT8(expected.scene, actual.scene);
+    TEST_ASSERT_EQUAL_UINT16(expected.groupId, actual.groupId);
+    TEST_ASSERT_EQUAL_UINT16(expected.orgId, actual.orgId);
+}
+
+static void test_a_paired_session_drops_replies_that_switch_protocol_or_lock_type() {
+    const ttlock::LockVersion otherVersion{5, 4, 2, 1, 1};
+    const ttlock::LockVersion otherType{6, 3, 2, 1, 1};
+    const ttlock::LockVersion typeZero{0, 3, 2, 1, 1};
+    const ttlock::LockVersion carScene{5, 3, 7, 1, 1};
+    Rig rig;
+    attach(rig);
+    expectUnlockAfter(rig.lock, {replyUnder(otherVersion, userTimeReply(kForgedPs)),
+                                 replyUnder(otherType, userTimeReply(kForgedPs)),
+                                 replyUnder(typeZero, userTimeReply(kForgedPs)),
+                                 replyUnder(carScene, userTimeReply(kForgedPs))});
+    assertUnlockUsedTheGenuinePs(rig, 4);
+    TEST_ASSERT_EQUAL_UINT(4, rig.session.lockTypeMismatches());
+    assertVersion(carScene, rig.session.lastMismatchedVersion());
+
+    Rig pushes;
+    attach(pushes);
+    const ttlock::LockVersion otherSceneAndIds{5, 3, 9, 7, 7};
+    pushes.lock.push(replyUnder(otherVersion, Bytes{cmd::kSearchStatus, fake::kSuccess, 0x5A, 0x01, 0x00}));
+    pushes.lock.push(replyUnder(otherSceneAndIds, Bytes{cmd::kSearchStatus, fake::kSuccess, 0x5A, 0x00, 0x00}));
+    assertStatus(Status::Ok, pushes.session.receiveEvent(100));
+    TEST_ASSERT_EQUAL_UINT(1, pushes.events.size());
+    TEST_ASSERT_EQUAL(ttlock::LockState::Locked, pushes.events[0].state);
+    TEST_ASSERT_EQUAL_UINT(1, pushes.session.droppedFrames());
+    TEST_ASSERT_EQUAL_UINT(1, pushes.session.lockTypeMismatches());
+    assertVersion(otherVersion, pushes.session.lastMismatchedVersion());
+}
+
+static void test_pairing_with_a_lock_of_another_type_is_unsupported_not_a_timeout() {
+    const ttlock::LockVersion otherVersion{5, 4, 2, 1, 1};
+    Rig rig;
+    std::vector<PairStep> steps = pairingSteps(bits({Feature::Passcode}));
+    steps.resize(1);
+    steps[0].replies = {replyUnderKey(otherVersion, kDefault, Bytes{cmd::kInitialization, fake::kSuccess})};
+    TEST_ASSERT_FALSE(undecodable(steps[0].replies[0], kDefault));
+    load(rig.lock, std::move(steps));
+    ttlock::LockKeys keys;
+    Persisted persisted;
+    assertStatus(Status::Unsupported, pair(rig, keys, persisted));
+    assertCommands({cmd::kInitialization}, rig.lock);
+    TEST_ASSERT_EQUAL_UINT(1, rig.session.lockTypeMismatches());
+    assertVersion(otherVersion, rig.session.lastMismatchedVersion());
+    TEST_ASSERT_EQUAL_UINT(1, rig.session.droppedFrames());
+    TEST_ASSERT_EQUAL_UINT(0, persisted.calls.size());
+    TEST_ASSERT_EQUAL_UINT(0, rig.random.drawn());
+
+    const ttlock::LockVersion carScene{5, 3, 7, 1, 1};
+    Rig car;
+    std::vector<PairStep> carSteps = pairingSteps(bits({Feature::Passcode}));
+    carSteps.resize(2);
+    carSteps[1].replies = {
+        replyUnderKey(carScene, kDefault, concat({Bytes{cmd::kGetAesKey, fake::kSuccess}, keyBytes(kLockKey)}))};
+    TEST_ASSERT_FALSE(undecodable(carSteps[1].replies[0], kDefault));
+    load(car.lock, std::move(carSteps));
+    ttlock::LockKeys carKeys;
+    Persisted carPersisted;
+    assertStatus(Status::Unsupported, pair(car, carKeys, carPersisted));
+    assertCommands({cmd::kInitialization, cmd::kGetAesKey}, car.lock);
+    TEST_ASSERT_EQUAL_UINT(1, car.session.lockTypeMismatches());
+    assertVersion(carScene, car.session.lastMismatchedVersion());
+    TEST_ASSERT_EQUAL_UINT(0, carPersisted.calls.size());
+}
+
+static void test_a_silent_or_garbled_lock_in_pairing_is_still_a_timeout() {
+    Rig silent;
+    std::vector<PairStep> steps = pairingSteps(bits({Feature::Passcode}));
+    steps.resize(1);
+    steps[0].replies.clear();
+    load(silent.lock, std::move(steps));
+    ttlock::LockKeys keys;
+    Persisted persisted;
+    assertStatus(Status::Timeout, pair(silent, keys, persisted));
+    TEST_ASSERT_EQUAL_UINT(0, silent.session.lockTypeMismatches());
+
+    Rig garbled;
+    std::vector<PairStep> garbledSteps = pairingSteps(bits({Feature::Passcode}));
+    garbledSteps.resize(1);
+    garbledSteps[0].replies = {success(kOtherKey, cmd::kInitialization)};
+    TEST_ASSERT_TRUE(undecodable(garbledSteps[0].replies[0], kDefault));
+    load(garbled.lock, std::move(garbledSteps));
+    ttlock::LockKeys garbledKeys;
+    Persisted garbledPersisted;
+    assertStatus(Status::Timeout, pair(garbled, garbledKeys, garbledPersisted));
+    TEST_ASSERT_EQUAL_UINT(0, garbled.session.lockTypeMismatches());
+    TEST_ASSERT_EQUAL_UINT(1, garbled.session.droppedFrames());
+}
+
+static void test_a_lock_type_mismatch_after_add_admin_still_ends_pair_incomplete() {
+    const ttlock::LockVersion otherVersion{5, 4, 2, 1, 1};
+    Rig rig;
+    std::vector<PairStep> steps = pairingSteps(bits({Feature::Passcode}));
+    steps.resize(5);
+    stepFor(steps, cmd::kSearchDeviceFeature).replies = {replyUnder(
+        otherVersion,
+        concat({Bytes{cmd::kSearchDeviceFeature, fake::kSuccess}, featureData(bits({Feature::Passcode}))}))};
+    load(rig.lock, std::move(steps));
+    ttlock::LockKeys keys;
+    Persisted persisted;
+    assertStatus(Status::PairIncomplete, pair(rig, keys, persisted));
+    TEST_ASSERT_EQUAL_UINT(1, persisted.calls.size());
+    TEST_ASSERT_EQUAL_UINT(1, rig.session.lockTypeMismatches());
+    assertVersion(otherVersion, rig.session.lastMismatchedVersion());
+    TEST_ASSERT_EQUAL_HEX8(cmd::kSearchDeviceFeature, rig.lock.commands().back());
+}
+
+static void test_pairing_refuses_a_lock_that_hands_back_the_default_key() {
+    Rig rig;
+    std::vector<PairStep> steps = pairingSteps(bits({Feature::Passcode}));
+    steps.resize(2);
+    steps[1].replies = {success(kDefault, cmd::kGetAesKey, keyBytes(kDefault))};
+    load(rig.lock, std::move(steps));
+    ttlock::LockKeys keys;
+    Persisted persisted;
+    assertStatus(Status::BadResponse, pair(rig, keys, persisted));
+    assertCommands({cmd::kInitialization, cmd::kGetAesKey}, rig.lock);
+    TEST_ASSERT_EQUAL_UINT(0, persisted.calls.size());
+    TEST_ASSERT_EQUAL_UINT(0, rig.random.drawn());
+    ttlock::LockStatus status;
+    assertStatus(Status::NotPaired, rig.session.status(status));
+    TEST_ASSERT_EQUAL_UINT(2, rig.lock.requests().size());
+}
+
+static void test_attach_refuses_a_record_holding_the_default_key() {
+    Rig rig;
+    ttlock::LockKeys keys = pairedKeys();
+    keys.aesKey = kDefault;
+    assertStatus(Status::InvalidArgument, rig.session.attach(keys));
+    ttlock::OperationResult result;
+    assertStatus(Status::NotPaired, rig.session.unlock(result));
+    TEST_ASSERT_EQUAL_UINT(0, rig.lock.requests().size());
+}
+
 int main() {
     UNITY_BEGIN();
     RUN_TEST(test_pair_runs_the_kind3r_sequence_with_every_optional_read);
@@ -1638,6 +2266,10 @@ int main() {
     RUN_TEST(test_random_draws_reject_the_biased_tail);
     RUN_TEST(test_pair_calibrates_the_lock_to_local_wall_time);
     RUN_TEST(test_init_passwords_uses_the_local_year_except_on_new_years_day);
+    RUN_TEST(test_pair_returns_the_offline_passcode_seeds_it_sent);
+    RUN_TEST(test_refused_seeds_are_returned_unconfirmed);
+    RUN_TEST(test_the_seed_hook_holds_the_exact_table_before_init_passwords_goes_out);
+    RUN_TEST(test_the_seed_hook_runs_only_once_the_table_is_about_to_be_sent);
     RUN_TEST(test_link_drop_after_add_admin_is_pair_incomplete_with_keys_persisted);
     RUN_TEST(test_add_admin_without_a_reply_persists_and_is_pair_incomplete);
     RUN_TEST(test_add_admin_without_the_sciener_echo_is_pair_incomplete);
@@ -1654,6 +2286,8 @@ int main() {
     RUN_TEST(test_a_confirmed_admin_passcode_is_persisted_before_it_is_sent);
     RUN_TEST(test_a_refused_admin_passcode_rolls_back_and_makes_pairing_incomplete);
     RUN_TEST(test_a_silent_admin_passcode_keeps_the_tentative_code);
+    RUN_TEST(test_pair_sends_the_admin_passcode_the_owner_chose);
+    RUN_TEST(test_pair_refuses_an_invalid_admin_passcode_before_any_frame);
     RUN_TEST(test_refused_mandatory_steps_make_pairing_incomplete);
     RUN_TEST(test_a_silent_optional_read_makes_pairing_incomplete);
     RUN_TEST(test_unlock_checks_user_time_then_sends_the_sum_and_utc_time);
@@ -1688,6 +2322,12 @@ int main() {
     RUN_TEST(test_enroll_without_a_scan_times_out_and_a_refusal_is_a_lock_error);
     RUN_TEST(test_fetch_log_follows_the_cursor_until_an_empty_page);
     RUN_TEST(test_fetch_log_stops_when_the_cursor_repeats_or_reaches_zero);
+    RUN_TEST(test_fetch_log_page_reads_one_page_from_the_cursor_like_kind3r);
+    RUN_TEST(test_fetch_log_page_from_the_unread_cursor_and_its_failures);
+    RUN_TEST(test_admin_passcode_get_logs_in_and_reads_get_admin_code);
+    RUN_TEST(test_admin_passcode_get_failures);
+    RUN_TEST(test_admin_passcode_get_raw_keeps_a_reply_the_parser_refuses);
+    RUN_TEST(test_admin_passcode_get_raw_failures_leave_the_output_alone);
     RUN_TEST(test_factory_reset_logs_in_accepts_an_empty_reply_and_detaches);
     RUN_TEST(test_factory_reset_maps_a_refusal_to_lock_error_and_stays_attached);
     RUN_TEST(test_sync_time_logs_in_and_sends_local_wall_time);
@@ -1707,5 +2347,15 @@ int main() {
     RUN_TEST(test_each_new_command_is_gated_on_its_feature_bits);
     RUN_TEST(test_refused_new_commands_are_lock_errors_with_the_lock_code);
     RUN_TEST(test_events_without_a_sink_are_dropped_quietly);
+    RUN_TEST(test_a_paired_session_drops_replies_under_the_default_key);
+    RUN_TEST(test_a_paired_session_drops_plaintext_replies);
+    RUN_TEST(test_a_paired_session_never_switches_to_the_xor_codec);
+    RUN_TEST(test_unlock_key_derived_values_travel_only_under_the_lock_key);
+    RUN_TEST(test_a_paired_session_drops_replies_that_switch_protocol_or_lock_type);
+    RUN_TEST(test_pairing_with_a_lock_of_another_type_is_unsupported_not_a_timeout);
+    RUN_TEST(test_a_silent_or_garbled_lock_in_pairing_is_still_a_timeout);
+    RUN_TEST(test_a_lock_type_mismatch_after_add_admin_still_ends_pair_incomplete);
+    RUN_TEST(test_pairing_refuses_a_lock_that_hands_back_the_default_key);
+    RUN_TEST(test_attach_refuses_a_record_holding_the_default_key);
     return UNITY_END();
 }

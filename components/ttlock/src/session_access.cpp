@@ -4,6 +4,7 @@
 #include "ttlock/session.h"
 
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "session_internal.h"
@@ -12,29 +13,11 @@
 namespace ttlock {
 namespace {
 
-constexpr size_t kMinPasscodeDigits = 4;
-constexpr size_t kMaxPasscodeDigits = 9;
 constexpr uint16_t kFirstYear = 2000;
 constexpr uint16_t kLastYear = 2099;
 constexpr uint8_t kFirstWeekDay = 1;
 constexpr uint8_t kLastWeekDay = 7;
 constexpr uint16_t kMinutesPerDay = 24 * 60;
-
-bool isDigits(const std::string& code, size_t minimum, size_t maximum) {
-    if (code.size() < minimum || code.size() > maximum) {
-        return false;
-    }
-    for (char digit : code) {
-        if (digit < '0' || digit > '9') {
-            return false;
-        }
-    }
-    return true;
-}
-
-bool isPasscode(const std::string& code) {
-    return isDigits(code, kMinPasscodeDigits, kMaxPasscodeDigits);
-}
 
 bool isKnownPasscodeType(PasscodeType type) {
     switch (type) {
@@ -162,6 +145,25 @@ Status Session::setAdminPasscode(const std::string& code) {
         keys_.adminPasscode = code;
     }
     return status;
+}
+
+Status Session::adminPasscodeGet(std::string& out) {
+    Bytes data;
+    const Status status = adminPasscodeGetRaw(data);
+    if (status != Status::Ok) {
+        return status;
+    }
+    return parseAdminCode(data, out) ? Status::Ok : Status::BadResponse;
+}
+
+Status Session::adminPasscodeGetRaw(Bytes& out) {
+    Bytes data;
+    const Status status = adminRequest(Feature::GetAdminCode, command::kGetAdminCode, noPayload(), data);
+    if (status != Status::Ok) {
+        return status;
+    }
+    out = std::move(data);
+    return Status::Ok;
 }
 
 Status Session::fingerprintList(std::vector<Credential>& out) {

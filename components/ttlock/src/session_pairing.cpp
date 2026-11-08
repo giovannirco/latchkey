@@ -64,9 +64,17 @@ std::string Session::randomDigits(size_t count) {
 }
 
 Status Session::pair(const LockVersion& version, LockKeys& out, PersistCallback persistEarly, PairResult& result) {
+    return pair(version, PairOptions{}, out, std::move(persistEarly), result);
+}
+
+Status Session::pair(const LockVersion& version, const PairOptions& options, LockKeys& out,
+                     PersistCallback persistEarly, PairResult& result) {
     result = PairResult{};
     if (!usesV3Frames(version)) {
         return Status::Unsupported;
+    }
+    if (!options.adminPasscode.empty() && !isPasscode(options.adminPasscode)) {
+        return Status::InvalidArgument;
     }
     if (!timeUsable()) {
         return Status::TimeUnsynced;
@@ -77,13 +85,14 @@ Status Session::pair(const LockVersion& version, LockKeys& out, PersistCallback 
     fresh.version = version;
     fresh.aesKey = kDefaultAesKey;
     keys_ = std::move(fresh);
+    const size_t mismatchesBefore = lockTypeMismatches_;
     Status status = initialize();
     if (status != Status::Ok) {
-        return status;
+        return beforeKeysFailure(status, mismatchesBefore);
     }
     status = fetchAesKey();
     if (status != Status::Ok) {
-        return status;
+        return beforeKeysFailure(status, mismatchesBefore);
     }
     keys_.adminPs = randomSecret();
     keys_.unlockKey = randomSecret();
@@ -102,13 +111,17 @@ Status Session::pair(const LockVersion& version, LockKeys& out, PersistCallback 
     if (status != Status::Ok) {
         return Status::PairIncomplete;
     }
-    status = finishPairing(persist, result);
+    status = finishPairing(options, persist, result);
     out = keys_;
     if (status != Status::Ok) {
         return Status::PairIncomplete;
     }
     persist();
     return Status::Ok;
+}
+
+Status Session::beforeKeysFailure(Status status, size_t mismatchesBefore) const {
+    return status == Status::Timeout && lockTypeMismatches_ > mismatchesBefore ? Status::Unsupported : status;
 }
 
 Status Session::initialize() {
@@ -132,7 +145,7 @@ Status Session::fetchAesKey() {
         return status;
     }
     AesKey key{};
-    if (!parseAesKey(data, key)) {
+    if (!parseAesKey(data, key) || key == kDefaultAesKey) {
         return Status::BadResponse;
     }
     keys_.aesKey = key;
@@ -148,7 +161,8 @@ Status Session::addAdmin() {
     return isAddAdminAccepted(data) ? Status::Ok : Status::BadResponse;
 }
 
-Status Session::finishPairing(const std::function<void()>& persist, PairResult& result) {
+Status Session::finishPairing(const PairOptions& options, const std::function<void()>& persist,
+                              PairResult& result) {
     Bytes data;
     Status status = request(command::kTimeCalibrate, buildCalibrateTime(localNow()), data);
     if (status == Status::Ok) {
@@ -173,7 +187,8 @@ Status Session::finishPairing(const std::function<void()>& persist, PairResult& 
         }
     }
     const std::string previous = keys_.adminPasscode;
-    keys_.adminPasscode = randomDigits(kAdminPasscodeDigits);
+    keys_.adminPasscode =
+        options.adminPasscode.empty() ? randomDigits(kAdminPasscodeDigits) : options.adminPasscode;
     persist();
     status = request(command::kSetAdminKeyboardPassword, buildSetAdminPasscode(keys_.adminPasscode), data);
     if (status == Status::LockError) {
@@ -186,7 +201,7 @@ Status Session::finishPairing(const std::function<void()>& persist, PairResult& 
     } else if (status != Status::Timeout) {
         return status;
     }
-    status = initPasswords();
+    status = initPasswords(options.persistSeeds, result);
     if (status != Status::Ok) {
         return status;
     }
@@ -199,7 +214,7 @@ Status Session::finishPairing(const std::function<void()>& persist, PairResult& 
     return request(command::kOperateFinished, noPayload(), data);
 }
 
-Status Session::initPasswords() {
+Status Session::initPasswords(const SeedsCallback& persistSeeds, PairResult& result) {
     const LockTime now = localNow();
     const bool newYearsDay = now.month == 1 && now.day == 1;
     const uint16_t year = newYearsDay ? static_cast<uint16_t>(now.year - 1) : now.year;
@@ -210,8 +225,16 @@ Status Session::initPasswords() {
             seed.secret = seed.secret * kDigitBound + uniformBelow(kDigitBound);
         }
     }
+    result.passcodeSeedYear = year;
+    result.passcodeSeeds = seeds;
+    if (persistSeeds) {
+        persistSeeds(year, seeds);
+    }
     Bytes data;
-    return request(command::kInitPasswords, buildInitPasswords(static_cast<uint8_t>(year % 100), seeds), data);
+    const Status status =
+        request(command::kInitPasswords, buildInitPasswords(static_cast<uint8_t>(year % 100), seeds), data);
+    result.passcodeSeedsConfirmed = status == Status::Ok;
+    return status;
 }
 
 }

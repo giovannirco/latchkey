@@ -22,6 +22,7 @@ struct DecodedFrame {
     uint8_t command = 0;
     Bytes payload;
     bool crcOk = false;
+    LockVersion version;
 };
 
 constexpr size_t kMaxFramePayload = 239;

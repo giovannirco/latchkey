@@ -1,15 +1,34 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Ported from kind3r/ttlock-sdk-js (GPL-3.0) src/device/TTLock.ts and src/device/TTLockApi.ts: the admin login of
 // macro_adminLogin and the lock and unlock flows. Matching replies on the echoed opcode and the admin handshake per
-// call follow roquerodrigo/ttlock-ble (MIT) client.py and ble/transport.py.
+// call follow roquerodrigo/ttlock-ble (MIT) client.py and ble/transport.py. The lock type a reply must keep is the one
+// src/api/CommandEnvelope.ts generateLockType derives from the frame header.
 #include "ttlock/session.h"
 
 #include <utility>
 
 #include "session_internal.h"
+#include "ttlock/aes.h"
 #include "ttlock/commands.h"
 
 namespace ttlock {
+namespace {
+
+constexpr uint8_t kV3ProtocolType = 5;
+constexpr uint8_t kV3ProtocolVersion = 3;
+constexpr uint8_t kCarScene = 7;
+
+bool isCarLock(const LockVersion& version) {
+    return version.protocolType == kV3ProtocolType && version.protocolVersion == kV3ProtocolVersion &&
+           version.scene == kCarScene;
+}
+
+bool sameLockType(const LockVersion& reply, const LockVersion& paired) {
+    return reply.protocolType == paired.protocolType && reply.protocolVersion == paired.protocolVersion &&
+           isCarLock(reply) == isCarLock(paired);
+}
+
+}
 
 Session::Session(Transport& transport, Clock& clock, Random& random)
     : transport_(transport), clock_(clock), random_(random) {}
@@ -30,11 +49,22 @@ size_t Session::droppedFrames() const {
     return droppedFrames_;
 }
 
+size_t Session::lockTypeMismatches() const {
+    return lockTypeMismatches_;
+}
+
+LockVersion Session::lastMismatchedVersion() const {
+    return lastMismatchedVersion_;
+}
+
 Status Session::attach(const LockKeys& keys) {
     attached_ = false;
     lockErrorCode_ = 0;
     if (!usesV3Frames(keys.version)) {
         return Status::Unsupported;
+    }
+    if (keys.aesKey == kDefaultAesKey) {
+        return Status::InvalidArgument;
     }
     keys_ = keys;
     attached_ = true;
@@ -85,7 +115,11 @@ Status Session::nextFrame(uint32_t timeoutMs, size_t& budget, DecodedFrame& fram
             return received;
         }
         if (decodeFrame(raw, keys_.aesKey, frame) == Status::Ok) {
-            return Status::Ok;
+            if (sameLockType(frame.version, keys_.version)) {
+                return Status::Ok;
+            }
+            ++lockTypeMismatches_;
+            lastMismatchedVersion_ = frame.version;
         }
         ++droppedFrames_;
     }
