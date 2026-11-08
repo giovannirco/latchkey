@@ -111,7 +111,7 @@ Status Session::pair(const LockVersion& version, const PairOptions& options, Loc
     if (status != Status::Ok) {
         return Status::PairIncomplete;
     }
-    status = finishPairing(options.adminPasscode, persist, result);
+    status = finishPairing(options, persist, result);
     out = keys_;
     if (status != Status::Ok) {
         return Status::PairIncomplete;
@@ -161,7 +161,7 @@ Status Session::addAdmin() {
     return isAddAdminAccepted(data) ? Status::Ok : Status::BadResponse;
 }
 
-Status Session::finishPairing(const std::string& chosenPasscode, const std::function<void()>& persist,
+Status Session::finishPairing(const PairOptions& options, const std::function<void()>& persist,
                               PairResult& result) {
     Bytes data;
     Status status = request(command::kTimeCalibrate, buildCalibrateTime(localNow()), data);
@@ -187,7 +187,8 @@ Status Session::finishPairing(const std::string& chosenPasscode, const std::func
         }
     }
     const std::string previous = keys_.adminPasscode;
-    keys_.adminPasscode = chosenPasscode.empty() ? randomDigits(kAdminPasscodeDigits) : chosenPasscode;
+    keys_.adminPasscode =
+        options.adminPasscode.empty() ? randomDigits(kAdminPasscodeDigits) : options.adminPasscode;
     persist();
     status = request(command::kSetAdminKeyboardPassword, buildSetAdminPasscode(keys_.adminPasscode), data);
     if (status == Status::LockError) {
@@ -200,7 +201,7 @@ Status Session::finishPairing(const std::string& chosenPasscode, const std::func
     } else if (status != Status::Timeout) {
         return status;
     }
-    status = initPasswords(result);
+    status = initPasswords(options.persistSeeds, result);
     if (status != Status::Ok) {
         return status;
     }
@@ -213,7 +214,7 @@ Status Session::finishPairing(const std::string& chosenPasscode, const std::func
     return request(command::kOperateFinished, noPayload(), data);
 }
 
-Status Session::initPasswords(PairResult& result) {
+Status Session::initPasswords(const SeedsCallback& persistSeeds, PairResult& result) {
     const LockTime now = localNow();
     const bool newYearsDay = now.month == 1 && now.day == 1;
     const uint16_t year = newYearsDay ? static_cast<uint16_t>(now.year - 1) : now.year;
@@ -226,6 +227,9 @@ Status Session::initPasswords(PairResult& result) {
     }
     result.passcodeSeedYear = year;
     result.passcodeSeeds = seeds;
+    if (persistSeeds) {
+        persistSeeds(year, seeds);
+    }
     Bytes data;
     const Status status =
         request(command::kInitPasswords, buildInitPasswords(static_cast<uint8_t>(year % 100), seeds), data);

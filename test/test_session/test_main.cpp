@@ -2,6 +2,7 @@
 #include <unity.h>
 
 #include <algorithm>
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <initializer_list>
@@ -215,11 +216,35 @@ static Status pair(Rig& rig, ttlock::LockKeys& out, Persisted& persisted) {
     return rig.session.pair(fake::kRequestVersion, out, recorder(rig, persisted), persisted.result);
 }
 
-static Status pairWith(Rig& rig, const std::string& adminPasscode, ttlock::LockKeys& out, Persisted& persisted) {
+static Status pairWithOptions(Rig& rig, const ttlock::PairOptions& options, ttlock::LockKeys& out,
+                              Persisted& persisted) {
     out.mac = kMac;
+    return rig.session.pair(fake::kRequestVersion, options, out, recorder(rig, persisted), persisted.result);
+}
+
+static Status pairWith(Rig& rig, const std::string& adminPasscode, ttlock::LockKeys& out, Persisted& persisted) {
     ttlock::PairOptions options;
     options.adminPasscode = adminPasscode;
-    return rig.session.pair(fake::kRequestVersion, options, out, recorder(rig, persisted), persisted.result);
+    return pairWithOptions(rig, options, out, persisted);
+}
+
+struct SeedHook {
+    size_t calls = 0;
+    size_t requestsSeen = 0;
+    uint16_t year = 0;
+    std::array<ttlock::CodeSecret, ttlock::kCodeSecretCount> seeds{};
+};
+
+static ttlock::PairOptions withSeedHook(Rig& rig, SeedHook& hook) {
+    ttlock::PairOptions options;
+    options.persistSeeds = [&rig, &hook](uint16_t year,
+                                         const std::array<ttlock::CodeSecret, ttlock::kCodeSecretCount>& seeds) {
+        ++hook.calls;
+        hook.requestsSeen = rig.lock.requests().size();
+        hook.year = year;
+        hook.seeds = seeds;
+    };
+    return options;
 }
 
 static size_t indexOf(const FakeLock& lock, uint8_t command) {
@@ -441,6 +466,56 @@ static void test_refused_seeds_are_returned_unconfirmed() {
         TEST_ASSERT_EQUAL_UINT16(0, seed.code);
         TEST_ASSERT_EQUAL_UINT64(0, seed.secret);
     }
+}
+
+static void assertHookHeldTheFrameTable(const SeedHook& hook, const fake::Request& request) {
+    TEST_ASSERT_EQUAL_HEX8(cmd::kInitPasswords, request.command);
+    TEST_ASSERT_EQUAL_UINT8(hook.year % 100, request.payload[0]);
+    for (size_t i = 0; i < ttlock::kCodeSecretCount; ++i) {
+        const ttlock::CodeSecret sent = seedInFrame(request.payload, i);
+        TEST_ASSERT_EQUAL_UINT16(sent.code, hook.seeds[i].code);
+        TEST_ASSERT_EQUAL_UINT64(sent.secret, hook.seeds[i].secret);
+    }
+}
+
+static void test_the_seed_hook_holds_the_exact_table_before_init_passwords_goes_out() {
+    Rig rig;
+    load(rig.lock, pairingSteps(kAllOptionalReads));
+    SeedHook hook;
+    ttlock::LockKeys keys;
+    Persisted persisted;
+    assertStatus(Status::Ok, pairWithOptions(rig, withSeedHook(rig, hook), keys, persisted));
+    const size_t sent = indexOf(rig.lock, cmd::kInitPasswords);
+    TEST_ASSERT_EQUAL_UINT(1, hook.calls);
+    TEST_ASSERT_EQUAL_UINT(sent, hook.requestsSeen);
+    TEST_ASSERT_EQUAL_UINT16(2025, hook.year);
+    TEST_ASSERT_EQUAL_UINT16(persisted.result.passcodeSeedYear, hook.year);
+    assertHookHeldTheFrameTable(hook, rig.lock.requests()[sent]);
+}
+
+static void test_the_seed_hook_runs_only_once_the_table_is_about_to_be_sent() {
+    Rig early;
+    std::vector<PairStep> before = pairingSteps(bits({Feature::Passcode}));
+    stepFor(before, cmd::kSearchDeviceFeature).replies = {failure(kLockKey, cmd::kSearchDeviceFeature, 0x04)};
+    load(early.lock, std::move(before));
+    SeedHook earlyHook;
+    ttlock::LockKeys earlyKeys;
+    Persisted earlyPersisted;
+    assertStatus(Status::PairIncomplete, pairWithOptions(early, withSeedHook(early, earlyHook), earlyKeys,
+                                                         earlyPersisted));
+    TEST_ASSERT_EQUAL_UINT(0, earlyHook.calls);
+
+    Rig refused;
+    std::vector<PairStep> steps = pairingSteps(bits({Feature::Passcode}));
+    stepFor(steps, cmd::kInitPasswords).replies = {failure(kLockKey, cmd::kInitPasswords, 0x04)};
+    load(refused.lock, std::move(steps));
+    SeedHook hook;
+    ttlock::LockKeys keys;
+    Persisted persisted;
+    assertStatus(Status::PairIncomplete, pairWithOptions(refused, withSeedHook(refused, hook), keys, persisted));
+    TEST_ASSERT_EQUAL_UINT(1, hook.calls);
+    TEST_ASSERT_FALSE(persisted.result.passcodeSeedsConfirmed);
+    assertHookHeldTheFrameTable(hook, refused.lock.requests().back());
 }
 
 static void assertInitPasswordsYear(int64_t utc, int32_t offset, uint16_t year) {
@@ -2193,6 +2268,8 @@ int main() {
     RUN_TEST(test_init_passwords_uses_the_local_year_except_on_new_years_day);
     RUN_TEST(test_pair_returns_the_offline_passcode_seeds_it_sent);
     RUN_TEST(test_refused_seeds_are_returned_unconfirmed);
+    RUN_TEST(test_the_seed_hook_holds_the_exact_table_before_init_passwords_goes_out);
+    RUN_TEST(test_the_seed_hook_runs_only_once_the_table_is_about_to_be_sent);
     RUN_TEST(test_link_drop_after_add_admin_is_pair_incomplete_with_keys_persisted);
     RUN_TEST(test_add_admin_without_a_reply_persists_and_is_pair_incomplete);
     RUN_TEST(test_add_admin_without_the_sciener_echo_is_pair_incomplete);

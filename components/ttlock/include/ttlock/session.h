@@ -30,6 +30,7 @@ struct LogPage;
 using EventSink = std::function<void(const LockEvent&)>;
 using EnrollCallback = std::function<void(const EnrollProgress&)>;
 using PersistCallback = std::function<void(const LockKeys&)>;
+using SeedsCallback = std::function<void(uint16_t year, const std::array<CodeSecret, kCodeSecretCount>& seeds)>;
 
 struct PairResult {
     bool timeCalibrated = false;
@@ -41,6 +42,7 @@ struct PairResult {
 
 struct PairOptions {
     std::string adminPasscode;
+    SeedsCallback persistSeeds;
 };
 
 class Session {
@@ -146,8 +148,8 @@ private:
     Status initialize();
     Status fetchAesKey();
     Status addAdmin();
-    Status finishPairing(const std::string& chosenPasscode, const std::function<void()>& persist, PairResult& result);
-    Status initPasswords(PairResult& result);
+    Status finishPairing(const PairOptions& options, const std::function<void()>& persist, PairResult& result);
+    Status initPasswords(const SeedsCallback& persistSeeds, PairResult& result);
     Status controlLock(uint8_t command, OperationResult& out);
     Status enroll(bool fingerprint, const Validity& validity, const EnrollCallback& progress, uint64_t& id);
     Status switchGet(Feature feature, uint32_t item, bool& enabled);
