@@ -5,10 +5,13 @@
 #include <cstdint>
 #include <cstdio>
 #include <string>
+#include <type_traits>
 
 #include "../reference/hmac_sha256.h"
 #include "latchkey_util/hmac_sha256.h"
 #include "latchkey_util/passcode_id.h"
+#include "ttlock/aes.h"
+#include "ttlock/bytes.h"
 
 using latchkey_util::LockAesKey;
 using latchkey_util::PasscodeId;
@@ -21,8 +24,7 @@ static const LockAesKey kLockKey{0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77,
                                  0x88, 0x99, 0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF};
 static const LockAesKey kOtherLockKey{0x0F, 0x0E, 0x0D, 0x0C, 0x0B, 0x0A, 0x09, 0x08,
                                       0x07, 0x06, 0x05, 0x04, 0x03, 0x02, 0x01, 0x00};
-static const LockAesKey kDefaultKey{0x98, 0x76, 0x23, 0xE8, 0xA9, 0x23, 0xA1, 0xBB,
-                                    0x3D, 0x9E, 0x7D, 0x03, 0x78, 0x12, 0x45, 0x88};
+static_assert(std::is_same_v<LockAesKey, ttlock::AesKey>, "passcode ids take the record's own key type");
 
 static unsigned s_hmacCalls = 0;
 
@@ -90,7 +92,7 @@ static void test_without_the_lock_key_a_search_of_every_code_finds_nothing() {
     std::string found;
     for (unsigned value = 0; value < 10000; ++value) {
         const std::string code = fourDigits(value);
-        withoutKey += hex(idOf(kDefaultKey, code)) == wanted ? 1 : 0;
+        withoutKey += hex(idOf(ttlock::kDefaultAesKey, code)) == wanted ? 1 : 0;
         if (hex(idOf(kLockKey, code)) == wanted) {
             ++withKey;
             found = code;
