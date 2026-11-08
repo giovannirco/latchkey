@@ -115,6 +115,12 @@ def test_the_log_shows_the_newest_entries_then_only_newer_ones(
     check_page(newer)
     assert all(entry["seq"] > page["last"] for entry in newer["entries"])
     assert newer["last"] >= page["last"]
+    if page["last"] > 2 * SHOWN_SLOTS:
+        since = page["last"] - 2 * SHOWN_SLOTS
+        older = fetch(console, lock_mac, since=since)
+        check_page(older)
+        assert older["entries"] and all(since < entry["seq"] <= since + SHOWN_SLOTS for entry in older["entries"])
+        assert older["more"]
     types = Counter(entry["type"] for entry in page["entries"])
     print(f"log: newest {len(page['entries'])} entries up to record {page['last']}, types {dict(types)}", file=sys.stderr)
 
