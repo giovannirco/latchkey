@@ -295,10 +295,19 @@ bool updateRecord(std::string_view mac, const std::function<void(Record&)>& chan
     return true;
 }
 
+esp_err_t eraseDescriptions(const std::string& mac) {
+    const esp_err_t error = store::seeds::erase(mac.c_str());
+    return error == ESP_OK ? store::labels::erase(mac.c_str()) : error;
+}
+
 esp_err_t removeRecord(std::string_view mac) {
-    std::lock_guard<std::mutex> guard(s_mutex);
     const std::string key(mac);
-    const esp_err_t error = store::locks::erase(key.c_str());
+    esp_err_t error = eraseDescriptions(key);
+    if (error != ESP_OK) {
+        return error;
+    }
+    std::lock_guard<std::mutex> guard(s_mutex);
+    error = store::locks::erase(key.c_str());
     if (error != ESP_OK) {
         return error;
     }
@@ -1015,6 +1024,12 @@ void runPair(Job& job) {
     std::memcpy(record.address, raw.address.value, sizeof(record.address));
     copyText(record.mac, job.mac);
     copyText(record.name, job.name);
+    const esp_err_t leftovers = eraseDescriptions(job.mac);
+    if (leftovers != ESP_OK) {
+        ESP_LOGE(TAG, "cannot erase the names and seeds an earlier pairing left: %s", esp_err_to_name(leftovers));
+        finish(job, rpc::fail("internal", "cannot erase what an earlier pairing of this lock left on the board"));
+        return;
+    }
     const int rc = connectWithRetries(addressOf(record));
     if (rc != 0) {
         finish(job, rpc::fail("timeout", "the lock did not accept a connection"));
@@ -1348,7 +1363,13 @@ esp_err_t storedCount(size_t& out) {
 esp_err_t eraseAll() {
     std::lock_guard<std::mutex> guard(s_mutex);
     s_erased = true;
-    const esp_err_t error = store::locks::eraseAll();
+    esp_err_t error = store::seeds::eraseAll();
+    if (error == ESP_OK) {
+        error = store::labels::eraseAll();
+    }
+    if (error == ESP_OK) {
+        error = store::locks::eraseAll();
+    }
     if (error != ESP_OK) {
         s_erased = false;
         return error;

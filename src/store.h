@@ -9,7 +9,9 @@
 
 #include "esp_err.h"
 #include "latchkey_util/certificate.h"
+#include "latchkey_util/label_table.h"
 #include "latchkey_util/password_record.h"
+#include "latchkey_util/seed_table.h"
 
 namespace store {
 
@@ -121,6 +123,34 @@ esp_err_t list(std::vector<Record>& out);
 esp_err_t count(size_t& out);
 
 esp_err_t save(const Record& record);
+
+esp_err_t erase(const char* mac);
+
+esp_err_t eraseAll();
+
+}
+
+namespace labels {
+
+enum class Kind : char {
+    Passcodes = 'p',
+    Fingerprints = 'f',
+    Cards = 'c',
+};
+
+esp_err_t load(const char* mac, Kind kind, latchkey_util::LabelTable& out);
+
+esp_err_t save(const char* mac, Kind kind, const latchkey_util::LabelTable& table);
+
+esp_err_t erase(const char* mac);
+
+esp_err_t eraseAll();
+
+}
+
+namespace seeds {
+
+esp_err_t save(const char* mac, const latchkey_util::SeedTable& table);
 
 esp_err_t erase(const char* mac);
 
