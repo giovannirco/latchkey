@@ -24,6 +24,7 @@ namespace {
 
 constexpr const char* TAG = "rpc";
 constexpr size_t kMaxNesting = 8;
+constexpr size_t kMaxValues = 256;
 constexpr const char* kOutOfMemoryLine = R"({"id":null,"error":{"code":"internal","message":"out of memory"}})";
 constexpr uint32_t kConfirmTimeoutMs = 30000;
 
@@ -161,6 +162,9 @@ void registerMethod(const char* name, Access access, Handler handler) {
 Response dispatch(const char* requestJson, Transport origin, std::string_view sessionToken) {
     if (!latchkey_util::jsonNestingWithin(requestJson, kMaxNesting)) {
         return respond(nullptr, fail("bad_request", "request nested too deeply"));
+    }
+    if (!latchkey_util::jsonValuesWithin(requestJson, kMaxValues)) {
+        return respond(nullptr, fail("bad_request", "request has too many values"));
     }
     Json request(cJSON_ParseWithOpts(requestJson, nullptr, true));
     if (request == nullptr || !cJSON_IsObject(request.get())) {
