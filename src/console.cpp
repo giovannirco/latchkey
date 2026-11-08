@@ -39,7 +39,7 @@ constexpr size_t kReadChunk = 256;
 constexpr size_t kLogLine = 256;
 constexpr uint32_t kRxBuffer = 2048;
 constexpr uint32_t kTxBuffer = 2048;
-constexpr uint32_t kTaskStack = 8192;
+constexpr uint32_t kTaskStack = 5120;
 constexpr UBaseType_t kTaskPriority = 5;
 constexpr TickType_t kFlushTimeout = pdMS_TO_TICKS(200);
 

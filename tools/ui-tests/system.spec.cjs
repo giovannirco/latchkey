@@ -117,3 +117,15 @@ test('an address outside the gateway network is refused like the board refuses i
   await expect(page.locator('#toasts')).toContainText(/wifi needs ssid, password, ip, gateway, netmask and dns/i);
   await expect(page.locator('#toasts')).not.toContainText('The board is joining');
 });
+
+test('the MQTT section shows the connection and says when the password must be given again', async ({ page }) => {
+  await login(page, '#/system');
+  const section = page.getByRole('region', { name: 'Home Assistant (MQTT)' });
+  await expect(section.getByText('MQTT is off.')).toBeVisible();
+  await expect(section.getByText('A new host, port or username clears the saved password')).toBeVisible();
+  await section.getByLabel('Publish to an MQTT broker').check();
+  await section.getByLabel('Broker host').fill('broker.example');
+  await section.getByLabel('Password').fill('broker secret');
+  await section.getByRole('button', { name: 'Save MQTT' }).click();
+  await expect(section.getByText('Connected to the broker.')).toBeVisible();
+});
