@@ -140,7 +140,8 @@ test('the add-lock form takes an optional super admin passcode', async ({ page, 
   await page.getByRole('radio', { name: /LK-MOCK-NEW/ }).check();
   await page.getByLabel('Name').fill('Porch');
   const admin = page.getByLabel('Super admin passcode (optional)');
-  await expect(admin).toHaveAttribute('type', 'password');
+  await expect(admin).toHaveAttribute('type', 'text');
+  expect(await admin.evaluate((input) => getComputedStyle(input).webkitTextSecurity)).toBe('disc');
   await admin.fill('12');
   await page.getByRole('button', { name: 'Pair' }).click();
   expect(await admin.evaluate((input) => input.validity.valid)).toBe(false);
@@ -159,4 +160,18 @@ test('pairing without a super admin passcode leaves the code to the lock', async
   await expect(page.getByRole('heading', { level: 2, name: 'Harden Porch' })).toBeVisible({ timeout: 10_000 });
   const pairing = (await calls(request)).find((call) => call.method === 'locks.pair');
   expect(pairing.params).toEqual({ mac: '00:00:5E:00:53:21', name: 'Porch' });
+});
+
+test('a pairing warning tells the owner what it means', async ({ page, request }) => {
+  await login(page);
+  await mock(request, {
+    warnNext: {
+      method: 'locks.pair',
+      warning:
+        'the offline-code seed table the lock was sent could not be stored, so offline codes will not work for this pairing',
+    },
+  });
+  await startPairing(page, 'Porch');
+  await expect(page.getByRole('heading', { level: 2, name: 'Harden Porch' })).toBeVisible({ timeout: 10_000 });
+  await expect(page.locator('#toasts .toast-warning')).toContainText('offline codes will not work for this pairing');
 });
