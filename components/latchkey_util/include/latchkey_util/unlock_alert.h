@@ -51,4 +51,8 @@ std::vector<UnlockFinding> classifyUnlocks(const std::vector<ttlock::LogEntry>& 
                                            const std::vector<LatchkeyUnlock>& performed, int32_t lockUtcOffsetSeconds,
                                            uint32_t toleranceSeconds);
 
+std::vector<UnlockFinding> classifyUnlocks(const std::vector<ttlock::LogEntry>& entries,
+                                           const std::vector<LatchkeyUnlock>& performed, int32_t lockUtcOffsetSeconds,
+                                           uint32_t toleranceSeconds, std::vector<bool>& used);
+
 }
