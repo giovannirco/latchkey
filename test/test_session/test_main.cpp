@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include <unity.h>
 
+#include <algorithm>
 #include <cstddef>
 #include <cstdint>
 #include <initializer_list>
@@ -11,7 +12,9 @@
 #include "../fake_lock/fake_lock.h"
 #include "../vectors/kind3r_vectors.h"
 #include "ttlock/aes.h"
+#include "ttlock/codec_xor.h"
 #include "ttlock/commands.h"
+#include "ttlock/crc8.h"
 #include "ttlock/features.h"
 #include "ttlock/session.h"
 #include "ttlock/status.h"
@@ -1627,6 +1630,157 @@ static void test_events_without_a_sink_are_dropped_quietly() {
     assertStatus(Status::Ok, session.receiveEvent(100));
 }
 
+static constexpr uint32_t kForgedPs = 0x11111111;
+
+static Bytes userTimeReply(uint32_t ps) {
+    return concat({Bytes{cmd::kCheckUserTime, fake::kSuccess}, be32(ps)});
+}
+
+static Bytes withCrc(Bytes frame) {
+    frame.push_back(ttlock::crc8(frame.data(), frame.size()));
+    return frame;
+}
+
+static Bytes unencryptedV3Frame(uint8_t encrypt, const Bytes& payload) {
+    const ttlock::LockVersion& version = fake::kReplyVersion;
+    Bytes frame{0x7F,
+                0x5A,
+                version.protocolType,
+                version.protocolVersion,
+                version.scene,
+                static_cast<uint8_t>(version.groupId >> 8),
+                static_cast<uint8_t>(version.groupId),
+                static_cast<uint8_t>(version.orgId >> 8),
+                static_cast<uint8_t>(version.orgId),
+                fake::kReplyCommand,
+                encrypt,
+                static_cast<uint8_t>(payload.size())};
+    frame.insert(frame.end(), payload.begin(), payload.end());
+    return withCrc(std::move(frame));
+}
+
+static Bytes legacyFrame(uint8_t seed, const Bytes& payload) {
+    Bytes frame{0x7F, 0x5A, 0x03, fake::kReplyCommand, seed, static_cast<uint8_t>(payload.size())};
+    frame.insert(frame.end(), payload.begin(), payload.end());
+    return withCrc(std::move(frame));
+}
+
+static void expectUnlockAfter(FakeLock& lock, std::vector<Bytes> userTimeReplies) {
+    userTimeReplies.push_back(success(kLockKey, cmd::kCheckUserTime, be32(kPs)));
+    lock.expect(cmd::kCheckUserTime, kLockKey, std::move(userTimeReplies));
+    lock.expect(cmd::kUnlock, kLockKey, {success(kLockKey, cmd::kUnlock, kUnlockReplyData)});
+}
+
+static void assertUnlockUsedTheGenuinePs(Rig& rig, size_t dropped) {
+    ttlock::OperationResult result;
+    assertStatus(Status::Ok, rig.session.unlock(result));
+    assertCommands({cmd::kCheckUserTime, cmd::kUnlock}, rig.lock);
+    assertPayload(concat({be32(kPs + kUnlockKey), be32(static_cast<uint32_t>(rig.clock.utc))}), rig.lock.requests()[1]);
+    TEST_ASSERT_EQUAL_UINT(dropped, rig.session.droppedFrames());
+    TEST_ASSERT_TRUE(rig.lock.scriptDone());
+}
+
+static void test_a_paired_session_drops_replies_under_the_default_key() {
+    const Bytes forged = success(kDefault, cmd::kCheckUserTime, be32(kForgedPs));
+    TEST_ASSERT_TRUE(undecodable(forged, kLockKey));
+    Rig rig;
+    attach(rig);
+    expectUnlockAfter(rig.lock, {forged});
+    assertUnlockUsedTheGenuinePs(rig, 1);
+
+    Rig alone;
+    attach(alone);
+    alone.lock.expect(cmd::kCheckUserTime, kLockKey, {forged});
+    ttlock::OperationResult result;
+    assertStatus(Status::Timeout, alone.session.unlock(result));
+    assertCommands({cmd::kCheckUserTime}, alone.lock);
+}
+
+static void test_a_paired_session_drops_plaintext_replies() {
+    const Bytes unaligned = unencryptedV3Frame(0xAA, userTimeReply(kForgedPs));
+    const Bytes blockSized = unencryptedV3Frame(0xAA, concat({userTimeReply(kForgedPs), Bytes(10, 0x0A)}));
+    const Bytes markedPlain = unencryptedV3Frame(0x02, userTimeReply(kForgedPs));
+    for (const Bytes& frame : {unaligned, blockSized, markedPlain}) {
+        TEST_ASSERT_TRUE(undecodable(frame, kLockKey));
+    }
+    Rig rig;
+    attach(rig);
+    expectUnlockAfter(rig.lock, {unaligned, blockSized, markedPlain});
+    assertUnlockUsedTheGenuinePs(rig, 3);
+}
+
+static void test_a_paired_session_never_switches_to_the_xor_codec() {
+    const uint8_t seed = 0x5A;
+    const Bytes coded = ttlock::xorCodec(userTimeReply(kForgedPs), seed);
+    const Bytes legacy = legacyFrame(seed, coded);
+    const Bytes v3Header = unencryptedV3Frame(seed, coded);
+    TEST_ASSERT_TRUE(undecodable(legacy, kLockKey));
+    TEST_ASSERT_TRUE(undecodable(v3Header, kLockKey));
+    Rig rig;
+    attach(rig);
+    expectUnlockAfter(rig.lock, {legacy, v3Header});
+    assertUnlockUsedTheGenuinePs(rig, 2);
+
+    Rig pushes;
+    attach(pushes);
+    pushes.lock.push(legacyFrame(seed, ttlock::xorCodec(Bytes{cmd::kSearchStatus, fake::kSuccess, 0x5A, 0x01, 0x00}, seed)));
+    assertStatus(Status::Timeout, pushes.session.receiveEvent(100));
+    TEST_ASSERT_EQUAL_UINT(0, pushes.events.size());
+    TEST_ASSERT_EQUAL_UINT(1, pushes.session.droppedFrames());
+}
+
+static bool containsWord(const Bytes& haystack, uint32_t word) {
+    const Bytes needle = be32(word);
+    return std::search(haystack.begin(), haystack.end(), needle.begin(), needle.end()) != haystack.end();
+}
+
+static bool readableUnder(const AesKey& key, const fake::Request& request) {
+    ttlock::DecodedFrame frame;
+    return ttlock::decodeFrame(request.raw, key, frame) == Status::Ok && frame.payload == request.payload;
+}
+
+static void assertHiddenFromEavesdroppers(const fake::Request& request, uint32_t secretWord) {
+    TEST_ASSERT_TRUE_MESSAGE(request.decoded, "the lock decodes it with its own key");
+    TEST_ASSERT_FALSE_MESSAGE(readableUnder(kDefault, request), "the default key does not open it");
+    TEST_ASSERT_FALSE_MESSAGE(containsWord(request.raw, secretWord), "the secret is not on the wire in clear");
+}
+
+static void test_unlock_key_derived_values_travel_only_under_the_lock_key() {
+    Rig rig;
+    load(rig.lock, pairingSteps(kAllOptionalReads));
+    ttlock::LockKeys keys;
+    Persisted persisted;
+    assertStatus(Status::Ok, pair(rig, keys, persisted));
+    expectUserTime(rig.lock);
+    rig.lock.expect(cmd::kUnlock, kLockKey, {success(kLockKey, cmd::kUnlock, kUnlockReplyData)});
+    ttlock::OperationResult result;
+    assertStatus(Status::Ok, rig.session.unlock(result));
+    expectAdminLogin(rig.lock);
+    rig.lock.expect(cmd::kAutoLockManage, kLockKey,
+                    {success(kLockKey, cmd::kAutoLockManage, Bytes{0x5A, 0x01, 0x00, 0x1E, 0x00, 0x05, 0x03, 0x84})});
+    ttlock::AutoLockSetting autolock;
+    assertStatus(Status::Ok, rig.session.autolockGet(autolock));
+    TEST_ASSERT_TRUE(rig.lock.scriptDone());
+    size_t secretFrames = 0;
+    for (const fake::Request& request : rig.lock.requests()) {
+        uint32_t secret = 0;
+        if (request.command == cmd::kAddAdmin) {
+            assertPayload(concat({be32(keys.adminPs), be32(keys.unlockKey), text("SCIENER")}), request);
+            secret = keys.unlockKey;
+        } else if (request.command == cmd::kUnlock) {
+            secret = kPs + keys.unlockKey;
+        } else if (request.command == cmd::kCheckRandom) {
+            secret = 0x01020304 + keys.unlockKey;
+        } else {
+            continue;
+        }
+        ++secretFrames;
+        TEST_ASSERT_TRUE(containsWord(request.payload, secret));
+        assertHiddenFromEavesdroppers(request, secret);
+    }
+    TEST_ASSERT_EQUAL_UINT(3, secretFrames);
+}
+
 int main() {
     UNITY_BEGIN();
     RUN_TEST(test_pair_runs_the_kind3r_sequence_with_every_optional_read);
@@ -1707,5 +1861,9 @@ int main() {
     RUN_TEST(test_each_new_command_is_gated_on_its_feature_bits);
     RUN_TEST(test_refused_new_commands_are_lock_errors_with_the_lock_code);
     RUN_TEST(test_events_without_a_sink_are_dropped_quietly);
+    RUN_TEST(test_a_paired_session_drops_replies_under_the_default_key);
+    RUN_TEST(test_a_paired_session_drops_plaintext_replies);
+    RUN_TEST(test_a_paired_session_never_switches_to_the_xor_codec);
+    RUN_TEST(test_unlock_key_derived_values_travel_only_under_the_lock_key);
     return UNITY_END();
 }
