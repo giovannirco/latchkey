@@ -230,16 +230,16 @@ rpc::Reply setup(const cJSON* params, const rpc::Context&) {
         return rpc::fail("invalid_argument", "password must be 12 to 128 bytes");
     }
     store::auth::Owner owner;
-    owner.iterations = auth::kPasswordIterations;
-    esp_fill_random(owner.salt.data(), owner.salt.size());
+    owner.password.iterations = auth::kPasswordIterations;
+    esp_fill_random(owner.password.salt.data(), owner.password.salt.size());
     esp_fill_random(owner.totpSecret.data(), owner.totpSecret.size());
     const int64_t started = esp_timer_get_time();
-    const bool hashed = auth::hashPassword(password, owner);
+    const bool hashed = auth::hashPassword(password, owner.password);
     mbedtls_platform_zeroize(password.data(), password.size());
     if (!hashed) {
         return rpc::fail("internal", "password hashing failed");
     }
-    ESP_LOGI(TAG, "owner password hashed with %u iterations in %lld ms", static_cast<unsigned>(owner.iterations),
+    ESP_LOGI(TAG, "owner password hashed with %u iterations in %lld ms", static_cast<unsigned>(owner.password.iterations),
              static_cast<long long>((esp_timer_get_time() - started) / 1000));
     if (store::cfg::saveWifi(wifi) != ESP_OK || wifi::apply(wifi) != ESP_OK) {
         mbedtls_platform_zeroize(&owner, sizeof(owner));

@@ -8,6 +8,7 @@
 #include <string_view>
 #include <vector>
 
+#include "latchkey_util/password_record.h"
 #include "store.h"
 
 namespace auth {
@@ -59,7 +60,7 @@ struct Rotation {
 
 void init();
 
-bool hashPassword(std::string_view password, store::auth::Owner& owner);
+bool hashPassword(std::string_view password, latchkey_util::PasswordRecord& record);
 
 Login login(const std::optional<Credentials>& credentials, bool openSession);
 

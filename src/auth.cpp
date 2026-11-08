@@ -41,8 +41,8 @@ int64_t monotonicMs() { return esp_timer_get_time() / 1000; }
 
 int64_t monotonicSeconds() { return esp_timer_get_time() / 1000000; }
 
-bool derive(std::string_view password, const std::array<uint8_t, 16>& salt, uint32_t iterations,
-            std::array<uint8_t, 32>& out) {
+bool derive(std::string_view password, const std::array<uint8_t, latchkey_util::kPasswordSaltSize>& salt,
+            uint32_t iterations, std::array<uint8_t, latchkey_util::kPasswordHashSize>& out) {
     psa_key_derivation_operation_t operation = PSA_KEY_DERIVATION_OPERATION_INIT;
     const bool derived =
         psa_key_derivation_setup(&operation, PSA_ALG_PBKDF2_HMAC(PSA_ALG_SHA_256)) == PSA_SUCCESS &&
@@ -57,12 +57,12 @@ bool derive(std::string_view password, const std::array<uint8_t, 16>& salt, uint
     return derived;
 }
 
-bool passwordMatches(std::string_view password, const store::auth::Owner& owner, bool& matches) {
-    std::array<uint8_t, 32> derived{};
-    if (!derive(password, owner.salt, owner.iterations, derived)) {
+bool passwordMatches(std::string_view password, const latchkey_util::PasswordRecord& record, bool& matches) {
+    std::array<uint8_t, latchkey_util::kPasswordHashSize> derived{};
+    if (!derive(password, record.salt, record.iterations, derived)) {
         return false;
     }
-    matches = mbedtls_ct_memcmp(derived.data(), owner.hash.data(), derived.size()) == 0;
+    matches = mbedtls_ct_memcmp(derived.data(), record.hash.data(), derived.size()) == 0;
     mbedtls_platform_zeroize(derived.data(), derived.size());
     return true;
 }
@@ -189,8 +189,8 @@ void init() {
     }
 }
 
-bool hashPassword(std::string_view password, store::auth::Owner& owner) {
-    return derive(password, owner.salt, owner.iterations, owner.hash);
+bool hashPassword(std::string_view password, latchkey_util::PasswordRecord& record) {
+    return derive(password, record.salt, record.iterations, record.hash);
 }
 
 Login login(const std::optional<Credentials>& credentials, bool openSession) {
@@ -214,7 +214,7 @@ Login login(const std::optional<Credentials>& credentials, bool openSession) {
         return result;
     }
     bool passwordOk = false;
-    const bool derived = passwordMatches(credentials->password, owner, passwordOk);
+    const bool derived = passwordMatches(credentials->password, owner.password, passwordOk);
     uint64_t step = 0;
     const latchkey_util::TotpVerdict code =
         latchkey_util::totpVerify(owner.totpSecret.data(), owner.totpSecret.size(), wallclock::utcSeconds(),
@@ -293,7 +293,7 @@ Change changePassword(std::string_view current, std::string_view next, std::opti
         return change;
     }
     bool matches = false;
-    if (!passwordMatches(current, owner, matches)) {
+    if (!passwordMatches(current, owner.password, matches)) {
         mbedtls_platform_zeroize(&owner, sizeof(owner));
         change.verdict = Verdict::Failed;
         return change;
@@ -304,9 +304,9 @@ Change changePassword(std::string_view current, std::string_view next, std::opti
         change.verdict = Verdict::Rejected;
         return change;
     }
-    esp_fill_random(owner.salt.data(), owner.salt.size());
-    owner.iterations = kPasswordIterations;
-    const bool stored = hashPassword(next, owner) && store::auth::saveOwner(owner) == ESP_OK;
+    esp_fill_random(owner.password.salt.data(), owner.password.salt.size());
+    owner.password.iterations = kPasswordIterations;
+    const bool stored = hashPassword(next, owner.password) && store::auth::savePassword(owner.password) == ESP_OK;
     mbedtls_platform_zeroize(&owner, sizeof(owner));
     if (!stored) {
         change.verdict = Verdict::Failed;
@@ -320,16 +320,17 @@ Change changePassword(std::string_view current, std::string_view next, std::opti
 Rotation rotateTotp() {
     std::lock_guard<std::mutex> lock(s_loginMutex);
     Rotation rotation;
-    store::auth::Owner owner;
-    if (!loadClaim(owner, rotation.verdict)) {
+    if (!store::auth::claimed()) {
+        rotation.verdict = Verdict::Unclaimed;
         return rotation;
     }
-    esp_fill_random(owner.totpSecret.data(), owner.totpSecret.size());
-    const bool stored = store::auth::saveOwner(owner) == ESP_OK;
+    store::auth::TotpSecret secret{};
+    esp_fill_random(secret.data(), secret.size());
+    const bool stored = store::auth::saveTotpSecret(secret) == ESP_OK;
     if (stored) {
-        rotation.otpauth = latchkey_util::otpauthUri(board::name(), owner.totpSecret.data(), owner.totpSecret.size());
+        rotation.otpauth = latchkey_util::otpauthUri(board::name(), secret.data(), secret.size());
     }
-    mbedtls_platform_zeroize(&owner, sizeof(owner));
+    mbedtls_platform_zeroize(secret.data(), secret.size());
     if (!stored) {
         rotation.verdict = Verdict::Failed;
         return rotation;

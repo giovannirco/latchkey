@@ -8,6 +8,7 @@
 #include <vector>
 
 #include "esp_err.h"
+#include "latchkey_util/password_record.h"
 
 namespace store {
 
@@ -46,11 +47,11 @@ esp_err_t erase();
 
 namespace auth {
 
+using TotpSecret = std::array<uint8_t, 20>;
+
 struct Owner {
-    std::array<uint8_t, 16> salt{};
-    uint32_t iterations = 0;
-    std::array<uint8_t, 32> hash{};
-    std::array<uint8_t, 20> totpSecret{};
+    latchkey_util::PasswordRecord password;
+    TotpSecret totpSecret{};
 };
 
 bool claimed();
@@ -58,6 +59,10 @@ bool claimed();
 bool loadOwner(Owner& out);
 
 esp_err_t saveOwner(const Owner& owner);
+
+esp_err_t savePassword(const latchkey_util::PasswordRecord& password);
+
+esp_err_t saveTotpSecret(const TotpSecret& secret);
 
 struct LoginState {
     uint32_t failures = 0;
