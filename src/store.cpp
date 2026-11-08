@@ -21,6 +21,7 @@ constexpr const char* kAuditNamespace = "audit";
 constexpr const char* kLocksNamespace = "locks";
 constexpr const char* kLabelsNamespace = "labels";
 constexpr const char* kSeedsNamespace = "seeds";
+constexpr const char* kWatchNamespace = "watch";
 constexpr const char* kPasswordKey = "password";
 constexpr const char* kTotpKey = "totp";
 constexpr const char* kTlsKey = "tls";
@@ -163,6 +164,8 @@ size_t reservedEntries() {
     needs.lockRecordBytes = sizeof(locks::Record);
     needs.seedTableBytes = latchkey_util::kSeedTableSize;
     needs.spareEntries = kSpareEntries;
+    needs.watchStateBytes = latchkey_util::kWatchStateSize;
+    needs.watchStates = locks::kMaxLocks;
     return latchkey_util::reservedEntries(needs);
 }
 
@@ -573,6 +576,60 @@ esp_err_t erase(const char* mac) {
 }
 
 esp_err_t eraseAll() { return eraseNamespace(kSeedsNamespace); }
+
+}
+
+namespace watch {
+
+esp_err_t load(const char* mac, latchkey_util::WatchState& out) {
+    char key[kLockKeySize];
+    if (!lockKey(mac, key)) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    Handle handle(kWatchNamespace, NVS_READONLY);
+    if (handle.error() == ESP_ERR_NVS_NOT_FOUND) {
+        out = latchkey_util::WatchState{};
+        return ESP_OK;
+    }
+    if (!handle.ok()) {
+        return handle.error();
+    }
+    std::array<uint8_t, latchkey_util::kWatchStateSize> bytes{};
+    size_t length = bytes.size();
+    const esp_err_t error = nvs_get_blob(handle.get(), key, bytes.data(), &length);
+    if (error == ESP_ERR_NVS_NOT_FOUND) {
+        out = latchkey_util::WatchState{};
+        return ESP_OK;
+    }
+    if (error != ESP_OK) {
+        return error;
+    }
+    return latchkey_util::decodeWatchState(bytes.data(), length, out) ? ESP_OK : ESP_ERR_INVALID_CRC;
+}
+
+esp_err_t save(const char* mac, const latchkey_util::WatchState& state) {
+    char key[kLockKeySize];
+    if (!lockKey(mac, key)) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    Handle handle(kWatchNamespace, NVS_READWRITE);
+    if (!handle.ok()) {
+        return handle.error();
+    }
+    const std::array<uint8_t, latchkey_util::kWatchStateSize> bytes = latchkey_util::encodeWatchState(state);
+    const esp_err_t error = nvs_set_blob(handle.get(), key, bytes.data(), bytes.size());
+    return error == ESP_OK ? nvs_commit(handle.get()) : error;
+}
+
+esp_err_t erase(const char* mac) {
+    char key[kLockKeySize];
+    if (!lockKey(mac, key)) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    return eraseKey(kWatchNamespace, key);
+}
+
+esp_err_t eraseAll() { return eraseNamespace(kWatchNamespace); }
 
 }
 
