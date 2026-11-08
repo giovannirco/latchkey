@@ -678,6 +678,82 @@ fieldset.field-group legend {
   gap: 4px 12px;
 }
 
+input.masked {
+  -webkit-text-security: disc;
+  text-security: disc;
+}
+
+fieldset.choices {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 0;
+  border: 0;
+}
+
+fieldset.choices legend {
+  width: 100%;
+  margin-bottom: 4px;
+  padding: 0;
+}
+
+.choice {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 44px;
+  padding: 8px 14px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--surface);
+  font-weight: 400;
+  cursor: pointer;
+}
+
+.choice input {
+  width: 18px;
+  height: 18px;
+  margin: 0;
+  accent-color: var(--accent);
+}
+
+.choice:has(input:checked) {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  font-weight: 600;
+}
+
+.day-toggles {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.day-toggle {
+  min-width: 0;
+  min-height: 44px;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+  font-size: 0.9rem;
+  cursor: pointer;
+}
+
+.day-toggle[aria-pressed='true'] {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: var(--accent-text);
+  font-weight: 600;
+}
+
+.weekly .summary {
+  margin: 0;
+  font-weight: 600;
+}
+
 .switch {
   display: flex;
   align-items: center;
@@ -1152,6 +1228,16 @@ output.secret.long {
 .toast-error {
   background: var(--danger);
   color: var(--danger-text);
+}
+
+.toast-warning {
+  background: var(--warn-soft);
+  color: var(--text);
+  border: 1px solid var(--warn);
+}
+
+.toast-warning > .icon {
+  color: var(--warn);
 }
 
 .toast > .icon {
