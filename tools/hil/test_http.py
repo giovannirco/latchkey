@@ -3,9 +3,11 @@
 confirmation, against a real board through a relay host on its network (relay.py).
 
 Skipped without the hil_relay key in secrets.local.json. The board must be claimed on the real Wi-Fi: the
-suite claims it only when it is not and holds no lock keys. It takes a fresh TOTP secret with auth.rotateTotp
-over the USB console (physical presence) and keeps it in memory only. Nobody may press the board button while
-the confirmation test runs.
+suite claims it only when it is not and holds neither lock keys nor an owner login. A board whose entry in
+secrets.local.json has a totp_uri belongs to its owner: the suite computes codes from that URI and never
+rotates, changes or resets anything there. Any other board gets a fresh TOTP secret from auth.rotateTotp over
+the USB console (physical presence), kept in memory only. Nobody may press the board button while the
+confirmation test runs.
 """
 
 from __future__ import annotations
@@ -126,15 +128,18 @@ def origin(board_settings: dict[str, Any]) -> str:
 @pytest.fixture(scope="module")
 def codes(console: Console, relay: Relay, secrets: dict[str, Any], board_settings: dict[str, Any]) -> Codes:
     info = console.wait_ready()
+    owned = board_settings.get("totp_uri")
     online = info["claimed"] and info["wifi"]["connected"] and info["wifi"]["ssid"] == secrets["wifi_ssid"]
     if not online:
-        if console.call("locks.list")["locks"]:
-            pytest.fail("the board holds lock keys but is not claimed on the real Wi-Fi: claim it by hand first")
+        if owned or console.call("locks.list")["locks"]:
+            pytest.fail("the board is not online on the real Wi-Fi and holds lock keys or the owner's login")
         console.call_and_wait_restart("system.factoryReset")
         claim_secret(console, secrets, board_settings, info["board"])
         console.wait_info(lambda state: state["wifi"]["connected"], 60.0, "wifi to connect")
     console.wait_info(lambda state: state["time"]["synced"], 90.0, "SNTP to sync")
     console.wait_info(lambda state: state["certFingerprint"] is not None, 60.0, "the HTTPS certificate")
+    if owned:
+        return Codes(otpauth_secret(owned, info["board"]))
     rotated = console.call("auth.rotateTotp", timeout=30.0)
     return Codes(otpauth_secret(rotated["otpauth"], info["board"]))
 
@@ -272,18 +277,18 @@ def test_events_arrive_with_the_session(relay: Relay, session: Login, origin: st
             "type": "ws",
             "path": "/api/events",
             "headers": {"Origin": origin, "Cookie": session.cookie},
-            "steps": [rpc_step("system.timezone.set", {"tz": "UTC0"}, session.cookie)],
+            "steps": [rpc_step("locks.rename", {"lock": DOCUMENTATION_MAC, "name": "Bench"}, session.cookie)],
             "until": {"event": "audit.appended"},
             "collect_s": 10,
         }
     )
     assert result.get("status") == 101, result.get("error")
-    assert json_body(result["steps"][0])["result"]["tz"] == "UTC0"
-    appended = [data for data in events_named(result, "audit.appended") if data["method"] == "system.timezone.set"]
+    assert json_body(result["steps"][0])["error"]["code"] == "not_paired"
+    appended = [data for data in events_named(result, "audit.appended") if data["method"] == "locks.rename"]
     assert len(appended) == 1
     entry = appended[0]
     assert set(entry) == AUDIT_KEYS
-    assert (entry["source"], entry["result"]) == ("web", "ok")
+    assert (entry["source"], entry["target"], entry["result"]) == ("web", DOCUMENTATION_MAC, "not_paired")
     assert abs(entry["time"] - started) <= 15
 
 
@@ -375,8 +380,15 @@ def test_revoking_the_own_session_ends_it(relay: Relay, codes: Codes, secrets: d
 
 
 def test_a_password_change_keeps_only_the_callers_session(
-    console: Console, relay: Relay, codes: Codes, session: Login, secrets: dict[str, Any]
+    console: Console,
+    relay: Relay,
+    codes: Codes,
+    session: Login,
+    secrets: dict[str, Any],
+    board_settings: dict[str, Any],
 ) -> None:
+    if board_settings.get("totp_uri"):
+        pytest.skip("the owner holds this board's login: no password change here")
     password = secrets["owner_password"]
     other = login(relay, codes, secrets)
     changed = False
