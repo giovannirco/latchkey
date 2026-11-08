@@ -24,16 +24,17 @@ static WatchState watched() {
     state.clockKnown = true;
     state.clockOffset = kBrasilia;
     state.clockSetUtc = static_cast<uint32_t>(kNow);
+    state.lastUtc = static_cast<uint32_t>(kNow - 1000);
     return state;
 }
 
 static void test_a_watch_state_encodes_byte_for_byte() {
     const std::array<uint8_t, latchkey_util::kWatchStateSize> expected{
-        0x01, 0x03, 0x12, 0x34, 0xff, 0xff, 0xd5, 0xd0, 0x69, 0x0d, 0xfb, 0x60};
+        0x01, 0x03, 0x12, 0x34, 0xff, 0xff, 0xd5, 0xd0, 0x69, 0x0d, 0xfb, 0x60, 0x69, 0x0d, 0xf7, 0x78};
     const std::array<uint8_t, latchkey_util::kWatchStateSize> bytes = latchkey_util::encodeWatchState(watched());
     TEST_ASSERT_EQUAL_UINT8_ARRAY(expected.data(), bytes.data(), bytes.size());
-    const std::array<uint8_t, latchkey_util::kWatchStateSize> blank{0x01, 0x00, 0x00, 0x00, 0x00, 0x00,
-                                                                    0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
+    const std::array<uint8_t, latchkey_util::kWatchStateSize> blank{0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+                                                                    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
     const std::array<uint8_t, latchkey_util::kWatchStateSize> fresh = latchkey_util::encodeWatchState(WatchState{});
     TEST_ASSERT_EQUAL_UINT8_ARRAY(blank.data(), fresh.data(), fresh.size());
 }

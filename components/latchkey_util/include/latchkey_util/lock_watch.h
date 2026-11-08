@@ -7,7 +7,7 @@
 
 namespace latchkey_util {
 
-inline constexpr size_t kWatchStateSize = 12;
+inline constexpr size_t kWatchStateSize = 16;
 
 struct WatchState {
     bool baselined = false;
@@ -15,6 +15,7 @@ struct WatchState {
     bool clockKnown = false;
     int32_t clockOffset = 0;
     uint32_t clockSetUtc = 0;
+    uint32_t lastUtc = 0;
 
     bool operator==(const WatchState&) const = default;
 };

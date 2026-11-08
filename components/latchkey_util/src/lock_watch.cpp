@@ -21,6 +21,7 @@ std::array<uint8_t, kWatchStateSize> encodeWatchState(const WatchState& state) {
     big_endian::write(out.data() + 2, state.cursor, 2);
     big_endian::write(out.data() + 4, static_cast<uint32_t>(state.clockOffset), 4);
     big_endian::write(out.data() + 8, state.clockSetUtc, 4);
+    big_endian::write(out.data() + 12, state.lastUtc, 4);
     return out;
 }
 
@@ -34,6 +35,7 @@ bool decodeWatchState(const uint8_t* data, size_t size, WatchState& out) {
     state.cursor = static_cast<uint16_t>(big_endian::read(data + 2, 2));
     state.clockOffset = static_cast<int32_t>(static_cast<uint32_t>(big_endian::read(data + 4, 4)));
     state.clockSetUtc = static_cast<uint32_t>(big_endian::read(data + 8, 4));
+    state.lastUtc = static_cast<uint32_t>(big_endian::read(data + 12, 4));
     out = state;
     return true;
 }
