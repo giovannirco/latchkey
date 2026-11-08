@@ -42,7 +42,6 @@ constexpr const char* TAG = "system";
 constexpr size_t kMaxSsid = 32;
 constexpr size_t kMinWifiPassword = 8;
 constexpr size_t kMaxWifiPassword = 63;
-constexpr size_t kDefaultAuditPage = 20;
 constexpr uint64_t kRestartDelayUs = 500 * 1000;
 constexpr const char* kWifiParamsMessage = "wifi needs ssid, password, ip, gateway, netmask and dns";
 constexpr size_t kMaxLogTag = 15;
@@ -163,9 +162,9 @@ cJSON* bleJson() {
     cJSON_AddBoolToObject(json, "scanning", stats.scan != ble::ScanMode::Off);
     cJSON_AddBoolToObject(json, "connected", stats.connected);
     cJSON_AddNumberToObject(json, "reports", stats.reports);
-    cJSON_AddNumberToObject(json, "lock_reports", stats.lockReports);
+    cJSON_AddNumberToObject(json, "lockReports", stats.lockReports);
     cJSON_AddNumberToObject(json, "frames", stats.frames);
-    cJSON_AddNumberToObject(json, "bad_crc", stats.badCrc);
+    cJSON_AddNumberToObject(json, "badCrc", stats.badCrc);
     cJSON_AddNumberToObject(json, "dropped", stats.dropped);
     return json;
 }
@@ -176,14 +175,14 @@ rpc::Reply info(const cJSON*, const rpc::Context&) {
     cJSON_AddStringToObject(result, "board", board::name());
     cJSON_AddStringToObject(result, "chip", CONFIG_IDF_TARGET);
     cJSON_AddStringToObject(result, "idf", esp_get_idf_version());
-    cJSON_AddNumberToObject(result, "uptime_ms", static_cast<double>(esp_timer_get_time() / 1000));
+    cJSON_AddNumberToObject(result, "uptime", static_cast<double>(esp_timer_get_time() / 1000000));
     cJSON* heap = cJSON_AddObjectToObject(result, "heap");
     cJSON_AddNumberToObject(heap, "free", esp_get_free_heap_size());
-    cJSON_AddNumberToObject(heap, "min_free", esp_get_minimum_free_heap_size());
-    cJSON_AddNumberToObject(heap, "largest_block", heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL));
-    cJSON* stacks = cJSON_AddObjectToObject(result, "stack_free");
-    cJSON_AddNumberToObject(stacks, "lock_worker", lock_manager::workerStackFree());
-    cJSON_AddNumberToObject(stacks, "nimble_host", stackFree("nimble_host"));
+    cJSON_AddNumberToObject(heap, "minFree", esp_get_minimum_free_heap_size());
+    cJSON_AddNumberToObject(heap, "largestBlock", heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL));
+    cJSON* stacks = cJSON_AddObjectToObject(result, "stackFree");
+    cJSON_AddNumberToObject(stacks, "lockWorker", lock_manager::workerStackFree());
+    cJSON_AddNumberToObject(stacks, "nimbleHost", stackFree("nimble_host"));
     cJSON_AddNumberToObject(stacks, "console", stackFree("console"));
     cJSON_AddItemToObject(result, "ble", bleJson());
     store::Usage usage;
@@ -192,23 +191,24 @@ rpc::Reply info(const cJSON*, const rpc::Context&) {
         return rpc::fail("internal", "cannot read NVS usage");
     }
     cJSON* nvs = cJSON_AddObjectToObject(result, "nvs");
-    cJSON_AddNumberToObject(nvs, "used_entries", usage.usedEntries);
-    cJSON_AddNumberToObject(nvs, "available_entries", usage.availableEntries);
-    cJSON_AddNumberToObject(nvs, "total_entries", usage.totalEntries);
+    cJSON_AddNumberToObject(nvs, "usedEntries", usage.usedEntries);
+    cJSON_AddNumberToObject(nvs, "availableEntries", usage.availableEntries);
+    cJSON_AddNumberToObject(nvs, "totalEntries", usage.totalEntries);
     cJSON_AddBoolToObject(result, "claimed", store::auth::claimed());
     cJSON_AddItemToObject(result, "wifi", wifiJson());
     const bool synced = wallclock::synced();
-    cJSON_AddBoolToObject(result, "time_synced", synced);
+    cJSON* time = cJSON_AddObjectToObject(result, "time");
     cJSON_AddStringToObject(result, "timezone", wallclock::timezone().c_str());
     if (synced) {
         const int64_t utc = wallclock::utcSeconds();
-        cJSON_AddNumberToObject(result, "utc", static_cast<double>(utc));
+        cJSON_AddNumberToObject(time, "utc", static_cast<double>(utc));
         cJSON_AddStringToObject(result, "localTime",
                                 latchkey_util::localTimestamp(utc, wallclock::utcOffsetAt(utc)).c_str());
     } else {
-        cJSON_AddNullToObject(result, "utc");
+        cJSON_AddNullToObject(time, "utc");
         cJSON_AddNullToObject(result, "localTime");
     }
+    cJSON_AddBoolToObject(time, "synced", synced);
     cJSON* button = cJSON_AddObjectToObject(result, "button");
     cJSON_AddNumberToObject(button, "gpio", board::buttonGpio());
     cJSON_AddBoolToObject(button, "pressed", board::buttonPressed());
@@ -363,7 +363,7 @@ rpc::Reply auditList(const cJSON* params, const rpc::Context&) {
     if (beforeItem != nullptr && !cJSON_IsNull(beforeItem) && !readWhole(beforeItem, 1, UINT32_MAX, before)) {
         return rpc::fail("invalid_argument", "before must be a sequence number");
     }
-    double limit = kDefaultAuditPage;
+    double limit = audit::kMaxPage;
     const cJSON* limitItem = member(params, "limit");
     if (limitItem != nullptr && !readWhole(limitItem, 1, audit::kMaxPage, limit)) {
         return rpc::fail("invalid_argument", "limit must be 1 to 50");
@@ -374,6 +374,7 @@ rpc::Reply auditList(const cJSON* params, const rpc::Context&) {
     for (const audit::StoredEntry& stored : page.entries) {
         cJSON_AddItemToArray(entries, audit::toJson(stored));
     }
+    cJSON_AddBoolToObject(result, "more", page.more);
     if (page.more) {
         cJSON_AddNumberToObject(result, "next", page.entries.back().seq);
     } else {

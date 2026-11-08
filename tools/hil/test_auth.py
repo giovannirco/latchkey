@@ -51,7 +51,7 @@ def test_login_needs_the_password_and_a_fresh_code(console: Console, owner: byte
     assert outcome(login(console, WRONG_PASSWORD, following)) == "unauthorized"
     assert outcome(login(console, password, following)) == {"ok": True}
     entries = console.call("audit.list", {"limit": 5})["entries"]
-    assert [(entry["method"], entry["origin"], entry["result"]) for entry in reversed(entries)] == [
+    assert [(entry["method"], entry["source"], entry["result"]) for entry in reversed(entries)] == [
         ("auth.login", "serial", "ok"),
         ("auth.login", "serial", "unauthorized"),
         ("auth.login", "serial", "unauthorized"),
@@ -80,7 +80,7 @@ def test_malformed_logins_are_refused_without_counting(console: Console, owner: 
 
 
 def test_codes_wait_for_the_clock(console: Console, owner: bytes, secrets: dict[str, Any]) -> None:
-    assert console.call("system.info")["time_synced"] is False
+    assert console.call("system.info")["time"]["synced"] is False
     password = secrets["owner_password"]
     assert outcome(login(console, password, totp_code(owner, time.time()))) == "time_unsynced"
     now = set_clock(console)

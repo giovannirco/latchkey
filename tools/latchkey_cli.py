@@ -153,7 +153,7 @@ class Console:
         deadline = started + 60.0
         while time.monotonic() < deadline:
             info = self.wait_ready(timeout=max(1.0, deadline - time.monotonic()))
-            if info["uptime_ms"] < (time.monotonic() - started) * 1000.0:
+            if info["uptime"] < time.monotonic() - started:
                 return info
             time.sleep(0.2)
         raise ConsoleTimeout(f"{method} did not restart the board within 60 s")

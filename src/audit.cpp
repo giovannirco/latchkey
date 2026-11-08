@@ -100,11 +100,11 @@ cJSON* toJson(const StoredEntry& stored) {
     cJSON* json = cJSON_CreateObject();
     cJSON_AddNumberToObject(json, "seq", stored.seq);
     if (stored.entry.utc == 0) {
-        cJSON_AddNullToObject(json, "utc");
+        cJSON_AddNullToObject(json, "time");
     } else {
-        cJSON_AddNumberToObject(json, "utc", stored.entry.utc);
+        cJSON_AddNumberToObject(json, "time", stored.entry.utc);
     }
-    cJSON_AddStringToObject(json, "origin", rpc::toString(stored.entry.origin));
+    cJSON_AddStringToObject(json, "source", rpc::toString(stored.entry.origin));
     cJSON_AddStringToObject(json, "method", stored.entry.method.c_str());
     cJSON_AddStringToObject(json, "target", stored.entry.target.c_str());
     cJSON_AddStringToObject(json, "result", stored.entry.result.c_str());

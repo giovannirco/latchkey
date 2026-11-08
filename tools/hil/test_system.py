@@ -35,6 +35,7 @@ def audit_entries(console: Console) -> list[dict[str, Any]]:
             params["before"] = before
         page = console.call("audit.list", params)
         entries += page["entries"]
+        assert page["more"] is (page["next"] is not None)
         before = page["next"]
         if before is None:
             return entries
@@ -48,7 +49,7 @@ def assert_local_time(info: dict[str, Any], tz: str, offset: int) -> None:
     assert info["timezone"] == tz
     local = datetime.fromisoformat(info["localTime"])
     assert local.utcoffset().total_seconds() == offset
-    assert abs(local.timestamp() - info["utc"]) <= CLOCK_TOLERANCE_S
+    assert abs(local.timestamp() - info["time"]["utc"]) <= CLOCK_TOLERANCE_S
 
 
 def test_info_reports_identity(console: Console, fresh: list[str]) -> None:
@@ -59,14 +60,13 @@ def test_info_reports_identity(console: Console, fresh: list[str]) -> None:
     assert info["firmware"] == "0.1.0"
     assert re.fullmatch(r"\d+\.\d+\.\d+", info["idf"])
     assert info["heap"]["free"] > 50_000
-    assert 0 < info["heap"]["min_free"] <= info["heap"]["free"]
-    assert 0 < info["heap"]["largest_block"] <= info["heap"]["free"]
-    assert info["uptime_ms"] > 0
+    assert 0 < info["heap"]["minFree"] <= info["heap"]["free"]
+    assert 0 < info["heap"]["largestBlock"] <= info["heap"]["free"]
+    assert isinstance(info["uptime"], int) and info["uptime"] >= 0
     assert info["claimed"] is False
     assert info["wifi"] == {"configured": False, "connected": False, "ssid": None, "ip": None, "rssi": None}
     assert info["button"]["gpio"] == button
-    assert info["time_synced"] is False
-    assert info["utc"] is None
+    assert info["time"] == {"utc": None, "synced": False}
     assert info["timezone"] == "UTC0"
     assert info["localTime"] is None
 
@@ -75,18 +75,18 @@ def test_bluetooth_comes_up_idle(console: Console, fresh: list[str]) -> None:
     info = console.wait_info(lambda state: state["ble"]["ready"], 15.0, "the Bluetooth host to sync")
     assert info["ble"]["connected"] is False
     assert info["ble"]["scanning"] is False
-    assert info["ble"]["bad_crc"] == 0
+    assert info["ble"]["badCrc"] == 0
     assert console.call("locks.list") == {"locks": []}
 
 
 def test_factory_reset_takes_force_as_a_boolean(console: Console, fresh: list[str]) -> None:
     started = time.monotonic()
-    uptime = console.call("system.info")["uptime_ms"]
+    uptime = console.call("system.info")["uptime"]
     assert error_code(console, "system.factoryReset", {"force": "yes"}) == "invalid_argument"
     assert error_code(console, "system.factoryReset", {"force": 1}) == "invalid_argument"
-    elapsed_ms = (time.monotonic() - started) * 1000.0
-    grown = console.call("system.info")["uptime_ms"] - uptime
-    assert grown >= elapsed_ms - 1000.0, "the board restarted"
+    elapsed = time.monotonic() - started
+    grown = console.call("system.info")["uptime"] - uptime
+    assert grown >= elapsed - 2.0, "the board restarted"
 
 
 def test_log_lines_start_with_hash(fresh: list[str]) -> None:
@@ -113,15 +113,15 @@ def test_rejects_malformed_requests(console: Console, fresh: list[str]) -> None:
 
 def test_rejects_deep_nesting_and_keeps_answering(console: Console) -> None:
     started = time.monotonic()
-    uptime = console.call("system.info")["uptime_ms"]
+    uptime = console.call("system.info")["uptime"]
     assert console.request_raw("[" * 1500)["error"]["code"] == "bad_request"
     nine_deep = '{"id":null,"method":"system.info","params":' + '{"a":' * 7 + "{}" + "}" * 7 + "}"
     assert console.request_raw(nine_deep)["error"]["code"] == "bad_request"
     eight_deep = '{"id":null,"method":"system.info","params":' + '{"a":' * 6 + "{}" + "}" * 6 + "}"
     assert console.request_raw(eight_deep)["result"]["chip"] in BOARDS
-    elapsed_ms = (time.monotonic() - started) * 1000.0
-    grown = console.call("system.info")["uptime_ms"] - uptime
-    assert grown >= elapsed_ms - 1000.0, "the board restarted"
+    elapsed = time.monotonic() - started
+    grown = console.call("system.info")["uptime"] - uptime
+    assert grown >= elapsed - 2.0, "the board restarted"
 
 
 def test_string_ids_are_echoed(console: Console) -> None:
@@ -130,14 +130,14 @@ def test_string_ids_are_echoed(console: Console) -> None:
 
 
 def test_time_set_marks_clock_synced(console: Console, fresh: list[str]) -> None:
-    assert console.call("system.info")["time_synced"] is False
+    assert console.call("system.info")["time"]["synced"] is False
     assert error_code(console, "system.time.set", {"utc": MIN_UTC - 1}) == "invalid_argument"
     assert error_code(console, "system.time.set", {"utc": 1.5e9 + 0.5}) == "invalid_argument"
     now = int(time.time())
     assert console.call("system.time.set", {"utc": now}) == {}
     info = console.call("system.info")
-    assert info["time_synced"] is True
-    assert abs(info["utc"] - now) <= 5
+    assert info["time"]["synced"] is True
+    assert abs(info["time"]["utc"] - now) <= 5
 
 
 def test_setup_returns_otpauth_once(
@@ -198,11 +198,11 @@ def test_audit_lists_actions_without_secrets(
         ("system.setup", "ok"),
         ("system.setup", "already_claimed"),
     ]
-    assert {entry["origin"] for entry in entries} == {"serial"}
-    assert all(set(entry) == {"seq", "utc", "origin", "method", "target", "result"} for entry in entries)
+    assert {entry["source"] for entry in entries} == {"serial"}
+    assert all(set(entry) == {"seq", "time", "source", "method", "target", "result"} for entry in entries)
     seqs = [entry["seq"] for entry in entries]
     assert seqs == sorted(seqs, reverse=True)
-    assert entries[0]["utc"] >= MIN_UTC
+    assert entries[0]["time"] >= MIN_UTC
     clean = holds_no_secret(json.dumps(entries), secrets)
     assert clean, "an audit entry contains a secret"
     appended = [event["data"] for event in console.events if event.get("event") == "audit.appended"]
@@ -228,8 +228,8 @@ def test_joins_wifi_with_static_ip_after_reboot(
 
 
 def test_sntp_syncs_after_joining(console: Console, online: dict[str, Any]) -> None:
-    info = console.wait_info(lambda state: state["time_synced"], 60.0, "SNTP to sync")
-    assert abs(info["utc"] - time.time()) <= SYNC_TOLERANCE_S
+    info = console.wait_info(lambda state: state["time"]["synced"], 60.0, "SNTP to sync")
+    assert abs(info["time"]["utc"] - time.time()) <= SYNC_TOLERANCE_S
 
 
 def test_wifi_set_validates_and_reconnects(
@@ -257,10 +257,12 @@ def test_audit_keeps_the_last_200_entries(console: Console, fresh: list[str]) ->
     first_page = console.call("audit.list", {"limit": 3})
     assert [entry["seq"] for entry in first_page["entries"]] == seqs[:3]
     assert first_page["next"] == seqs[2]
+    assert first_page["more"] is True
+    assert [entry["seq"] for entry in console.call("audit.list")["entries"]] == seqs[:50]
     assert error_code(console, "audit.list", {"limit": 0}) == "invalid_argument"
     assert error_code(console, "audit.list", {"limit": 51}) == "invalid_argument"
     nvs = console.call("system.info")["nvs"]
-    assert nvs["available_entries"] >= NVS_HEADROOM_ENTRIES
+    assert nvs["availableEntries"] >= NVS_HEADROOM_ENTRIES
 
 
 def test_factory_reset_unclaims_and_a_new_claim_gets_a_new_secret(
