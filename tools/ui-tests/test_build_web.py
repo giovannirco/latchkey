@@ -141,5 +141,12 @@ class MainTest(unittest.TestCase):
             self.assertFalse(target.exists())
 
 
+class RealWebTest(unittest.TestCase):
+    def test_repository_ui_builds_within_budget(self):
+        web = TOOLS.parent / "web"
+        data = build_web.gzip_bundle(web)
+        self.assertLessEqual(len(data), build_web.DEFAULT_BUDGET)
+
+
 if __name__ == "__main__":
     unittest.main()
