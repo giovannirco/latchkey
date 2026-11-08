@@ -5,6 +5,10 @@ Notable changes to Latchkey, in the format of [Keep a Changelog](https://keepach
 
 ## [Unreleased]
 
+### Added
+
+- Home Assistant over MQTT, off until configured with `mqtt.set` (`mqtt.get` never returns the password): plain MQTT over TCP with a retained availability topic and last will, retained discovery configs for each stored lock (lock, battery, last event, Bluetooth link, unlock alert), state, battery and last event after each lock event, a status read after boot and every 6 hours, `LOCK` and `UNLOCK` through the web job queue, audited with the source `mqtt`, retained commands ignored, the configs of a forgotten lock removed, and reconnects that wait from 1 s up to 2 min. `system.info.stackFree` reports `mqtt` and `mqttClient`.
+
 ## [0.1.0] - 2026-11-08
 
 ### Added

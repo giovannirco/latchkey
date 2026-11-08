@@ -20,6 +20,7 @@ Works today:
 - TTLock protocol core (`components/ttlock`), tested on the host: pairing, lock and unlock, status and battery, device info and feature bits, time sync, passcodes, IC cards and fingerprints with validity periods and weekly windows, auto-lock, passage mode, sound, remote unlock, the reset button, privacy lock and tamper alert switches, the passcode display, the operation log and factory reset. A command the lock does not report in its feature bits answers `unsupported` without touching the radio.
 - Firmware for the classic ESP32 and the ESP32-S3: a JSON-lines console over USB, claiming the board, Wi-Fi with a static address, SNTP time with a configurable time zone, an audit log, the owner login (password, TOTP code and rate limit) with web sessions, and HTTPS with a certificate the board makes itself: the web UI, the JSON API behind a session cookie, live events over a WebSocket, and a press of the board's button before destructive actions from the web.
 - The owner web UI (`web/`), served by the board and tested against a mock of the board API.
+- Home Assistant over MQTT, off until configured: each lock appears as a device with a lock entity, battery, last event, Bluetooth link and an unlock alert, through MQTT discovery, and LOCK and UNLOCK from Home Assistant run through the same queue as the web.
 
 In progress: the Bluetooth link and lock manager on the board, over-the-air updates, lock hardening and the encrypted key backup.
 
@@ -32,6 +33,7 @@ In progress: the Bluetooth link and lock manager on the board, over-the-air upda
 - An audit log of every action, never containing secrets.
 - Hardening (in progress): a random admin passcode on the lock, unknown passcodes removed, the lock's reset button disabled only after an encrypted backup of its keys.
 - No cloud: the board only reaches the internet for DNS and SNTP.
+- MQTT, when you turn it on, is plain MQTT over TCP to a broker you choose: whoever may publish to a lock's command topic there can lock and unlock it.
 - Profile P1: lock keys sit in plaintext NVS, so whoever reads the flash of a stolen board can use them. Flash encryption is possible but not the default.
 
 [SECURITY.md](SECURITY.md) has the full model and how to report a vulnerability; [docs/protocol.md](docs/protocol.md) has the protocol notes and its limits.
@@ -153,6 +155,31 @@ npm pack esp-web-tools@<version> && tar -xzf esp-web-tools-<version>.tgz
 for f in package/dist/web/*.js; do
   printf '"https://unpkg.com/esp-web-tools@<version>/dist/web/%s": "sha384-%s",\n' "${f##*/}" "$(openssl dgst -sha384 -binary "$f" | openssl base64 -A)"
 done
+```
+
+## Home Assistant over MQTT
+
+MQTT is off until you configure it, on the System page of the web UI or with `mqtt.set {"enabled", "host", "port"?, "username"?, "password"?, "prefix"?}`. The host is a name or an IPv4 address, the port defaults to 1883 and the discovery prefix to `homeassistant`; fields left out take those defaults, except the password, which is kept when left out and cleared by `""`. `mqtt.get` answers `{enabled, host, port, username, prefix, passwordSet}` and never the password. The board connects over plain TCP (no TLS), as client `<board>`, retries with a wait that doubles from 1 s to 2 min, and reconnects at once after a change.
+
+Topics, with `<board>` = `latchkey-` and the last three bytes of the board's Wi-Fi MAC address, and `<lock>` = the lock's MAC address as 12 lowercase hex digits:
+
+| Topic | Payload |
+|---|---|
+| `latchkey/<board>/availability` | `online` when connected, `offline` as the last will and when MQTT is turned off; retained |
+| `latchkey/<board>/<lock>/state` | `LOCKED` or `UNLOCKED`; retained |
+| `latchkey/<board>/<lock>/battery` | battery level, 0 to 100; retained |
+| `latchkey/<board>/<lock>/last_event` | the last lock or unlock, as the web UI words it (`Unlocked from the app`); retained |
+| `latchkey/<board>/<lock>/link` | `ON` while the board has heard the lock within the last 2 minutes, else `OFF`; retained |
+| `latchkey/<board>/<lock>/alert` | `{"event_type": "unexpected_unlock", "method", "time"}` for each `lock.alert` event (raised by the operation-log check, in progress); not retained |
+| `latchkey/<board>/<lock>/set` | commands from Home Assistant: `LOCK` or `UNLOCK` |
+
+- On each connection the board publishes, retained, one discovery config per entity of every lock it holds, under `<prefix>/<component>/<board>/<object>/config`: a `lock`, a battery `sensor`, a last-event `sensor`, a link `binary_sensor` and an unlock-alert `event`, grouped as one device per lock (its name, model and firmware). A lock that is renamed is announced again; one that is forgotten or reset loses its configs and state topics (empty retained messages), and so does any config under the board's node id for a lock the board does not hold, when the board sees it.
+- `LOCK` and `UNLOCK` run as web jobs do, through the same queue and without a button press, and are audited with the source `mqtt`. Any other payload is ignored and logged, and so is a retained command: the broker hands a retained message to every new subscription, so a retained `UNLOCK` would otherwise open the door each time the board reconnects.
+- The state and the battery follow every `lock.state` event, and the last event every `lock.event`. A paired lock's adverts carry no lock state, so the board also reads each lock's status once MQTT is connected after a boot, then every 6 hours, or 15 minutes after a read the lock did not answer; any other job that brings a fresh battery level postpones that read. A status read is one Bluetooth connection, up to the 30 s a paired lock may take to advertise.
+- `test_mqtt.py` runs against a board and the broker of the optional `mqtt` key in `secrets.local.json` (`{host, port, username, password}`; it skips without it) with paho-mqtt 2.1.0, and uses its own discovery prefix, `latchkey_hil`, so Home Assistant does not pick its entities up. On a board that holds the lock it unlocks and locks the lock from MQTT. At the end it turns MQTT off, clears the retained messages it caused and restores the board's settings.
+
+```sh
+uv run -q --no-project --python 3.14 --with pytest==9.1.1 --with pyserial==3.5 --with paho-mqtt==2.1.0 pytest tools/hil/test_mqtt.py --port <port>
 ```
 
 ## Contributing

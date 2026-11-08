@@ -129,6 +129,7 @@ Observed on that lock:
 
 - A factory-fresh lock advertises only after a keypad touch, for roughly 10 to 15 s; pairing has to start inside that window.
 - Once paired, an untouched lock advertises in bursts: in one minute it was seen at 2 s and 9 s, then not for 29 s, then every 4 to 5 s. A command can wait up to about 30 s for the lock to become reachable.
+- Once paired, its adverts carry the dormant flag (`0x10`), so they never say whether it is locked: after a reboot the board knows the state only after a command, a status read or a push while connected. Their battery byte still matches the status reply (57 % in both).
 - Its Bluetooth address is public (address type 0).
 
 
