@@ -1239,7 +1239,16 @@ rpc::Reply syncTime(const std::string& mac) { return submitFor(Kind::TimeSync, m
 
 rpc::Reply factoryReset(const std::string& mac) { return submitFor(Kind::FactoryReset, mac); }
 
-esp_err_t storedCount(size_t& out) { return store::locks::count(out); }
+esp_err_t storedCount(size_t& out) {
+    size_t entries = 0;
+    const esp_err_t error = store::locks::count(entries);
+    if (error != ESP_OK) {
+        return error;
+    }
+    std::lock_guard<std::mutex> guard(s_mutex);
+    out = std::max(entries, s_locks.size());
+    return ESP_OK;
+}
 
 esp_err_t eraseAll() {
     std::lock_guard<std::mutex> guard(s_mutex);
