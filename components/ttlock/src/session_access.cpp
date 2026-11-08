@@ -146,6 +146,15 @@ Status Session::setAdminPasscode(const std::string& code) {
     return status;
 }
 
+Status Session::adminPasscodeGet(std::string& out) {
+    Bytes data;
+    const Status status = adminRequest(Feature::GetAdminCode, command::kGetAdminCode, noPayload(), data);
+    if (status != Status::Ok) {
+        return status;
+    }
+    return parseAdminCode(data, out) ? Status::Ok : Status::BadResponse;
+}
+
 Status Session::fingerprintList(std::vector<Credential>& out) {
     const Status status = beginAdmin(Feature::FingerPrint);
     if (status != Status::Ok) {

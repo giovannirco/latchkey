@@ -88,6 +88,7 @@ enum class DeviceInfoItem : uint8_t {
 Bytes buildReadDeviceInfo(DeviceInfoItem item);
 std::string parseDeviceInfoString(const Bytes& data);
 Bytes buildSetAdminPasscode(const std::string& digits);
+bool parseAdminCode(const Bytes& data, std::string& out);
 
 Bytes buildInitPasswords(uint8_t yearOfCentury, const std::array<CodeSecret, kCodeSecretCount>& seeds);
 

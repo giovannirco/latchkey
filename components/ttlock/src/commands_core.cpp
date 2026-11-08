@@ -1,9 +1,13 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Ported from kind3r/ttlock-sdk-js (GPL-3.0) src/api/Commands: AESKey, AddAdmin, CalibrationTime, CheckAdmin,
-// CheckRandom, CheckUserTime, Unlock, Lock, SearchBicycleStatus, ReadDeviceInfo, SetAdminKeyboardPwd and
-// InitPasswords. The feature-word stitching and the sum wrap follow roquerodrigo/ttlock-ble (MIT).
+// CheckRandom, CheckUserTime, Unlock, Lock, SearchBicycleStatus, ReadDeviceInfo, SetAdminKeyboardPwd, GetAdminCode
+// (its declared length, not its slice, which drops two bytes) and InitPasswords. The feature-word stitching and the
+// sum wrap follow roquerodrigo/ttlock-ble (MIT).
 #include <algorithm>
+#include <cstddef>
 #include <cstring>
+#include <string>
+#include <utility>
 
 #include "ttlock/commands.h"
 #include "wire_format.h"
@@ -17,6 +21,8 @@ constexpr size_t kAesKeySize = 16;
 constexpr size_t kFeatureWordSize = 4;
 constexpr size_t kFeatureWords = 2;
 constexpr size_t kOperationRecordSize = 15;
+constexpr size_t kAdminCodeHeaderSize = 2;
+constexpr size_t kAdminCodeLengthIndex = 1;
 constexpr int64_t kSecondsPerDay = 86400;
 constexpr LockTime kUserTimeStart{2000, 1, 31, 14, 0, 0};
 constexpr LockTime kUserTimeEnd{2099, 11, 30, 14, 0, 0};
@@ -210,6 +216,25 @@ Bytes buildSetAdminPasscode(const std::string& digits) {
         out.push_back(static_cast<uint8_t>(digit - '0'));
     }
     return out;
+}
+
+bool parseAdminCode(const Bytes& data, std::string& out) {
+    if (data.size() < kAdminCodeHeaderSize) {
+        return false;
+    }
+    const size_t length = data[kAdminCodeLengthIndex];
+    if (data.size() < kAdminCodeHeaderSize + length) {
+        return false;
+    }
+    const auto begin = data.begin() + kAdminCodeHeaderSize;
+    std::string code(begin, begin + static_cast<std::ptrdiff_t>(length));
+    for (char digit : code) {
+        if (digit < '0' || digit > '9') {
+            return false;
+        }
+    }
+    out = std::move(code);
+    return true;
 }
 
 Bytes buildInitPasswords(uint8_t yearOfCentury, const std::array<CodeSecret, kCodeSecretCount>& seeds) {

@@ -10,6 +10,7 @@
 #include <vector>
 
 #include "../fake_lock/fake_lock.h"
+#include "../vectors/kind3r_admin_code_vectors.h"
 #include "../vectors/kind3r_vectors.h"
 #include "ttlock/aes.h"
 #include "ttlock/codec_xor.h"
@@ -36,6 +37,7 @@ using ttlock::Feature;
 using ttlock::Status;
 namespace cmd = ttlock::command;
 namespace k3 = vectors::kind3r;
+namespace k3a = vectors::kind3r_admin;
 
 static const AesKey kDefault = ttlock::kDefaultAesKey;
 static const AesKey kLockKey{0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77,
@@ -993,6 +995,8 @@ static void test_methods_before_attach_return_not_paired_without_traffic() {
     assertStatus(Status::NotPaired, rig.session.fetchLog(ttlock::kLogSinceLastRead, logs));
     ttlock::LogPage page;
     assertStatus(Status::NotPaired, rig.session.fetchLogPage(ttlock::kLogSinceLastRead, page));
+    std::string adminCode;
+    assertStatus(Status::NotPaired, rig.session.adminPasscodeGet(adminCode));
     assertStatus(Status::NotPaired, rig.session.factoryReset());
     assertStatus(Status::NotPaired, rig.session.receiveEvent(10));
     bool visible = false;
@@ -1347,6 +1351,46 @@ static void test_fetch_log_page_from_the_unread_cursor_and_its_failures() {
     TEST_ASSERT_EQUAL_HEX8(0x09, rig.session.lockErrorCode());
     assertStatus(Status::BadResponse, rig.session.fetchLogPage(3, page));
     assertCommands({cmd::kGetOperateLog, cmd::kGetOperateLog, cmd::kGetOperateLog}, rig.lock);
+}
+
+static void test_admin_passcode_get_logs_in_and_reads_get_admin_code() {
+    Rig rig;
+    attach(rig);
+    expectAdminLogin(rig.lock);
+    rig.lock.expect(cmd::kGetAdminCode, kLockKey,
+                    {success(kLockKey, cmd::kGetAdminCode,
+                             vectorBytes(k3a::kAdminCodeTrailed, sizeof(k3a::kAdminCodeTrailed)))});
+    std::string code;
+    assertStatus(Status::Ok, rig.session.adminPasscodeGet(code));
+    TEST_ASSERT_EQUAL_STRING(k3a::kAdminCodeTrailedKind3r, code.c_str());
+    assertCommands({cmd::kCheckAdmin, cmd::kCheckRandom, cmd::kGetAdminCode}, rig.lock);
+    TEST_ASSERT_EQUAL_UINT(k3::kGetAdminCodePayloadSize, rig.lock.requests()[2].payload.size());
+    TEST_ASSERT_EQUAL_STRING("3141592", rig.session.keys().adminPasscode.c_str());
+
+    Rig none;
+    attach(none);
+    expectAdminLogin(none.lock);
+    const Bytes empty = vectorBytes(k3a::kAdminCodeEmpty, sizeof(k3a::kAdminCodeEmpty));
+    none.lock.expect(cmd::kGetAdminCode, kLockKey, {success(kLockKey, cmd::kGetAdminCode, empty)});
+    code = "unchanged";
+    assertStatus(Status::Ok, none.session.adminPasscodeGet(code));
+    TEST_ASSERT_TRUE(code.empty());
+}
+
+static void test_admin_passcode_get_failures() {
+    Rig rig;
+    attach(rig);
+    expectAdminLogin(rig.lock);
+    rig.lock.expect(cmd::kGetAdminCode, kLockKey, {failure(kLockKey, cmd::kGetAdminCode, 0x02)});
+    expectAdminLogin(rig.lock);
+    const Bytes truncated{0x5A, 0x08, '1', '2'};
+    rig.lock.expect(cmd::kGetAdminCode, kLockKey, {success(kLockKey, cmd::kGetAdminCode, truncated)});
+    std::string code = "unchanged";
+    assertStatus(Status::LockError, rig.session.adminPasscodeGet(code));
+    TEST_ASSERT_EQUAL_HEX8(0x02, rig.session.lockErrorCode());
+    assertStatus(Status::BadResponse, rig.session.adminPasscodeGet(code));
+    TEST_ASSERT_EQUAL_STRING("unchanged", code.c_str());
+    TEST_ASSERT_TRUE(rig.lock.scriptDone());
 }
 
 static void test_factory_reset_logs_in_accepts_an_empty_reply_and_detaches() {
@@ -1726,6 +1770,9 @@ static void test_each_new_command_is_gated_on_its_feature_bits() {
     assertGatedOn(Feature::PrivacyLock, [](ttlock::Session& session) { return session.privacyLockSet(true); });
     assertGatedOn(Feature::TamperAlert, [&flag](ttlock::Session& session) { return session.tamperAlertGet(flag); });
     assertGatedOn(Feature::TamperAlert, [](ttlock::Session& session) { return session.tamperAlertSet(true); });
+    std::string adminCode;
+    assertGatedOn(Feature::GetAdminCode,
+                  [&adminCode](ttlock::Session& session) { return session.adminPasscodeGet(adminCode); });
     for (Feature feature : {Feature::Ic, Feature::CyclicIcOrFingerPrint}) {
         assertGatedOn(feature,
                       [](ttlock::Session& session) { return session.cardAddCycle(305419896ULL, kOfficeHours); });
@@ -2065,6 +2112,8 @@ int main() {
     RUN_TEST(test_fetch_log_stops_when_the_cursor_repeats_or_reaches_zero);
     RUN_TEST(test_fetch_log_page_reads_one_page_from_the_cursor_like_kind3r);
     RUN_TEST(test_fetch_log_page_from_the_unread_cursor_and_its_failures);
+    RUN_TEST(test_admin_passcode_get_logs_in_and_reads_get_admin_code);
+    RUN_TEST(test_admin_passcode_get_failures);
     RUN_TEST(test_factory_reset_logs_in_accepts_an_empty_reply_and_detaches);
     RUN_TEST(test_factory_reset_maps_a_refusal_to_lock_error_and_stays_attached);
     RUN_TEST(test_sync_time_logs_in_and_sends_local_wall_time);

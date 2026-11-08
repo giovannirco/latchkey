@@ -78,6 +78,7 @@ public:
     Status passcodeDelete(PasscodeType type, const std::string& code);
     Status passcodeClear();
     Status setAdminPasscode(const std::string& code);
+    Status adminPasscodeGet(std::string& out);
 
     Status fingerprintList(std::vector<Credential>& out);
     Status fingerprintEnroll(const Validity& validity, const EnrollCallback& progress, uint64_t& id);
