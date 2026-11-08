@@ -132,7 +132,7 @@ Status Session::fetchAesKey() {
         return status;
     }
     AesKey key{};
-    if (!parseAesKey(data, key)) {
+    if (!parseAesKey(data, key) || key == kDefaultAesKey) {
         return Status::BadResponse;
     }
     keys_.aesKey = key;

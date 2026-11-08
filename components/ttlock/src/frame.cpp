@@ -18,6 +18,10 @@ constexpr uint8_t kCr = 0x0D;
 constexpr uint8_t kLf = 0x0A;
 constexpr uint8_t kFirstV3ProtocolType = 5;
 constexpr size_t kProtocolTypeIndex = 2;
+constexpr size_t kProtocolVersionIndex = 3;
+constexpr size_t kSceneIndex = 4;
+constexpr size_t kGroupIdIndex = 5;
+constexpr size_t kOrgIdIndex = 7;
 constexpr size_t kCommandIndex = 9;
 constexpr size_t kLengthIndex = 11;
 constexpr size_t kHeaderSize = 12;
@@ -41,6 +45,15 @@ size_t declaredWireSize(const Bytes& bytes) {
         return 0;
     }
     return kHeaderSize + bytes[kLengthIndex] + kCrcSize + kCrlfSize;
+}
+
+uint16_t readBe16(const Bytes& bytes, size_t index) {
+    return static_cast<uint16_t>(bytes[index] << 8 | bytes[index + 1]);
+}
+
+LockVersion headerVersion(const Bytes& raw) {
+    return LockVersion{raw[kProtocolTypeIndex], raw[kProtocolVersionIndex], raw[kSceneIndex],
+                       readBe16(raw, kGroupIdIndex), readBe16(raw, kOrgIdIndex)};
 }
 
 }
@@ -87,6 +100,7 @@ Status decodeFrame(const Bytes& rawWithoutCrlf, const AesKey& key, DecodedFrame&
     DecodedFrame decoded;
     decoded.command = raw[kCommandIndex];
     decoded.crcOk = crc8(raw.data(), raw.size() - kCrcSize) == raw.back();
+    decoded.version = headerVersion(raw);
     if (length > 0) {
         const Bytes cipher(raw.data() + kHeaderSize, raw.data() + kHeaderSize + length);
         if (!aesDecrypt(cipher, key, decoded.payload)) {

@@ -101,6 +101,14 @@ static void test_encode_rejects_payload_over_the_limit() {
     TEST_ASSERT_TRUE(ttlock::encodeFrame(version, 0x03, Bytes(240), ttlock::kDefaultAesKey).empty());
 }
 
+static void assertVersion(const ttlock::LockVersion& expected, const ttlock::LockVersion& actual, const char* name) {
+    TEST_ASSERT_EQUAL_UINT8_MESSAGE(expected.protocolType, actual.protocolType, name);
+    TEST_ASSERT_EQUAL_UINT8_MESSAGE(expected.protocolVersion, actual.protocolVersion, name);
+    TEST_ASSERT_EQUAL_UINT8_MESSAGE(expected.scene, actual.scene, name);
+    TEST_ASSERT_EQUAL_UINT16_MESSAGE(expected.groupId, actual.groupId, name);
+    TEST_ASSERT_EQUAL_UINT16_MESSAGE(expected.orgId, actual.orgId, name);
+}
+
 static void test_decode_round_trips_every_vector() {
     for (const auto& c : kFrames) {
         ttlock::DecodedFrame decoded;
@@ -108,7 +116,17 @@ static void test_decode_round_trips_every_vector() {
         TEST_ASSERT_EQUAL_HEX8_MESSAGE(c.command, decoded.command, c.name);
         TEST_ASSERT_TRUE_MESSAGE(decoded.crcOk, c.name);
         assertBytes(c.payload, c.payloadSize, decoded.payload, c.name);
+        assertVersion(versionOf(c), decoded.version, c.name);
     }
+}
+
+static void test_decode_reports_every_header_field_of_the_version() {
+    const ttlock::LockVersion version{0x05, 0x04, 0x07, 0x1234, 0xABCD};
+    const Bytes wire = ttlock::encodeFrame(version, 0x54, Bytes{0x01, 0x02}, ttlock::kDefaultAesKey);
+    ttlock::DecodedFrame decoded;
+    assertStatus(Status::Ok, ttlock::decodeFrame(Bytes(wire.begin(), wire.end() - 2), ttlock::kDefaultAesKey, decoded),
+                 "distinct header fields");
+    assertVersion(version, decoded.version, "distinct header fields");
 }
 
 static void test_decode_with_corrupted_crc_still_decodes_with_crc_ok_false() {
@@ -355,6 +373,7 @@ int main() {
     RUN_TEST(test_encode_writes_header_fields_in_order_and_big_endian);
     RUN_TEST(test_encode_rejects_payload_over_the_limit);
     RUN_TEST(test_decode_round_trips_every_vector);
+    RUN_TEST(test_decode_reports_every_header_field_of_the_version);
     RUN_TEST(test_decode_with_corrupted_crc_still_decodes_with_crc_ok_false);
     RUN_TEST(test_decode_accepts_protocol_type_zero_as_the_v3_layout);
     RUN_TEST(test_decode_truncated_frame_is_bad_response);

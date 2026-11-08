@@ -1723,7 +1723,8 @@ static void test_a_paired_session_never_switches_to_the_xor_codec() {
 
     Rig pushes;
     attach(pushes);
-    pushes.lock.push(legacyFrame(seed, ttlock::xorCodec(Bytes{cmd::kSearchStatus, fake::kSuccess, 0x5A, 0x01, 0x00}, seed)));
+    const Bytes statePlain{cmd::kSearchStatus, fake::kSuccess, 0x5A, 0x01, 0x00};
+    pushes.lock.push(legacyFrame(seed, ttlock::xorCodec(statePlain, seed)));
     assertStatus(Status::Timeout, pushes.session.receiveEvent(100));
     TEST_ASSERT_EQUAL_UINT(0, pushes.events.size());
     TEST_ASSERT_EQUAL_UINT(1, pushes.session.droppedFrames());
@@ -1779,6 +1780,63 @@ static void test_unlock_key_derived_values_travel_only_under_the_lock_key() {
         assertHiddenFromEavesdroppers(request, secret);
     }
     TEST_ASSERT_EQUAL_UINT(3, secretFrames);
+}
+
+static Bytes replyUnder(const ttlock::LockVersion& version, const Bytes& plain) {
+    Bytes wire = ttlock::encodeFrame(version, fake::kReplyCommand, plain, kLockKey);
+    wire.resize(wire.size() - 2);
+    return wire;
+}
+
+static void test_a_paired_session_drops_replies_that_switch_protocol_or_lock_type() {
+    const ttlock::LockVersion otherVersion{5, 4, 2, 1, 1};
+    const ttlock::LockVersion otherType{6, 3, 2, 1, 1};
+    const ttlock::LockVersion typeZero{0, 3, 2, 1, 1};
+    const ttlock::LockVersion carScene{5, 3, 7, 1, 1};
+    Rig rig;
+    attach(rig);
+    expectUnlockAfter(rig.lock, {replyUnder(otherVersion, userTimeReply(kForgedPs)),
+                                 replyUnder(otherType, userTimeReply(kForgedPs)),
+                                 replyUnder(typeZero, userTimeReply(kForgedPs)),
+                                 replyUnder(carScene, userTimeReply(kForgedPs))});
+    assertUnlockUsedTheGenuinePs(rig, 4);
+
+    Rig pushes;
+    attach(pushes);
+    const ttlock::LockVersion otherSceneAndIds{5, 3, 9, 7, 7};
+    pushes.lock.push(replyUnder(otherVersion, Bytes{cmd::kSearchStatus, fake::kSuccess, 0x5A, 0x01, 0x00}));
+    pushes.lock.push(replyUnder(otherSceneAndIds, Bytes{cmd::kSearchStatus, fake::kSuccess, 0x5A, 0x00, 0x00}));
+    assertStatus(Status::Ok, pushes.session.receiveEvent(100));
+    TEST_ASSERT_EQUAL_UINT(1, pushes.events.size());
+    TEST_ASSERT_EQUAL(ttlock::LockState::Locked, pushes.events[0].state);
+    TEST_ASSERT_EQUAL_UINT(1, pushes.session.droppedFrames());
+}
+
+static void test_pairing_refuses_a_lock_that_hands_back_the_default_key() {
+    Rig rig;
+    std::vector<PairStep> steps = pairingSteps(bits({Feature::Passcode}));
+    steps.resize(2);
+    steps[1].replies = {success(kDefault, cmd::kGetAesKey, keyBytes(kDefault))};
+    load(rig.lock, std::move(steps));
+    ttlock::LockKeys keys;
+    Persisted persisted;
+    assertStatus(Status::BadResponse, pair(rig, keys, persisted));
+    assertCommands({cmd::kInitialization, cmd::kGetAesKey}, rig.lock);
+    TEST_ASSERT_EQUAL_UINT(0, persisted.calls.size());
+    TEST_ASSERT_EQUAL_UINT(0, rig.random.drawn());
+    ttlock::LockStatus status;
+    assertStatus(Status::NotPaired, rig.session.status(status));
+    TEST_ASSERT_EQUAL_UINT(2, rig.lock.requests().size());
+}
+
+static void test_attach_refuses_a_record_holding_the_default_key() {
+    Rig rig;
+    ttlock::LockKeys keys = pairedKeys();
+    keys.aesKey = kDefault;
+    assertStatus(Status::InvalidArgument, rig.session.attach(keys));
+    ttlock::OperationResult result;
+    assertStatus(Status::NotPaired, rig.session.unlock(result));
+    TEST_ASSERT_EQUAL_UINT(0, rig.lock.requests().size());
 }
 
 int main() {
@@ -1865,5 +1923,8 @@ int main() {
     RUN_TEST(test_a_paired_session_drops_plaintext_replies);
     RUN_TEST(test_a_paired_session_never_switches_to_the_xor_codec);
     RUN_TEST(test_unlock_key_derived_values_travel_only_under_the_lock_key);
+    RUN_TEST(test_a_paired_session_drops_replies_that_switch_protocol_or_lock_type);
+    RUN_TEST(test_pairing_refuses_a_lock_that_hands_back_the_default_key);
+    RUN_TEST(test_attach_refuses_a_record_holding_the_default_key);
     return UNITY_END();
 }
