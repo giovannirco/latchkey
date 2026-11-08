@@ -11,6 +11,7 @@
 #include "audit.h"
 #include "auth.h"
 #include "clock.h"
+#include "latchkey_util/access.h"
 #include "latchkey_util/json_depth.h"
 
 namespace rpc {
@@ -65,27 +66,16 @@ bool isValidId(const cJSON* id) {
     return id == nullptr || cJSON_IsNull(id) || cJSON_IsNumber(id) || cJSON_IsString(id);
 }
 
-Reply refuse(const char* code, const char* message, const Context& context) {
-    Reply reply = fail(code, message);
-    reply.audited = context.session.has_value();
-    return reply;
-}
-
 Reply checkAccess(const Access& access, const Context& context) {
-    if (context.origin == Transport::Serial) {
+    const latchkey_util::AccessDecision decision =
+        latchkey_util::decideAccess({access.needsSession, access.needsButton, access.serialOnly},
+                                    context.origin == Transport::Serial, context.session.has_value());
+    if (decision.error == nullptr) {
         return ok();
     }
-    if (access.serialOnly) {
-        return refuse("forbidden", "serial console only", context);
-    }
-    if (access.needsSession && !context.session.has_value()) {
-        return refuse("unauthorized", "sign in first", context);
-    }
-    if (access.needsButton) {
-        return refuse("forbidden", "this needs a press of the board's button, which the web cannot ask for yet",
-                      context);
-    }
-    return ok();
+    Reply reply = fail(decision.error, decision.message);
+    reply.audited = decision.audited;
+    return reply;
 }
 
 Response respond(const cJSON* id, Reply reply) {
