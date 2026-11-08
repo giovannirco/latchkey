@@ -109,8 +109,10 @@ uv run -q --no-project --python 3.14 --with pytest==9.1.1 --with pyserial==3.5 p
 
 ### Releasing
 
-1. Move the `[Unreleased]` entries of `CHANGELOG.md` under `## [x.y.z] - YYYY-MM-DD` and set `PROJECT_VER` in `CMakeLists.txt` to `x.y.z`.
-2. Push a tag `vx.y.z` on that commit. `.github/workflows/release.yml` runs the host tests, builds both boards, checks that the app images report `x.y.z`, writes per board a factory image (flashable at `0x0`), an OTA image and an ESP Web Tools manifest plus `SHA256SUMS`, creates the GitHub Release with the changelog section as its notes, and deploys GitHub Pages with the flasher and the images under `firmware/x.y.z/`.
+1. Move the `[Unreleased]` entries of `CHANGELOG.md` under `## [x.y.z] - YYYY-MM-DD` and set `PROJECT_VER` in `CMakeLists.txt` to `x.y.z`, merge that to `main` and wait for CI to pass there.
+2. Push a tag `vx.y.z` on that commit of `main`. `.github/workflows/release.yml` refuses a tag whose commit is not on `main`, runs the host tests, builds both boards, checks that the app images report `x.y.z`, writes per board a factory image (flashable at `0x0`), an OTA image and an ESP Web Tools manifest plus `SHA256SUMS`, creates the GitHub Release with the changelog section as its notes, and deploys GitHub Pages with the flasher and the images under `firmware/x.y.z/`.
+
+A release relies on CI having passed on `main`: the workflow checks that the tagged commit is on `main` and reruns the host tests and builds, but it neither looks up the CI results nor runs the source checks and the web UI suite again. Require the CI jobs in a branch protection rule for `main`, and protect `v*` tags with a tag ruleset so that only maintainers can create them.
 
 Once per repository, before the first release: in Settings, set Pages to deploy from GitHub Actions; in the `github-pages` environment, allow deployments from tags matching `v*` (by default it only accepts the default branch); and enable private vulnerability reporting.
 
