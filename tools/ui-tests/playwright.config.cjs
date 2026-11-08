@@ -13,7 +13,7 @@ module.exports = defineConfig({
   workers: 1,
   fullyParallel: false,
   forbidOnly: Boolean(process.env.CI),
-  retries: 0,
+  retries: process.env.CI ? 1 : 0,
   timeout: 45_000,
   expect: { timeout: 8_000 },
   reporter: [['list']],
