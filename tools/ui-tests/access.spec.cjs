@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-const { test, expect, mock, calls, login, openLock, FRONT_DOOR } = require('./support.cjs');
+const { test, expect, mock, calls, login, openLock, boardButton, toast, FRONT_DOOR } = require('./support.cjs');
 
 test('a new passcode is shown once, listed masked, and can be deleted', async ({ page, request }) => {
   await login(page);
@@ -113,4 +113,88 @@ test('card numbers are masked and validity can be changed', async ({ page, reque
   const set = (await calls(request)).find((call) => call.method === 'lock.cards.setValidity');
   expect(set.params.lock).toBe(FRONT_DOOR);
   expect(set.params.validity.end).toBeGreaterThan(set.params.validity.start);
+});
+
+test('cyclic passcodes are not offered, since the board cannot add them', async ({ page }) => {
+  await login(page);
+  await openLock(page, 'Front door', 'Access');
+  await page.getByRole('button', { name: 'Add passcode' }).click();
+  const form = page.getByRole('dialog', { name: 'Add passcode' });
+  expect(await form.getByLabel('Type').locator('option').allInnerTexts()).toEqual(['Permanent', 'Timed', 'One-time']);
+  await expect(form.getByText('Repeats every week')).toHaveCount(0);
+});
+
+test('a fingerprint can repeat every week on a lock with cyclic credentials', async ({ page, request }) => {
+  await login(page);
+  await openLock(page, 'Front door', 'Access');
+  const owner = page
+    .getByRole('region', { name: 'Fingerprints' })
+    .getByRole('listitem')
+    .filter({ hasText: 'Owner right index' });
+  await owner.getByRole('button', { name: 'Validity' }).click();
+  const dialog = page.getByRole('dialog', { name: 'Fingerprint validity' });
+  await expect(dialog.getByLabel('Daily from')).toBeHidden();
+  await dialog.getByLabel('Repeats every week').check();
+  await dialog.getByLabel('Daily from').fill('09:00');
+  await dialog.getByLabel('Daily until').fill('17:30');
+  await dialog.getByRole('button', { name: 'Save' }).click();
+  await expect(owner).toContainText('Mon, Tue, Wed, Thu, Fri, 09:00 to 17:30');
+
+  const set = (await calls(request)).find((call) => call.method === 'lock.fingerprints.setValidity');
+  expect(set.params).toEqual({
+    lock: FRONT_DOOR,
+    id: '1',
+    validity: null,
+    cycle: { days: [1, 2, 3, 4, 5], start: '09:00', end: '17:30' },
+  });
+
+  await owner.getByRole('button', { name: 'Validity' }).click();
+  await expect(dialog.getByLabel('Repeats every week')).toBeChecked();
+  await dialog.getByLabel('Repeats every week').uncheck();
+  await dialog.getByRole('button', { name: 'Save' }).click();
+  await expect(owner).not.toContainText('09:00 to 17:30');
+});
+
+test('the super admin passcode is shown and changed with the board button', async ({ page, request }) => {
+  await login(page);
+  await openLock(page, 'Front door', 'Settings');
+  const section = page.getByRole('region', { name: 'Super admin passcode' });
+
+  await section.getByRole('button', { name: 'Show admin passcode' }).click();
+  await expect(boardButton(page)).toContainText('Show the super admin passcode');
+  const shown = page.getByRole('dialog', { name: 'Super admin passcode' });
+  await expect(shown).toContainText('Read from the lock');
+  const current = (await shown.locator('output').textContent()).trim();
+  expect(current).toMatch(/^\d{4,9}$/);
+  await shown.getByRole('button', { name: 'Done' }).click();
+
+  await section.getByRole('button', { name: 'Change admin passcode' }).click();
+  const form = page.getByRole('dialog', { name: 'Change the super admin passcode' });
+  await form.getByLabel('New super admin passcode (optional)').fill('27182818');
+  await form.getByRole('button', { name: 'Save' }).click();
+  await expect(boardButton(page)).toContainText('Change the super admin passcode');
+  await expect(toast(page, 'Super admin passcode changed')).toBeVisible();
+
+  await section.getByRole('button', { name: 'Change admin passcode' }).click();
+  await page
+    .getByRole('dialog', { name: 'Change the super admin passcode' })
+    .getByRole('button', { name: 'Save' })
+    .click();
+  const fresh = page.getByRole('dialog', { name: 'New super admin passcode' });
+  expect((await fresh.locator('output').textContent()).trim()).toMatch(/^\d{7}$/);
+  await fresh.getByRole('button', { name: 'Done' }).click();
+
+  const made = await calls(request);
+  expect(made.filter((call) => call.method === 'lock.adminPasscode.get')).toHaveLength(1);
+  const sets = made.filter((call) => call.method === 'lock.adminPasscode.set');
+  expect(sets.map((call) => call.params.code)).toEqual(['***', undefined]);
+});
+
+test('the board copy of the super admin passcode is shown when the lock cannot be read', async ({ page, request }) => {
+  await login(page);
+  await openLock(page, 'Shed', 'Settings');
+  await page.getByRole('button', { name: 'Show admin passcode' }).click();
+  const shown = page.getByRole('dialog', { name: 'Super admin passcode' });
+  await expect(shown).toContainText('the copy the board kept');
+  expect((await shown.locator('output').textContent()).trim()).toBe('123456');
 });
