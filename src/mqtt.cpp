@@ -47,7 +47,7 @@ namespace {
 constexpr const char* TAG = "mqtt";
 constexpr uint32_t kTaskStack = 4608;
 constexpr UBaseType_t kTaskPriority = 5;
-constexpr int kClientStack = 3072;
+constexpr int kClientStack = 3584;
 constexpr int kClientPriority = 5;
 constexpr int kKeepAliveSeconds = 60;
 constexpr int kNetworkTimeoutMs = 10000;
@@ -705,6 +705,7 @@ void handle(State& state, const Item& item) {
             handleDisconnected(state);
             return;
         case Kind::Refused:
+            ESP_LOGE(TAG, "the broker refused the connection (code %d): check the username and password", item.length);
             state.problem = kRefusedLogin;
             return;
         case Kind::SubscribeFailed:
@@ -776,9 +777,8 @@ void onClientEvent(void* arg, esp_event_base_t, int32_t id, void* data) {
                 event->error_handle->error_type != MQTT_ERROR_TYPE_CONNECTION_REFUSED) {
                 return;
             }
-            ESP_LOGE(TAG, "the broker refused the connection (code %d): check the username and password",
-                     static_cast<int>(event->error_handle->connect_return_code));
             item.kind = Kind::Refused;
+            item.length = static_cast<int>(event->error_handle->connect_return_code);
             break;
         case MQTT_EVENT_SUBSCRIBED:
             if (event->error_handle == nullptr ||
