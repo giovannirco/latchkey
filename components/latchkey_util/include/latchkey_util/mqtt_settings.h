@@ -5,9 +5,11 @@
 #include <cstdint>
 #include <string_view>
 
+#include "latchkey_util/hostname.h"
+
 namespace latchkey_util {
 
-inline constexpr size_t kMaxMqttHost = 64;
+inline constexpr size_t kMaxMqttHost = kMaxHostname;
 inline constexpr size_t kMaxMqttUsername = 64;
 inline constexpr size_t kMaxMqttPassword = 64;
 inline constexpr size_t kMaxHaPrefix = 32;
