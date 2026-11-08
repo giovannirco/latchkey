@@ -22,11 +22,12 @@ lock.privacyLock.*, lock.tamperAlert.*, lock.log.fetch) and the button-gated aut
 system.factoryReset run as jobs: the reply is {"job": id} and the outcome arrives as a job.done event
 {"job", "result"} or {"job", "error"}, sent only to the sockets of the session that asked.
 
-lock.log.fetch answers {"entries", "last", "more"}: without "since" the newest 16 entries, with "since" the
-entries after that record number. The board reads the log in the background and sends lock.alert
-{"lock", "method", "time", "seq", "type"} for an unlock from an app it did not make, or a forced opening;
-tests emit one with the emit hook. lock.resetButton.set needs the board button both ways and refuses to
-turn the button off until the lock's keys are backed up (backup_required).
+lock.log.fetch answers {"entries", "last", "more"}: without "since" the newest 16 entries, with "since"
+up to 16 entries after that record number, with "more" when others follow. The board reads the log in the
+background and sends lock.alert {"lock", "method", "time", "seq", "type"} for an unlock from an app it
+did not make, or a forced opening; tests emit one with the emit hook. lock.resetButton.set needs the
+board button both ways and refuses to turn the button off until the lock's keys are backed up
+(backup_required).
 
 Test hooks used by tools/ui-tests/:
 
@@ -969,7 +970,7 @@ class Mock:
 
     def _passage_entry(self, params: dict, day: Any) -> dict:
         if params.get("type", "weekly") != "weekly":
-            raise invalid("only weekly passage modes are supported by the mock")
+            raise invalid("only weekly passage windows can be added")
         if isinstance(day, bool) or not isinstance(day, int) or not 0 <= day <= 7:
             raise invalid("day is 0 (every day) or 1 (Monday) to 7 (Sunday)")
         start = hhmm_param(params.get("start"), "start")
@@ -977,6 +978,21 @@ class Mock:
         if end <= start:
             raise invalid("the passage window must end after it starts")
         return {"type": "weekly", "day": day, "start": start, "end": end}
+
+    def _listed_entry(self, params: dict) -> dict:
+        kind = params.get("type")
+        day = params.get("day")
+        if kind not in ("weekly", "monthly"):
+            raise invalid("type is weekly or monthly")
+        low, high = (0, 7) if kind == "weekly" else (1, 31)
+        if isinstance(day, bool) or not isinstance(day, int) or not low <= day <= high:
+            raise invalid(f"day is {low} to {high} for a {kind} passage mode")
+        entry = {"type": kind, "day": day}
+        if kind == "monthly":
+            entry["month"] = int_param(params, "month", default=0, lo=0, hi=12)
+        entry["start"] = hhmm_param(params.get("start"), "start")
+        entry["end"] = hhmm_param(params.get("end"), "end")
+        return entry
 
     @rpc("lock.passage.add", feature="passage_mode", job=True)
     def lock_passage_add(self, ctx: Context, params: dict) -> dict:
@@ -994,9 +1010,9 @@ class Mock:
     @rpc("lock.passage.delete", feature="passage_mode", job=True)
     def lock_passage_delete(self, ctx: Context, params: dict) -> dict:
         lock = self.get_lock(params)
-        entry = self._passage_entry(params, params.get("day"))
+        entry = self._listed_entry(params)
         if entry not in lock["passage"]:
-            raise invalid("no such passage mode")
+            raise invalid("no such passage mode on the lock")
         with self.radio():
             lock["passage"].remove(entry)
         return {"modes": copy.deepcopy(lock["passage"])}
@@ -1186,10 +1202,13 @@ class Mock:
         with self.radio():
             if since is None:
                 entries = [dict(entry) for entry in lock["log"][-LOG_SHOWN:]]
+                more = False
             else:
-                entries = [dict(entry) for entry in lock["log"] if entry["seq"] > since]
+                newer = [dict(entry) for entry in lock["log"] if entry["seq"] > since]
+                entries = newer[:LOG_SHOWN]
+                more = len(newer) > LOG_SHOWN
         last = entries[-1]["seq"] if entries else (since or 0)
-        return {"entries": entries, "last": last, "more": False}
+        return {"entries": entries, "last": last, "more": more}
 
     @rpc("lock.sound.get", feature="audio_management", audited=False, job=True)
     def lock_sound_get(self, ctx: Context, params: dict) -> dict:
@@ -1217,7 +1236,9 @@ class Mock:
         lock = self.get_lock(params)
         enabled = bool_param(params, "enabled")
         if not enabled and not lock["backedUp"]:
-            raise RpcError("backup_required", "export this lock's keys with keys.export before turning its reset button off")
+            raise RpcError(
+                "backup_required", "export this lock's keys with keys.export before turning its reset button off"
+            )
         self.confirm("lock.resetButton.set")
         with self.radio():
             lock["resetButton"] = enabled
