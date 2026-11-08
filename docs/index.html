@@ -227,6 +227,7 @@ if (/^[0-9]+\.[0-9]+\.[0-9]+$/.test(version)) {
     <h2 id="erase-title">Flashing erases the board</h2>
     <p>The factory image rewrites the flash from address 0: bootloader, partition table and every setting stored on the board, including the owner claim, the Wi-Fi settings, the audit log and the keys of any lock paired with it. Whatever was on the board before is gone, whether or not you also choose to erase it in the installer.</p>
     <p>If this board manages a lock, that lock can no longer be managed from it. A lock whose reset button is still enabled can be returned to factory state with that button and paired again; after hardening has disabled the button, only an encrypted key backup restored on a board gets the lock back.</p>
+    <p><strong>A board that already holds a lock must not be installed from this page.</strong> Update it from its own web UI instead (System, Firmware update) with the OTA image listed below, or with a plain PlatformIO upload from a checkout (<code>uvx platformio==6.2.0 run -e &lt;env&gt; -t upload</code>): both keep the board's settings and the lock keys. A board running 0.2.0 or older has no web update yet, so it takes the first release with web updates once with that plain USB upload.</p>
   </section>
 
   <section aria-labelledby="board-title">

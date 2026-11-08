@@ -5,7 +5,7 @@
 
 Latchkey is firmware for ESP32 boards that takes a TTLock Bluetooth LE smart lock off the TTLock cloud and puts it under one owner's control: the board pairs with the lock by itself, manages what the TTLock app can manage on that lock, and serves an owner-only web UI, with no phone app, TTLock account or computer Bluetooth involved.
 
-Latchkey is in early development. The TTLock protocol core, the USB serial console, claiming the board, Wi-Fi, time and the time zone, the audit log, the owner login with web sessions, and the web UI served by the board over HTTPS with live events and button confirmation are in place; pairing from the board, hardening, over-the-air updates and key backup are being built.
+Latchkey is in early development. The TTLock protocol core, the USB serial console, claiming the board, Wi-Fi, time and the time zone, the audit log, the owner login with web sessions, the web UI served by the board over HTTPS with live events and button confirmation, and firmware updates from that web UI with rollback are in place; pairing from the board, hardening and key backup are being built.
 
 ## Why
 
@@ -21,9 +21,10 @@ Works today:
 - Firmware for the classic ESP32 and the ESP32-S3: a JSON-lines console over USB, claiming the board, Wi-Fi with a static address, SNTP time with a configurable time zone, an audit log, the owner login (password, TOTP code and rate limit) with web sessions, and HTTPS with a certificate the board makes itself: the web UI, the JSON API behind a session cookie, live events over a WebSocket, and a press of the board's button before destructive actions from the web.
 - Lock access from the board, checked on a real lock: passcodes (permanent, timed and one-time, listed by id and never by code), fingerprints and IC cards (enrolment with live progress, validity, weekly windows), and the keypad's super admin passcode, which pairing can take from the owner and the web UI can show and change after a press of the board's button.
 - The owner web UI (`web/`), served by the board and tested against a mock of the board API.
+- Firmware updates from the web UI: the board checks the image, waits for a press of its button, writes the app slot it is not running from and restarts into it; an image that fails its first boot is rolled back to the previous one.
 - Home Assistant over MQTT, off until configured: each lock appears as a device with a lock entity, battery, last event, Bluetooth link and an unlock alert, through MQTT discovery, and LOCK and UNLOCK from Home Assistant run through the same queue as the web.
 
-In progress: the Bluetooth link and lock manager on the board, over-the-air updates, lock hardening and the encrypted key backup.
+In progress: the Bluetooth link and lock manager on the board, lock hardening and the encrypted key backup.
 
 ## Security model
 
@@ -51,7 +52,7 @@ An M5 ATOM runs the `esp32` build with `LATCHKEY_BUTTON_GPIO=39`, and an M5Stack
 
 ## Quick start
 
-1. Flash the board: with Chrome or Edge, open the [browser flasher](https://giovannirco.github.io/latchkey/) once a release is published, or build and flash from source as below. Flashing erases the board.
+1. Flash the board: with Chrome or Edge, open the [browser flasher](https://giovannirco.github.io/latchkey/) once a release is published, or build and flash from source as below. The factory image the flasher writes starts at address 0 and erases the board's settings and the keys of any lock paired with it: never flash it on a board that holds a lock. Update such a board from its web UI or with a plain USB upload instead (below).
 2. Claim it over USB with `system.setup`, sending the Wi-Fi settings (static IPv4) and an owner password of 12 to 128 bytes from a file, so they stay out of your shell history:
 
    ```sh
@@ -75,6 +76,8 @@ uvx platformio==6.2.0 run -e esp32 -t upload --upload-port <port>
 uvx platformio==6.2.0 run -e esp32s3 -t upload --upload-port <port>
 uvx platformio==6.2.0 device monitor -e esp32 --port <port>
 ```
+
+`-t upload` writes the bootloader, the partition table, `otadata` and the app, and leaves `nvs` alone: the board keeps its owner, its settings and its lock keys. A board running 0.2.0 or older has no web update, so the first release with web updates reaches it once this way; later releases install from the web UI.
 
 The other checks CI runs:
 
@@ -107,6 +110,7 @@ The first time the board has an address it starts HTTPS on port 443 and, on port
 - `POST /api/rpc` takes the same JSON requests as the console, with `Content-Type: application/json`, at most 8 KiB and at most 256 JSON values (object keys included). A web login sets the `lk_session` cookie (`Path=/; Secure; HttpOnly; SameSite=Strict`) and never returns the token; `auth.logout` clears it.
 - `GET /api/events` is a WebSocket of `{"event", "data"}` messages: the events the console prints, plus `job.done` for that session's jobs. It opens only with a valid session cookie, and closes when that session ends.
 - From the web, the lock methods (`locks.scan`, `locks.pair`, `lock.*`) and the methods that need the board's button answer `{"job": "<id>"}` at once and end with a `job.done {job, result|error}` event on the sockets of the session that asked. A job ends `unauthorized` if its session ends before it runs. A method that needs the button first checks its parameters and preconditions (a bad address, a lock the board does not hold, `locks_paired`) and fails without asking; then it emits `confirm.required {action, timeoutMs}`, waits up to 30 s for a press, emits `confirm.result {action, confirmed}`, and fails with `confirm_timeout` without one, or `unauthorized` if the session ends during the wait: today `locks.pair`, `lock.factoryReset`, `lock.adminPasscode.set`, `lock.adminPasscode.get`, `auth.rotateTotp` and `system.factoryReset`. A button request that cannot start at once, because another web job is running or queued, answers `busy`.
+- `POST /api/ota` installs firmware: the app image (`latchkey-<version>-<env>-ota.bin` of a release, or `.pio/build/<env>/firmware.bin`) as `Content-Type: application/octet-stream`, from 64 KiB up to the size of an app slot (413 above it), with the session cookie and under the same `Host` and `Origin` rules. The board reads the image's head and refuses, before any button wait, an image for another chip or one that is not Latchkey firmware (400 `invalid_argument`). Then it emits `confirm.required {"action": "ota", "timeoutMs": 30000}` and answers 403 `confirm_timeout` without a press. After a press it writes the app slot it is not running from, checks the image's hash, answers `{"result": {"bytes", "rebooting": true}}` and restarts into it. The new image is kept once it has run 30 s with NVS readable, the console running and Wi-Fi started (and the web server up once Wi-Fi is connected); otherwise it restarts after 120 s, and the bootloader returns to the previous image, as it also does for an image that crashes before the check. Until the check is done, and while another web job runs, uploads answer 503 `busy`. `system.ota.status` (USB only) reports the running and the other slot with their versions and states.
 - The classic ESP32 keeps at most three HTTPS connections, enough for two browser tabs, each holding an event socket; the ESP32-S3 keeps four. A new connection beyond that closes the least recently used one. With Bluetooth scanning, one tab and its event socket, the classic kept at least 40 KB of free heap in testing.
 
 ## Locks

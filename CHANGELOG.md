@@ -5,6 +5,12 @@ Notable changes to Latchkey, in the format of [Keep a Changelog](https://keepach
 
 ## [Unreleased]
 
+### Added
+
+- Firmware updates from the web UI: `POST /api/ota` takes an app image after a press of the board's button, refuses images for another chip, images that are not Latchkey firmware and sizes that do not fit the app slot before any button wait, writes the slot the board is not running from and restarts into it. The new image is kept once it has run 30 s with storage, the console and Wi-Fi up; otherwise, or when it crashes, the bootloader returns to the previous image. `system.ota.status` (USB only) reports both slots.
+- `tools/hil/test_ota.py`: uploads straight to a real board, with a `needs-button` marker file for the tests that need a person to press the button.
+- Docs: a board that holds a lock is updated from the web UI or with a plain USB upload, never with the factory image, which erases its settings and the lock keys.
+
 ## [0.2.0] - 2026-11-08
 
 ### Added
