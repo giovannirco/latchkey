@@ -22,8 +22,9 @@ Test hooks used by tools/ui-tests/:
 
 - POST /__mock/control  {"reset": true} restores the demo state; other keys: "confirm" ("auto" or
   "never"), "confirmDelayMs", "confirmTimeoutMs", "latencyMs", "jobReplyDelayMs", "timeSynced",
-  "expireSessions", "failNext" {"method", "code", "message"}, "delay" {"method", "ms"} (holds the
-  next reply), "scanExtra" [devices], "emit" [{"event", "data"}];
+  "expireSessions", "dropSockets" (closes every event socket), "setLock" {"id", fields} (changes a
+  lock without an event), "failNext" {"method", "code", "message"}, "delay" {"method", "ms"} (holds
+  the next reply), "scanExtra" [devices], "emit" [{"event", "data"}];
 - GET /__mock/calls     every RPC since the last reset, with secret parameters replaced by "***";
 - GET /__mock/health    readiness probe.
 
@@ -652,9 +653,12 @@ class Mock:
                 self.fail_next[failure["method"]] = RpcError(failure["code"], failure.get("message", failure["code"]))
             if "scanExtra" in body:
                 self.nearby.extend(dict(device) for device in body["scanExtra"])
+            if "setLock" in body:
+                changes = dict(body["setLock"])
+                self.locks[changes.pop("id")].update(changes)
             if body.get("expireSessions"):
                 self.sessions.clear()
-        if body.get("expireSessions"):
+        if body.get("expireSessions") or body.get("dropSockets"):
             self.events.disconnect()
         for item in body.get("emit", []):
             self.emit(item["event"], item["data"])

@@ -104,6 +104,23 @@ test('the pairing result is taken from job.done even when the event beats the re
   await expect(page.getByRole('heading', { level: 2, name: 'Harden Porch' })).toBeVisible({ timeout: 10_000 });
 });
 
+test('a pending job fails fast when the event socket drops, and the wizard keeps its state', async ({
+  page,
+  request,
+}) => {
+  await login(page);
+  await mock(request, { confirm: 'never', confirmTimeoutMs: 60_000 });
+  await startPairing(page, 'Porch');
+  await expect(boardButton(page)).toBeVisible();
+  await mock(request, { dropSockets: true });
+  const lost = page.getByRole('alert').filter({ hasText: 'The connection to the board dropped' });
+  await expect(lost).toBeVisible({ timeout: 5000 });
+  await expect(boardButton(page)).toBeHidden();
+  await expect(page.locator('#live')).toHaveAttribute('data-live', 'on', { timeout: 10_000 });
+  await expect(lost).toBeVisible();
+  await expect(page.getByRole('radio', { name: /LK-MOCK-NEW/ })).toBeChecked();
+});
+
 test('a pairing job that fails shows the error carried by job.done', async ({ page, request }) => {
   await login(page);
   await mock(request, { confirm: 'never', confirmTimeoutMs: 1500 });

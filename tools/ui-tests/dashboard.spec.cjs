@@ -57,6 +57,17 @@ test('lock events from the board update the dashboard live', async ({ page, requ
   await expect(page.getByText('Live', { exact: true })).toBeVisible();
 });
 
+test('after the event socket drops, the view resyncs from the board when it reconnects', async ({ page, request }) => {
+  await login(page);
+  const shed = lockCard(page, 'Shed');
+  await expect(shed.getByText('Unlocked', { exact: true })).toBeVisible();
+  await mock(request, { setLock: { id: SHED, state: 'locked', battery: 30 }, dropSockets: true });
+  await expect(page.locator('#live')).toHaveAttribute('data-live', 'off');
+  await expect(page.locator('#live')).toHaveAttribute('data-live', 'on', { timeout: 10_000 });
+  await expect(shed.getByText('Locked', { exact: true })).toBeVisible();
+  await expect(shed).toContainText('30%');
+});
+
 test('names from the board are rendered as text, never as markup', async ({ page, request }) => {
   await login(page);
   const hostile = '<img src=x onerror=__owned=1>';

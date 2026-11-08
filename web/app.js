@@ -31,6 +31,8 @@ const ERROR_TEXT = {
   backup_required:
     "Back up this lock's keys before hardening it. Hardening turns off the reset button, so the backup is the only way back if the board is lost.",
   network: 'Cannot reach the board. Check that this device is on the same network.',
+  job_lost:
+    'The connection to the board dropped before it reported the result. Check the lock, then try again if needed.',
   no_reply:
     'The board did not answer in time. Check that it is still on the network, then look at the result before retrying.',
   http: 'The board answered with an error.',
@@ -320,6 +322,7 @@ function timeoutFor(method) {
 async function call(method, params = {}) {
   const budget = timeoutFor(method);
   const started = Date.now();
+  const sentEpoch = jobs.epoch();
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), budget);
   let response;
@@ -346,7 +349,9 @@ async function call(method, params = {}) {
   if (body && body.error) throw apiError(body.error);
   if (!response.ok) throw new ApiError('http', `HTTP ${response.status}`);
   const result = (body && body.result) || {};
-  if (typeof result.job === 'string') return jobs.wait(result.job, Math.max(1000, budget - (Date.now() - started)));
+  if (typeof result.job === 'string') {
+    return jobs.wait(result.job, Math.max(1000, budget - (Date.now() - started)), sentEpoch);
+  }
   return result;
 }
 
@@ -363,10 +368,16 @@ async function rpc(method, params) {
 
 const events = (() => {
   const handlers = new Map();
+  const watchers = { drop: new Set(), reopen: new Set() };
   let socket = null;
   let wanted = false;
+  let opened = false;
   let retry = 0;
   let timer = 0;
+
+  function notify(kind) {
+    for (const watcher of [...watchers[kind]]) watcher();
+  }
 
   function setLive(live) {
     const badge = document.getElementById('live');
@@ -411,12 +422,15 @@ const events = (() => {
     current.addEventListener('open', () => {
       retry = 0;
       setLive(true);
+      if (opened) notify('reopen');
+      opened = true;
     });
     current.addEventListener('message', dispatch);
     current.addEventListener('close', () => {
       if (socket !== current) return;
       socket = null;
       setLive(false);
+      notify('drop');
       if (wanted) schedule();
     });
   }
@@ -424,6 +438,7 @@ const events = (() => {
   return {
     start() {
       wanted = true;
+      opened = false;
       connect();
     },
     stop() {
@@ -438,12 +453,19 @@ const events = (() => {
       handlers.get(name).add(handler);
       return () => handlers.get(name).delete(handler);
     },
+    watch(kind, watcher) {
+      watchers[kind].add(watcher);
+      return () => watchers[kind].delete(watcher);
+    },
   };
 })();
 
 const jobs = (() => {
   const waiting = new Map();
   const early = new Map();
+  let epoch = 0;
+
+  const lost = () => new ApiError('job_lost', '');
 
   function forget() {
     const cutoff = Date.now() - JOB_MEMORY_MS;
@@ -467,13 +489,24 @@ const jobs = (() => {
     outcome(data).then(waiter.resolve, waiter.reject);
   });
 
+  events.watch('drop', () => {
+    epoch += 1;
+    for (const waiter of waiting.values()) {
+      clearTimeout(waiter.timer);
+      waiter.reject(lost());
+    }
+    waiting.clear();
+  });
+
   return {
-    wait(id, timeoutMs) {
+    epoch: () => epoch,
+    wait(id, timeoutMs, sentEpoch) {
       const done = early.get(id);
       if (done) {
         early.delete(id);
         return outcome(done.data);
       }
+      if (sentEpoch !== epoch) return Promise.reject(lost());
       return new Promise((resolve, reject) => {
         const timer = setTimeout(() => {
           waiting.delete(id);
@@ -1044,10 +1077,10 @@ const ROUTES = [
   [/^#\/system$/, viewSystem],
 ];
 
-async function route() {
+async function route({ keepDialogs = false } = {}) {
   if (!state.authed) return;
   for (const fn of cleanups.splice(0)) fn();
-  closeDialogs();
+  if (!keepDialogs) closeDialogs();
   const hash = location.hash || '#/locks';
   const found = ROUTES.map(([pattern, view]) => [hash.match(pattern), view]).find(([match]) => match);
   if (!found) {
@@ -2835,5 +2868,11 @@ async function boot() {
   }
 }
 
+function resync() {
+  if (!state.authed || location.hash === '#/pair') return;
+  route({ keepDialogs: true });
+}
+
 window.addEventListener('hashchange', () => route());
+events.watch('reopen', resync);
 boot();
