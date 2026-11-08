@@ -73,3 +73,15 @@ test('Wi-Fi settings never echo the password', async ({ page, request }) => {
   const call = (await calls(request)).find((entry) => entry.method === 'system.wifi.set');
   expect(call.params).toEqual({ ssid: 'lab-iot-2', password: '***' });
 });
+
+test('the MQTT section shows the connection and says when the password must be given again', async ({ page }) => {
+  await login(page, '#/system');
+  const section = page.getByRole('region', { name: 'Home Assistant (MQTT)' });
+  await expect(section.getByText('MQTT is off.')).toBeVisible();
+  await expect(section.getByText('A new host, port or username clears the saved password')).toBeVisible();
+  await section.getByLabel('Publish to an MQTT broker').check();
+  await section.getByLabel('Broker host').fill('broker.example');
+  await section.getByLabel('Password').fill('broker secret');
+  await section.getByRole('button', { name: 'Save MQTT' }).click();
+  await expect(section.getByText('Connected to the broker.')).toBeVisible();
+});
