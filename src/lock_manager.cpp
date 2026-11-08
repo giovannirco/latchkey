@@ -95,6 +95,7 @@ struct Live {
     int64_t eventTime = 0;
     latchkey_util::RepeatFilter recent{kRepeatWindowMs};
     bool timeSyncTried = false;
+    bool featuresTried = false;
     bool warnedUnpaired = false;
 };
 
@@ -679,7 +680,14 @@ void catchUp(ttlock::Session& session, const Lock& lock) {
             updateRecord(mac, [](Record& record) { record.flags |= store::locks::kFlagTimeCalibrated; });
         }
     }
-    if (lock.record.features == 0) {
+    if (lock.record.features == 0 && !lock.live.featuresTried) {
+        {
+            std::lock_guard<std::mutex> guard(s_mutex);
+            Lock* stored = findLocked(mac);
+            if (stored != nullptr) {
+                stored->live.featuresTried = true;
+            }
+        }
         uint64_t mask = 0;
         const Status read = session.features(mask);
         ESP_LOGI(TAG, "catch-up feature read: %s", ttlock::toString(read));
