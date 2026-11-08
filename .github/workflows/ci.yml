@@ -1,0 +1,115 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions: {}
+
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  PLATFORMIO_VERSION: "6.2.0"
+  PLATFORMIO_SETTING_ENABLE_TELEMETRY: "No"
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  sources:
+    name: Source checks
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Self-test the CI and release tools
+        run: |
+          python3 -m unittest discover -s tools/ci -p 'test_*.py'
+          python3 -m unittest discover -s tools/release -p 'test_*.py'
+      - name: SPDX headers and host-only components
+        run: python3 tools/ci/check_sources.py
+
+  native:
+    name: Host tests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
+        with:
+          version: "0.13.5"
+          python-version: "3.13"
+          enable-cache: false
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.platformio
+          key: platformio-native-${{ runner.os }}-${{ hashFiles('platformio.ini', 'dependencies.lock.*') }}
+      - name: Unity tests on the host
+        run: uvx "platformio==${PLATFORMIO_VERSION}" test -e native
+
+  firmware:
+    name: Firmware builds
+    runs-on: macos-15
+    timeout-minutes: 45
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
+        with:
+          version: "0.13.5"
+          python-version: "3.13"
+          enable-cache: false
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.platformio
+          key: platformio-firmware-${{ runner.os }}-${{ hashFiles('platformio.ini', 'dependencies.lock.*') }}
+      - name: Build esp32 and esp32s3
+        run: uvx "platformio==${PLATFORMIO_VERSION}" run -e esp32 -e esp32s3
+      - name: App image sizes and the 1.8 MB gate
+        run: python3 tools/ci/firmware_size.py --summary "$GITHUB_STEP_SUMMARY"
+
+  web:
+    name: Web UI tests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "26.12.1"
+          package-manager-cache: false
+      - name: Install headless Chromium and its system libraries
+        run: |
+          version=$(sed -n 's/^PLAYWRIGHT_VERSION=//p' tools/ui-tests/run.sh)
+          test -n "$version"
+          npx --yes "playwright@${version}" install --with-deps --only-shell chromium
+      - name: Bundler tests and Playwright suite against the mock
+        run: sh tools/ui-tests/run.sh
+      - name: Keep the Playwright traces of failed tests
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: playwright-results
+          path: tools/ui-tests/test-results/
+          retention-days: 7
+          if-no-files-found: ignore
