@@ -109,6 +109,8 @@ const FEATURES_USED = new Set([
   'cyclic_ic_or_finger_print',
 ]);
 
+const MQTT_STATUS_DELAY_MS = 5000;
+
 const METHOD_TEXT = {
   app: 'from the app',
   passcode: 'with a passcode',
@@ -3000,6 +3002,15 @@ async function viewSystem(view) {
       autocomplete: 'off',
     });
     const save = h('button', { class: 'button small primary', type: 'submit' }, 'Save MQTT');
+    const status = h('p', { class: 'muted small', 'aria-live': 'polite' });
+    const showStatus = (view) => {
+      status.textContent = !view.enabled
+        ? 'MQTT is off.'
+        : view.connected
+          ? 'Connected to the broker.'
+          : `Not connected: ${view.problem || 'connecting'}.`;
+    };
+    showStatus(settings);
     const form = h(
       'form',
       { class: 'stack', 'aria-label': 'MQTT' },
@@ -3010,7 +3021,11 @@ async function viewSystem(view) {
         field('Broker host', host),
         field('Port', port),
         field('Username', username),
-        field('Password', secret),
+        field(
+          'Password',
+          secret,
+          'A new host, port or username clears the saved password: enter it again when you change them.',
+        ),
         field('Discovery prefix', prefix),
       ),
       h('div', { class: 'row' }, save),
@@ -3026,9 +3041,14 @@ async function viewSystem(view) {
       };
       if (secret.value) params.password = secret.value;
       try {
-        await pending(save, () => rpc('mqtt.set', params));
+        const view = await pending(save, () => rpc('mqtt.set', params));
         secret.value = '';
+        secret.placeholder = view.passwordSet ? 'Unchanged' : '';
+        showStatus(view);
         toast('MQTT settings saved');
+        setTimeout(() => {
+          rpc('mqtt.get').then(showStatus, toastError);
+        }, MQTT_STATUS_DELAY_MS);
       } catch (failure) {
         toastError(failure);
       }
@@ -3039,6 +3059,7 @@ async function viewSystem(view) {
         { class: 'hint' },
         'Off by default. When on, the board announces each lock to Home Assistant and takes lock commands through the same queue.',
       ),
+      status,
       form,
     );
   });

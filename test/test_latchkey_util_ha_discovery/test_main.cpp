@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include <unity.h>
 
+#include <cstdint>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -177,6 +179,138 @@ static void test_ids_that_cannot_be_topic_or_object_ids_are_refused() {
     TEST_ASSERT_EQUAL_STRING("latchkey/Board_1-x/LOCK_2-y/state", topics.state.c_str());
 }
 
+static void test_discovery_configs_are_retained() {
+    for (const MqttMessage& message : discover(frontDoor())) {
+        TEST_ASSERT_TRUE_MESSAGE(message.retain, message.topic.c_str());
+    }
+}
+
+static void test_ids_take_letters_digits_dash_and_underscore() {
+    TEST_ASSERT_TRUE(latchkey_util::isHaId("homeassistant"));
+    TEST_ASSERT_TRUE(latchkey_util::isHaId("Latchkey_HIL-2"));
+    const char* const bad[] = {"", "home/assistant", "a+b", "a#b", "a b", "a.b", "caf\xC3\xA9"};
+    for (const char* id : bad) {
+        TEST_ASSERT_FALSE_MESSAGE(latchkey_util::isHaId(id), id);
+    }
+}
+
+static void test_the_board_id_ends_with_the_last_three_bytes_of_its_mac() {
+    const uint8_t mac[6] = {0x00, 0x00, 0x5E, 0x0A, 0x1B, 0x2C};
+    TEST_ASSERT_EQUAL_STRING("latchkey-0a1b2c", latchkey_util::haBoardId(mac).c_str());
+    const uint8_t high[6] = {0xFF, 0xEE, 0xDD, 0xCC, 0xBB, 0xAA};
+    TEST_ASSERT_EQUAL_STRING("latchkey-ccbbaa", latchkey_util::haBoardId(high).c_str());
+    TEST_ASSERT_TRUE(latchkey_util::isHaId(latchkey_util::haBoardId(high)));
+}
+
+static void test_a_lock_id_is_its_mac_in_lowercase_hex_and_back() {
+    std::string id;
+    TEST_ASSERT_TRUE(latchkey_util::haLockId("00:00:5E:00:53:21", id));
+    TEST_ASSERT_EQUAL_STRING("00005e005321", id.c_str());
+    TEST_ASSERT_TRUE(latchkey_util::haLockId("aa:bb:cc:dd:ee:ff", id));
+    TEST_ASSERT_EQUAL_STRING("aabbccddeeff", id.c_str());
+    std::string mac;
+    TEST_ASSERT_TRUE(latchkey_util::haLockMac("00005e005321", mac));
+    TEST_ASSERT_EQUAL_STRING("00:00:5E:00:53:21", mac.c_str());
+    TEST_ASSERT_TRUE(latchkey_util::haLockMac("aabbccddeeff", mac));
+    TEST_ASSERT_EQUAL_STRING("AA:BB:CC:DD:EE:FF", mac.c_str());
+    const char* const badMacs[] = {"", "00:00:5E:00:53", "00:00:5E:00:53:2G", "00-00-5E-00-53-21",
+                                   "00:00:5E:00:53:21:00", "0:00:5E:00:53:21"};
+    for (const char* bad : badMacs) {
+        id = "kept";
+        TEST_ASSERT_FALSE_MESSAGE(latchkey_util::haLockId(bad, id), bad);
+        TEST_ASSERT_EQUAL_STRING("kept", id.c_str());
+    }
+    const char* const badIds[] = {"", "00005e00532", "00005e0053211", "00005E005321", "00005e00532g", "00:00:5e:00"};
+    for (const char* bad : badIds) {
+        mac = "kept";
+        TEST_ASSERT_FALSE_MESSAGE(latchkey_util::haLockMac(bad, mac), bad);
+        TEST_ASSERT_EQUAL_STRING("kept", mac.c_str());
+    }
+}
+
+static void test_removing_a_lock_empties_its_configs_and_its_state() {
+    std::vector<MqttMessage> messages;
+    TEST_ASSERT_TRUE(latchkey_util::haRemoval("homeassistant", "latchkey-0a1b2c", "00005e005321", messages));
+    const char* const expected[] = {
+        "homeassistant/lock/latchkey-0a1b2c/00005e005321/config",
+        "homeassistant/sensor/latchkey-0a1b2c/00005e005321_battery/config",
+        "homeassistant/sensor/latchkey-0a1b2c/00005e005321_last_event/config",
+        "homeassistant/binary_sensor/latchkey-0a1b2c/00005e005321_link/config",
+        "homeassistant/event/latchkey-0a1b2c/00005e005321_unlock_alert/config",
+        "latchkey/latchkey-0a1b2c/00005e005321/state",
+        "latchkey/latchkey-0a1b2c/00005e005321/battery",
+        "latchkey/latchkey-0a1b2c/00005e005321/last_event",
+        "latchkey/latchkey-0a1b2c/00005e005321/link",
+    };
+    TEST_ASSERT_EQUAL_UINT(9, messages.size());
+    for (size_t i = 0; i < messages.size(); ++i) {
+        TEST_ASSERT_EQUAL_STRING(expected[i], messages[i].topic.c_str());
+        TEST_ASSERT_TRUE(messages[i].payload.empty());
+        TEST_ASSERT_TRUE(messages[i].retain);
+    }
+    const std::vector<MqttMessage> configs = discover(frontDoor());
+    for (size_t i = 0; i < configs.size(); ++i) {
+        TEST_ASSERT_EQUAL_STRING(configs[i].topic.c_str(), messages[i].topic.c_str());
+    }
+    std::vector<MqttMessage> kept{MqttMessage{"kept", "kept"}};
+    TEST_ASSERT_FALSE(latchkey_util::haRemoval("home/assistant", "latchkey-0a1b2c", "00005e005321", kept));
+    TEST_ASSERT_FALSE(latchkey_util::haRemoval("homeassistant", "latchkey 0a1b2c", "00005e005321", kept));
+    TEST_ASSERT_FALSE(latchkey_util::haRemoval("homeassistant", "latchkey-0a1b2c", "00:00:5E:00:53:21", kept));
+    TEST_ASSERT_EQUAL_UINT(1, kept.size());
+    TEST_ASSERT_EQUAL_STRING("kept", kept[0].topic.c_str());
+}
+
+static void test_a_config_topic_names_its_lock() {
+    for (const MqttMessage& config : discover(frontDoor())) {
+        const std::optional<std::string> lock =
+            latchkey_util::haConfigLock(config.topic, "homeassistant", "latchkey-0a1b2c");
+        TEST_ASSERT_TRUE_MESSAGE(lock.has_value(), config.topic.c_str());
+        TEST_ASSERT_EQUAL_STRING("00005e005321", lock->c_str());
+    }
+    const char* const foreign[] = {
+        "homeassistant/lock/latchkey-0a1b2c/00005e005321",
+        "homeassistant/lock/latchkey-0a1b2c/00005e005321/config/more",
+        "other/lock/latchkey-0a1b2c/00005e005321/config",
+        "homeassistant/lock/latchkey-ffffff/00005e005321/config",
+        "homeassistant/switch/latchkey-0a1b2c/00005e005321/config",
+        "homeassistant/lock/latchkey-0a1b2c/00005e005321_battery/config",
+        "homeassistant/sensor/latchkey-0a1b2c/00005e005321/config",
+        "homeassistant/sensor/latchkey-0a1b2c/00005e005321_link/config",
+        "homeassistant/sensor/latchkey-0a1b2c/00005e005321_temperature/config",
+        "homeassistant/lock/latchkey-0a1b2c/00005E005321/config",
+        "homeassistant/lock/latchkey-0a1b2c/00005e00532/config",
+        "homeassistant/lock/latchkey-0a1b2c/zz005e005321/config",
+        "homeassistant/sensor/latchkey-0a1b2c/_battery/config",
+        "",
+    };
+    for (const char* topic : foreign) {
+        TEST_ASSERT_FALSE_MESSAGE(latchkey_util::haConfigLock(topic, "homeassistant", "latchkey-0a1b2c").has_value(),
+                                  topic);
+    }
+}
+
+static void test_a_command_topic_names_its_lock() {
+    HaLockTopics topics;
+    TEST_ASSERT_TRUE(latchkey_util::haLockTopics("latchkey-0a1b2c", "00005e005321", topics));
+    const std::optional<std::string> lock = latchkey_util::haCommandLock(topics.command, "latchkey-0a1b2c");
+    TEST_ASSERT_TRUE(lock.has_value());
+    TEST_ASSERT_EQUAL_STRING("00005e005321", lock->c_str());
+    const char* const foreign[] = {
+        "latchkey/latchkey-ffffff/00005e005321/set",
+        "latchkey/latchkey-0a1b2c/00005e005321/state",
+        "latchkey/latchkey-0a1b2c/set",
+        "latchkey/latchkey-0a1b2c/00005e005321/set/more",
+        "latchkey/latchkey-0a1b2c/00005E005321/set",
+        "latchkey/latchkey-0a1b2c/00005e00532/set",
+        "other/latchkey-0a1b2c/00005e005321/set",
+        "latchkey/latchkey-0a1b2c//set",
+        "",
+    };
+    for (const char* topic : foreign) {
+        TEST_ASSERT_FALSE_MESSAGE(latchkey_util::haCommandLock(topic, "latchkey-0a1b2c").has_value(), topic);
+    }
+}
+
 int main() {
     UNITY_BEGIN();
     RUN_TEST(test_topics_live_under_latchkey_board_and_lock);
@@ -190,5 +324,12 @@ int main() {
     RUN_TEST(test_empty_details_are_left_out);
     RUN_TEST(test_invalid_utf8_is_refused);
     RUN_TEST(test_ids_that_cannot_be_topic_or_object_ids_are_refused);
+    RUN_TEST(test_discovery_configs_are_retained);
+    RUN_TEST(test_ids_take_letters_digits_dash_and_underscore);
+    RUN_TEST(test_the_board_id_ends_with_the_last_three_bytes_of_its_mac);
+    RUN_TEST(test_a_lock_id_is_its_mac_in_lowercase_hex_and_back);
+    RUN_TEST(test_removing_a_lock_empties_its_configs_and_its_state);
+    RUN_TEST(test_a_config_topic_names_its_lock);
+    RUN_TEST(test_a_command_topic_names_its_lock);
     return UNITY_END();
 }

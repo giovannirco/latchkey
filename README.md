@@ -22,6 +22,7 @@ Works today:
 - Lock access from the board, checked on a real lock: passcodes (permanent, timed and one-time, listed by id and never by code), fingerprints and IC cards (enrolment with live progress, validity, weekly windows), and the keypad's super admin passcode, which pairing can take from the owner and the web UI can show and change after a press of the board's button.
 - Lock settings (auto-lock, passage mode, sound, the reset button, and privacy lock and tamper alert as experimental switches), the lock's operation log, and unlock alerts: the board reads each lock's log and raises an alert, with an audit entry, for every unlock from an app it did not make and every forced opening. The lock's clock follows the board's time zone, daylight-saving changes included.
 - The owner web UI (`web/`), served by the board and tested against a mock of the board API.
+- Home Assistant over MQTT, off until configured: each lock appears as a device with a lock entity, battery, last event, Bluetooth link and an unlock alert, through MQTT discovery, and LOCK and UNLOCK from Home Assistant run through the same queue as the web.
 
 In progress: the Bluetooth link and lock manager on the board, over-the-air updates, lock hardening and the encrypted key backup.
 
@@ -34,6 +35,7 @@ In progress: the Bluetooth link and lock manager on the board, over-the-air upda
 - An audit log of every action, never containing secrets.
 - Hardening (in progress): a random admin passcode on the lock, unknown passcodes removed, the lock's reset button disabled only after an encrypted backup of its keys.
 - No cloud: the board only reaches the internet for DNS and SNTP.
+- MQTT, when you turn it on, is plain MQTT over TCP to a broker you choose: whoever may publish to a lock's command topic there can lock and unlock it.
 - Profile P1: lock keys sit in plaintext NVS, so whoever reads the flash of a stolen board can use them. Flash encryption is possible but not the default.
 
 [SECURITY.md](SECURITY.md) has the full model and how to report a vulnerability; [docs/protocol.md](docs/protocol.md) has the protocol notes and its limits.
@@ -163,6 +165,31 @@ npm pack esp-web-tools@<version> && tar -xzf esp-web-tools-<version>.tgz
 for f in package/dist/web/*.js; do
   printf '"https://unpkg.com/esp-web-tools@<version>/dist/web/%s": "sha384-%s",\n' "${f##*/}" "$(openssl dgst -sha384 -binary "$f" | openssl base64 -A)"
 done
+```
+
+## Home Assistant over MQTT
+
+MQTT is off until you configure it, on the System page of the web UI or with `mqtt.set {"enabled", "host", "port"?, "username"?, "password"?, "prefix"?}`. The host is a name or an IPv4 address, the port defaults to 1883 and the discovery prefix to `homeassistant`; fields left out take those defaults. The password is cleared by `""`, and kept when left out only while the host, port and username stay the same: a change to any of them without a password clears it, so the stored password never goes to another broker. `mqtt.get` answers `{enabled, host, port, username, prefix, passwordSet, connected, problem}`, with `problem` null or why the board is not connected (`cannot reach the broker`, `the broker refused the username or password`, `the broker refused a subscription`), and never the password. The board connects over plain TCP (no TLS), as client `<board>`, and reconnects at once after a change. After a failure it waits 1 s, then twice as long each time up to 2 min; the wait starts again from 1 s only after a connection has held for a minute.
+
+Topics, with `<board>` = `latchkey-` and the last three bytes of the board's Wi-Fi MAC address, and `<lock>` = the lock's MAC address as 12 lowercase hex digits:
+
+| Topic | Payload |
+|---|---|
+| `latchkey/<board>/availability` | `online` when connected, `offline` as the last will and when MQTT is turned off; retained |
+| `latchkey/<board>/<lock>/state` | `LOCKED` or `UNLOCKED`; retained |
+| `latchkey/<board>/<lock>/battery` | battery level, 0 to 100; retained |
+| `latchkey/<board>/<lock>/last_event` | the last lock or unlock, as the web UI words it (`Unlocked from the app`); retained |
+| `latchkey/<board>/<lock>/link` | `ON` while the board has heard the lock within the last 2 minutes, else `OFF`; retained |
+| `latchkey/<board>/<lock>/alert` | `{"event_type": "unexpected_unlock", "method", "time"}` for each `lock.alert` event (raised by the operation-log check, in progress); not retained |
+| `latchkey/<board>/<lock>/set` | commands from Home Assistant: `LOCK` or `UNLOCK` |
+
+- On each connection the board publishes, retained, one discovery config per entity of every lock it holds, under `<prefix>/<component>/<board>/<object>/config`: a `lock`, a battery `sensor`, a last-event `sensor`, a link `binary_sensor` and an unlock-alert `event`, grouped as one device per lock (its name, model and firmware). It checks its locks every 30 s and after each command: a lock that is renamed is announced again, and one that is forgotten or reset loses its configs and state topics (empty retained messages, sent again until they go out). A config under the board's node id for a lock the board does not hold, which the board finds when it connects, loses that lock's configs and state topics too. A new discovery prefix or broker first removes the board's entities under the old one, and waits up to 3 s for the broker to confirm each removal. `system.factoryReset` removes every entity and the availability topic from the broker the same way before it erases the board; if MQTT is not connected at that moment, or the broker does not confirm in time, Home Assistant keeps an unavailable device until you delete it there.
+- The board subscribes to the `set` topic of each lock it holds, so commands for other lock ids never reach it. `LOCK` and `UNLOCK` run as web jobs do, through the same queue and without a button press, and every command that runs is audited with the source `mqtt`. A lock takes one queued MQTT command at a time. Commands refused because one is already queued (`queued`), because the job queue is full (`busy`) or because the board's own queue overflowed (`dropped`) are counted: the first refusal of each kind gives an audit entry `mqtt.command` with the result `<kind> x<count>` at once, the later ones at most one entry a minute, so a flood of messages cannot wear out the flash. Any other payload is ignored and logged, and so is a retained command: the broker hands a retained message to every new subscription, so a retained `UNLOCK` would otherwise open the door each time the board reconnects. These log lines, too, come at most once a minute per kind, with a count.
+- The state and the battery follow every `lock.state` event, and the last event every `lock.event`. A paired lock's adverts carry no lock state, so the board also reads each lock's status once MQTT is connected after a boot, then every 6 hours, or 15 minutes after a read the lock did not answer; any other job that brings a fresh battery level postpones that read. It reads one lock at a time, only when no web job is waiting, and at least a minute after the previous read, so with several locks the reads spread out. A status read is one Bluetooth connection, up to the 30 s a paired lock may take to advertise.
+- `test_mqtt.py` runs against a board and the broker of the optional `mqtt` key in `secrets.local.json` (`{host, port, username, password}`; it skips without it, and on a board whose MQTT is on or set for another broker) with paho-mqtt 2.1.0, and uses its own discovery prefixes, `latchkey_hil` and `latchkey_hil2`, so Home Assistant does not pick its entities up. On a board that holds the lock it unlocks and locks the lock from MQTT and leaves it locked; on a board without locks or an owner login it also factory-resets the board and claims it again. It also checks the retries against a wrong password, a name that does not resolve and an address that does not answer. At the end it turns MQTT off, clears the retained messages it caused and restores the board's settings.
+
+```sh
+uv run -q --no-project --python 3.14 --with pytest==9.1.1 --with pyserial==3.5 --with paho-mqtt==2.1.0 pytest tools/hil/test_mqtt.py --port <port>
 ```
 
 ## Contributing

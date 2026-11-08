@@ -33,6 +33,7 @@ std::string readField(const char (&field)[N]) {
 
 constexpr uint8_t kSerialOrigin = 0;
 constexpr uint8_t kWebOrigin = 1;
+constexpr uint8_t kMqttOrigin = 2;
 constexpr uint8_t kBoardOrigin = 3;
 
 uint32_t oldestSeq(uint32_t next) { return next > store::audit::kCapacity ? next - store::audit::kCapacity : 1; }
@@ -41,6 +42,8 @@ rpc::Transport originOf(uint8_t stored) {
     switch (stored) {
         case kSerialOrigin:
             return rpc::Transport::Serial;
+        case kMqttOrigin:
+            return rpc::Transport::Mqtt;
         case kBoardOrigin:
             return rpc::Transport::Board;
         default:
@@ -54,6 +57,8 @@ uint8_t storedOrigin(rpc::Transport origin) {
             return kSerialOrigin;
         case rpc::Transport::Web:
             return kWebOrigin;
+        case rpc::Transport::Mqtt:
+            return kMqttOrigin;
         case rpc::Transport::Board:
             return kBoardOrigin;
     }
