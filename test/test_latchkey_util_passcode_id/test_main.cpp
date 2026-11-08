@@ -114,6 +114,24 @@ static void test_failures_and_bad_input_give_no_id() {
     TEST_ASSERT_EQUAL_STRING("abababababab", hex(id).c_str());
 }
 
+static void test_an_id_is_written_as_twelve_lowercase_hex_digits() {
+    const PasscodeId id{0x01, 0x23, 0x52, 0x52, 0xd4, 0xd1};
+    TEST_ASSERT_EQUAL_STRING("01235252d4d1", latchkey_util::formatPasscodeId(id).c_str());
+    PasscodeId parsed{};
+    TEST_ASSERT_TRUE(latchkey_util::parsePasscodeId("01235252d4d1", parsed));
+    TEST_ASSERT_EQUAL_UINT8_ARRAY(id.data(), parsed.data(), id.size());
+    TEST_ASSERT_EQUAL_UINT64(0x01235252d4d1ULL, latchkey_util::passcodeIdNumber(id));
+    TEST_ASSERT_EQUAL_UINT64(0xffffffffffffULL, latchkey_util::passcodeIdNumber(PasscodeId{0xff, 0xff, 0xff, 0xff, 0xff, 0xff}));
+}
+
+static void test_other_id_text_is_refused() {
+    for (const char* text : {"", "01235252d4d", "01235252d4d10", "01235252D4D1", "01235252d4dg", " 1235252d4d1", "0x235252d4d1"}) {
+        PasscodeId parsed{0xAB, 0xAB, 0xAB, 0xAB, 0xAB, 0xAB};
+        TEST_ASSERT_FALSE_MESSAGE(latchkey_util::parsePasscodeId(text, parsed), text);
+        TEST_ASSERT_EQUAL_STRING("abababababab", hex(parsed).c_str());
+    }
+}
+
 int main() {
     UNITY_BEGIN();
     RUN_TEST(test_the_id_is_six_bytes_of_a_labelled_hmac_under_the_lock_key);
@@ -122,5 +140,7 @@ int main() {
     RUN_TEST(test_different_codes_give_different_ids_on_one_lock);
     RUN_TEST(test_without_the_lock_key_a_search_of_every_code_finds_nothing);
     RUN_TEST(test_failures_and_bad_input_give_no_id);
+    RUN_TEST(test_an_id_is_written_as_twelve_lowercase_hex_digits);
+    RUN_TEST(test_other_id_text_is_refused);
     return UNITY_END();
 }
