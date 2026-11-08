@@ -40,6 +40,32 @@ test('changing the password needs 12 characters, like the board', async ({ reque
   expect(enough).toEqual({ id: 7, result: {} });
 });
 
+test('mqtt.set refuses a host or prefix the board refuses and never returns the password', async ({ request }) => {
+  await signIn(request);
+  for (const params of [
+    { enabled: true, host: 'bad host' },
+    { enabled: true, host: 'mqtt://broker.example' },
+    { enabled: true, host: 'broker.example:1883' },
+    { enabled: true, host: 'broker.example', prefix: 'home/assistant' },
+    { enabled: true, host: 'broker.example', prefix: 'a+b' },
+  ]) {
+    const refused = await (await rpc(request, 'mqtt.set', params)).json();
+    expect(refused.error.code).toBe('invalid_argument');
+  }
+  const saved = await (
+    await rpc(request, 'mqtt.set', { enabled: true, host: ' broker.example ', password: 'broker secret' })
+  ).json();
+  expect(saved.result).toEqual({
+    enabled: true,
+    host: 'broker.example',
+    port: 1883,
+    username: '',
+    prefix: 'homeassistant',
+    passwordSet: true,
+  });
+  expect(JSON.stringify(await (await rpc(request, 'mqtt.get')).json())).not.toContain('broker secret');
+});
+
 test('rpc refuses other content types and foreign origins', async ({ request }) => {
   await signIn(request);
   const text = await request.post('/api/rpc', {

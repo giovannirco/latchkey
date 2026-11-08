@@ -96,6 +96,8 @@ BASIC_FEATURES = ["passcode", "auto_lock", "manual_lock"]
 PASSCODE_TYPES = ("permanent", "timed", "one_time", "cyclic")
 HARDEN_STEPS = ("admin_passcode", "passcodes", "reset_button", "time")
 HHMM = re.compile(r"^([01]\d|2[0-3]):[0-5]\d$")
+MQTT_HOST = re.compile(r"^[A-Za-z0-9_-]+(\.[A-Za-z0-9_-]+)*$")
+HA_ID = re.compile(r"^[A-Za-z0-9_-]+$")
 LOG_APP_UNLOCK = 1
 LOG_PASSCODE_UNLOCK = 4
 LOG_WRONG_PASSCODE = 7
@@ -1292,9 +1294,13 @@ class Mock:
     def mqtt_set(self, ctx: Context, params: dict) -> dict:
         enabled = bool_param(params, "enabled")
         host = text_param(params, "host", max_len=64, required=enabled)
+        if host and not MQTT_HOST.match(host):
+            raise invalid("host must be a host name or an IPv4 address of at most 64 characters")
         port = int_param(params, "port", default=1883, lo=1, hi=65535)
         username = text_param(params, "username", max_len=64)
         prefix = text_param(params, "prefix", max_len=32) or "homeassistant"
+        if not HA_ID.match(prefix):
+            raise invalid("prefix must be 1 to 32 letters, digits, - or _")
         password = params.get("password")
         if password is not None and (not isinstance(password, str) or len(password) > 64):
             raise invalid("the MQTT password is at most 64 characters")
