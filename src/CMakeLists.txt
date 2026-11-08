@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 idf_component_register(
     SRCS
+        "access_requests.cpp"
         "audit.cpp"
         "auth.cpp"
         "ble_central.cpp"
@@ -14,9 +15,11 @@ idf_component_register(
         "jobs.cpp"
         "lock_manager.cpp"
         "main.cpp"
-        "methods_access.cpp"
+        "methods_admin_passcode.cpp"
         "methods_auth.cpp"
+        "methods_credentials.cpp"
         "methods_locks.cpp"
+        "methods_passcodes.cpp"
         "methods_system.cpp"
         "rpc.cpp"
         "store.cpp"

@@ -1459,13 +1459,6 @@ rpc::Reply runOnLock(const std::string& mac, const char* action, LockWork work) 
     return submit(job);
 }
 
-bool storeAdminPasscode(const std::string& mac, const std::string& code) {
-    return updateRecord(mac, [&code](Record& stored) {
-        copyText(stored.adminPasscode, code);
-        stored.flags |= store::locks::kFlagAdminPasscodeConfirmed;
-    });
-}
-
 AdminPasscodeCopy::~AdminPasscodeCopy() { mbedtls_platform_zeroize(code.data(), code.size()); }
 
 bool stageAdminPasscode(const std::string& mac, const std::string& candidate, AdminPasscodeCopy& previous) {

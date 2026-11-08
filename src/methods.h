@@ -9,6 +9,10 @@ void registerAuth();
 
 void registerLocks();
 
-void registerAccess();
+void registerPasscodes();
+
+void registerCredentials();
+
+void registerAdminPasscode();
 
 }

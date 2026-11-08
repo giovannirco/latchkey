@@ -53,8 +53,6 @@ bool confirmAdminPasscode(const std::string& mac);
 
 bool restoreAdminPasscode(const std::string& mac, const AdminPasscodeCopy& previous);
 
-bool storeAdminPasscode(const std::string& mac, const std::string& code);
-
 rpc::Reply rename(const std::string& mac, const std::string& name);
 
 rpc::Reply forget(const std::string& mac);

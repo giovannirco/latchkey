@@ -4,8 +4,7 @@
 #include <cstring>
 #include <string>
 
-#include "mbedtls/platform_util.h"
-
+#include "access_requests.h"
 #include "latchkey_util/ble_adv.h"
 #include "latchkey_util/label.h"
 #include "latchkey_util/pair_wait.h"
@@ -13,7 +12,6 @@
 #include "methods.h"
 #include "rpc.h"
 #include "store.h"
-#include "ttlock/types.h"
 
 namespace methods {
 
@@ -120,22 +118,8 @@ struct PairRequest {
     std::string mac;
     std::string name;
     uint32_t wait = 0;
-    std::string adminPasscode;
-
-    ~PairRequest() { mbedtls_platform_zeroize(adminPasscode.data(), adminPasscode.size()); }
+    lock_access::Secret adminPasscode;
 };
-
-bool readAdminPasscode(const cJSON* item, std::string& out) {
-    if (absent(item) || (cJSON_IsString(item) && item->valuestring != nullptr && item->valuestring[0] == '\0')) {
-        out.clear();
-        return true;
-    }
-    if (!cJSON_IsString(item) || item->valuestring == nullptr || !ttlock::isPasscode(item->valuestring)) {
-        return false;
-    }
-    out = item->valuestring;
-    return true;
-}
 
 static_assert(latchkey_util::kMaxPairWaitSeconds == 600, "readPair's wait message states this limit");
 
@@ -150,7 +134,7 @@ rpc::Reply readPair(const cJSON* params, const rpc::Context& context, PairReques
     if (!readSeconds(member(params, "wait"), fallback, latchkey_util::kMaxPairWaitSeconds, out.wait)) {
         return withTarget(invalid("wait must be a whole number of seconds from 1 to 600"), out.mac);
     }
-    if (!readAdminPasscode(member(params, "adminPasscode"), out.adminPasscode)) {
+    if (!lock_access::readCode(member(params, "adminPasscode"), out.adminPasscode)) {
         return withTarget(invalid(kAdminPasscodeMessage), out.mac);
     }
     return withTarget(rpc::ok(), out.mac);
@@ -167,7 +151,8 @@ rpc::Reply pair(const cJSON* params, const rpc::Context& context) {
     if (!problem.error.empty()) {
         return problem;
     }
-    return withTarget(lock_manager::pair(request.mac, request.name, request.wait, request.adminPasscode), request.mac);
+    return withTarget(lock_manager::pair(request.mac, request.name, request.wait, request.adminPasscode.get()),
+                      request.mac);
 }
 
 rpc::Reply checkHeldLock(const cJSON* params, const rpc::Context&) {
