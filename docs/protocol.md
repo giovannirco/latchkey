@@ -3,6 +3,8 @@
 
 These notes describe the part of the TTLock protocol that `components/ttlock` implements, for V3 locks (protocol type 5 and later). The code is a C++ port of [kind3r/ttlock-sdk-js](https://github.com/kind3r/ttlock-sdk-js), cross-checked against [roquerodrigo/ttlock-ble](https://github.com/roquerodrigo/ttlock-ble); the host tests in `test/` run it against vectors generated from both. What has been confirmed on real locks is listed under [Verified on hardware](#verified-on-hardware).
 
+Command names are kind3r's `CommandType` constants without the `COMM_` prefix, spelled as kind3r spells them: `SEARCHE_DEVICE_FEATURE` and `GET_ALARM_ERRCORD_OR_OPERATION_FINISHED` are its constant names, misspellings included.
+
 ## Transport
 
 - GATT service `0x1910`. The board writes requests to characteristic `0xFFF2` and receives replies and events as notifications on `0xFFF4`.
@@ -60,24 +62,24 @@ CRC-8 Dallas/Maxim: reflected polynomial `0x8C`, initial value 0, no final XOR, 
 2. `GET_AES_KEY` (`0x19`) with `SCIENER`; the reply carries the lock's 16-byte key.
 3. `ADD_ADMIN` (`0x56`) with two random numbers from 1 to 999,999,999, `adminPs` and `unlockKey`, plus `SCIENER`, which the lock echoes. The keys are stored right after this step, so a link that drops later still leaves keys that can reset the lock.
 4. `TIME_CALIBRATE` (`0x43`) with the board's local time; a timeout or a lock error does not stop the pairing.
-5. `SEARCH_DEVICE_FEATURE` (`0x01`): the feature bits.
-6. Settings reads, each one only when the lock reports the feature, a lock error tolerated: `COMM_SWITCH` (`0x68`) for the reset button, tamper alert or privacy lock, `AUDIO_MANAGE` (`0x62`), `SHOW_PASSWORD` (`0x59`), `AUTO_LOCK_MANAGE` (`0x36`) and `GET_ADMIN_CODE` (`0x65`).
+5. `SEARCHE_DEVICE_FEATURE` (`0x01`): the feature bits.
+6. Settings reads, each one only when the lock reports the feature, a lock error tolerated: `SWITCH` (`0x68`) for the reset button, tamper alert or privacy lock, `AUDIO_MANAGE` (`0x62`), `SHOW_PASSWORD` (`0x59`), `AUTO_LOCK_MANAGE` (`0x36`) and `GET_ADMIN_CODE` (`0x65`).
 7. `SET_ADMIN_KEYBOARD_PWD` (`0x53`) with a random 7-digit admin passcode, stored before it is sent.
 8. `INIT_PASSWORDS` (`0x31`): ten random code and secret seeds and the year, the base of the lock's offline passcodes.
 9. `CONTROL_REMOTE_UNLOCK` (`0x37`) query, when the lock reports `config_gateway_unlock`.
-10. `OPERATE_FINISHED` (`0x57`).
+10. `GET_ALARM_ERRCORD_OR_OPERATION_FINISHED` (`0x57`), which ends the pairing.
 
 kind3r's `initLock` has the switch read, the lamp read and `INIT_PASSWORDS` commented out, and keeps the admin passcode a lock reports through `GET_ADMIN_CODE`; Latchkey sends the switch read and `INIT_PASSWORDS`, skips the lamp and always sets a new random admin passcode.
 
 ## Admin login, lock and unlock
 
 - Admin commands start with `CHECK_ADMIN` (`0x41`: `adminPs`, the lock flag position and uid 0), whose reply carries a random `psFromLock`, then `CHECK_RANDOM` (`0x30`) with `psFromLock + unlockKey`, wrapping at 32 bits.
-- Lock and unlock start with `CHECK_USER_TIME` (`0x55`: a validity window from 2000-01-31 14:00 to 2099-11-30 14:00, the lock flag position and uid 0), which also returns `psFromLock`, then `UNLOCK` (`0x47`) or `LOCK` (`0x58`) with `psFromLock + unlockKey` and the UTC time. The reply carries the battery level and, when present, the operation record (uid, record id, time).
+- Lock and unlock start with `CHECK_USER_TIME` (`0x55`: a validity window from 2000-01-31 14:00 to 2099-11-30 14:00, the lock flag position and uid 0), which also returns `psFromLock`, then `UNLOCK` (`0x47`) or `FUNCTION_LOCK` (`0x58`) with `psFromLock + unlockKey` and the UTC time. The reply carries the battery level and, when present, the operation record (uid, record id, time).
 - Commands that send a time refuse to run until the board's clock has been set (SNTP or `system.time.set` over USB) and never send a time before 2024.
 
 ## Commands
 
-Feature bits come from `SEARCH_DEVICE_FEATURE`: after one leading byte, one or two big-endian 32-bit words, the first for bits 0 to 31 and the second for bits 32 to 63. A gated command is refused with `unsupported`, with no Bluetooth traffic, when the lock does not report its bit. The table lists every command `components/ttlock` sends; names are kind3r's `CommandType` without the `COMM_` prefix.
+Feature bits come from `SEARCHE_DEVICE_FEATURE`: after one leading byte, one or two big-endian 32-bit words, the first for bits 0 to 31 and the second for bits 32 to 63. A gated command is refused with `unsupported`, with no Bluetooth traffic, when the lock does not report its bit. The table lists every command `components/ttlock` sends.
 
 | Opcode | Name | Used for | Feature bit |
 |---|---|---|---|
