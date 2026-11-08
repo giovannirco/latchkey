@@ -13,6 +13,7 @@ from datetime import datetime, timezone
 from typing import Any
 from zoneinfo import ZoneInfo
 
+from board import error_code, is_json_object, set_clock
 from latchkey_cli import Console
 from owner import claim_secret, holds_no_secret, setup_params, wifi_params
 
@@ -23,11 +24,6 @@ SYNC_TOLERANCE_S = 10
 NVS_HEADROOM_ENTRIES = 500
 CET = "CET-1CEST,M3.5.0,M10.5.0/3"
 CLOCK_TOLERANCE_S = 5
-
-
-def error_code(console: Console, method: str, params: dict[str, Any] | None = None) -> str | None:
-    reply = console.request(method, params, timeout=30.0)
-    return reply.get("error", {}).get("code")
 
 
 def audit_entries(console: Console) -> list[dict[str, Any]]:
@@ -42,10 +38,6 @@ def audit_entries(console: Console) -> list[dict[str, Any]]:
         before = page["next"]
         if before is None:
             return entries
-
-
-def set_clock(console: Console) -> None:
-    assert console.call("system.time.set", {"utc": int(time.time())}) == {}
 
 
 def paris_offset() -> int:
@@ -95,13 +87,6 @@ def test_factory_reset_takes_force_as_a_boolean(console: Console, fresh: list[st
     elapsed_ms = (time.monotonic() - started) * 1000.0
     grown = console.call("system.info")["uptime_ms"] - uptime
     assert grown >= elapsed_ms - 1000.0, "the board restarted"
-
-
-def is_json_object(line: str) -> bool:
-    try:
-        return isinstance(json.loads(line), dict)
-    except ValueError:
-        return False
 
 
 def test_log_lines_start_with_hash(fresh: list[str]) -> None:

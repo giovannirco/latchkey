@@ -13,6 +13,7 @@ import time
 from typing import Any
 
 import pytest
+from board import error_code, is_json_object, set_clock
 from latchkey_cli import Console
 from owner import Private, claim_secret, holds_no_secret, otpauth_secret, totp_code
 
@@ -30,12 +31,6 @@ def owner(console: Console, fresh: list[str], secrets: dict[str, Any], board_set
     return claim_secret(console, secrets, board_settings, console.call("system.info")["board"], OFFLINE_WIFI)
 
 
-def set_clock(console: Console) -> float:
-    now = time.time()
-    assert console.call("system.time.set", {"utc": int(now)}) == {}
-    return now
-
-
 def login(console: Console, password: str, code: str) -> dict[str, Any]:
     params = {"password": password, "totp": code, "dryRun": True}
     return console.request("auth.login", params, timeout=LOGIN_TIMEOUT_S)
@@ -43,17 +38,6 @@ def login(console: Console, password: str, code: str) -> dict[str, Any]:
 
 def outcome(reply: dict[str, Any]) -> Any:
     return reply["error"]["code"] if "error" in reply else reply.get("result")
-
-
-def error_code(console: Console, method: str, params: dict[str, Any] | None = None) -> Any:
-    return outcome(console.request(method, params, timeout=LOGIN_TIMEOUT_S))
-
-
-def is_json_object(line: str) -> bool:
-    try:
-        return isinstance(json.loads(line), dict)
-    except ValueError:
-        return False
 
 
 def test_login_needs_the_password_and_a_fresh_code(console: Console, owner: bytes, secrets: dict[str, Any]) -> None:
