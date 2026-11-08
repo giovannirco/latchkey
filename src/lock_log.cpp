@@ -170,10 +170,10 @@ void judge(const std::string& mac, const Entries& fresh, latchkey_util::UnlockLe
     }
 }
 
-cJSON* fetchResult(const Entries& entries, std::optional<uint16_t> since, bool more, int32_t offset) {
+cJSON* fetchResult(const Entries& entries, std::optional<uint16_t> since, uint32_t until, bool more, int32_t offset) {
     std::vector<LogEntry> listed;
     for (const LogEntry& entry : entries.items()) {
-        if (since.has_value() && entry.recordNumber <= *since) {
+        if ((since.has_value() && entry.recordNumber <= *since) || entry.recordNumber >= until) {
             continue;
         }
         LogEntry shown;

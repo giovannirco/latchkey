@@ -44,6 +44,6 @@ ttlock::Status readSlots(ttlock::Session& session, uint16_t from, uint16_t to, E
 void judge(const std::string& mac, const Entries& fresh, latchkey_util::UnlockLedger& ledger, int32_t offset,
            int64_t nowUtc);
 
-cJSON* fetchResult(const Entries& entries, std::optional<uint16_t> since, bool more, int32_t offset);
+cJSON* fetchResult(const Entries& entries, std::optional<uint16_t> since, uint32_t until, bool more, int32_t offset);
 
 }

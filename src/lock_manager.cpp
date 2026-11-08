@@ -988,14 +988,18 @@ Status readLog(ttlock::Session& session, const Lock& lock, std::optional<uint16_
     bool more = false;
     Status status = readNewEntries(session, mac, view, shown, more);
     if (status == Status::Ok) {
-        const uint16_t top = view.state.cursor;
-        uint16_t from = top > lock_log::kShownSlots ? static_cast<uint16_t>(top - lock_log::kShownSlots) : 0;
+        const uint32_t top = view.state.cursor;
+        uint32_t from = top > lock_log::kShownSlots ? top - lock_log::kShownSlots : 0;
+        uint32_t to = top;
         if (since.has_value()) {
-            from = std::max<uint16_t>(from, static_cast<uint16_t>(*since + 1));
+            from = *since + 1U;
+            to = std::min(top, from + lock_log::kShownSlots);
         }
-        status = lock_log::readSlots(session, from, top, shown);
+        if (from < to) {
+            status = lock_log::readSlots(session, static_cast<uint16_t>(from), static_cast<uint16_t>(to), shown);
+        }
         if (status == Status::Ok) {
-            reply = rpc::ok(lock_log::fetchResult(shown, since, more, logOffset(view.state)));
+            reply = rpc::ok(lock_log::fetchResult(shown, since, to, more || to < top, logOffset(view.state)));
         }
     }
     keepWatch(mac, view, status == Status::Ok, more);
