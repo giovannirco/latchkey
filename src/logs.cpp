@@ -9,6 +9,7 @@
 #include "esp_attr.h"
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 #include "sdkconfig.h"
 
 #include "clock.h"
@@ -25,12 +26,13 @@ constexpr std::string_view kWithheld = "line withheld: it matched a secret patte
 constexpr size_t kRingBytes = 6144;
 RTC_NOINIT_ATTR uint8_t s_storage[kRingBytes];
 #else
-constexpr size_t kRingBytes = 32768;
+constexpr size_t kRingBytes = 16384;
 uint8_t s_storage[kRingBytes];
 #endif
 
 std::mutex s_mutex;
 latchkey_util::LogRing s_ring(s_storage, kRingBytes);
+latchkey_util::LogJoiner s_joiner;
 uint32_t s_withheld = 0;
 
 uint64_t uptimeMs() { return static_cast<uint64_t>(esp_timer_get_time() / 1000); }
@@ -44,27 +46,35 @@ std::optional<int64_t> utcMs() {
     return static_cast<int64_t>(now.tv_sec) * 1000 + now.tv_usec / 1000;
 }
 
+void file(uint32_t upMs, std::string_view text) {
+    latchkey_util::LogLine line = latchkey_util::parseLogLine(text);
+    const bool secret = latchkey_util::holdsSecretPattern(text);
+    if (secret) {
+        line.message = kWithheld;
+        ++s_withheld;
+    }
+    s_ring.append(upMs, line);
+}
+
 }
 
 void capture(const char* text, size_t length) {
     if (xPortInIsrContext()) {
         return;
     }
-    const std::string_view raw(text, length);
-    latchkey_util::LogLine line = latchkey_util::parseLogLine(raw);
-    const bool secret = latchkey_util::holdsSecretPattern(raw);
-    if (secret) {
-        line.message = kWithheld;
-    }
+    const auto writer = reinterpret_cast<uintptr_t>(xTaskGetCurrentTaskHandle());
     const auto up = static_cast<uint32_t>(uptimeMs());
+    bool filed = false;
     {
         std::lock_guard<std::mutex> lock(s_mutex);
-        s_ring.append(up, line);
-        if (secret) {
-            ++s_withheld;
-        }
+        s_joiner.feed(writer, std::string_view(text, length), [&filed, up](std::string_view line) {
+            file(up, line);
+            filed = true;
+        });
     }
-    syslog_client::wake();
+    if (filed) {
+        syslog_client::wake();
+    }
 }
 
 Cursor oldestCursor() {

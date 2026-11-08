@@ -25,7 +25,7 @@ constexpr size_t kMaxLines = 100;
 #if CONFIG_IDF_TARGET_ESP32
 constexpr size_t kPageBytes = 2048;
 #else
-constexpr size_t kPageBytes = 8192;
+constexpr size_t kPageBytes = 4096;
 #endif
 constexpr const char* kLevelMessage = "level is error, warn, info, debug or verbose";
 

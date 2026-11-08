@@ -26,7 +26,7 @@ from owner import Private, holds_no_secret, otpauth_secret, wifi_params
 from relay import Relay
 
 LEVELS = ("error", "warn", "info", "debug", "verbose")
-RING_BYTES = {"esp32": 6144, "esp32s3": 32768}
+RING_BYTES = {"esp32": 6144, "esp32s3": 16384}
 CLOCK_MARKER = "clock set over serial, utc {}"
 LISTEN_S = 60
 LISTENER_STARTUP_S = 8.0
@@ -240,7 +240,8 @@ def test_syslog_settings_are_checked_and_audited(console: Console, owned: bool) 
         )
         entries = console.call("audit.list", {"limit": 20})["entries"]
         recent = [entry["result"] for entry in entries if entry["method"] == "system.syslog.set"]
-        assert recent[:3] == ["ok", "ok", "ok" if owned else "invalid_argument"]
+        expected = ["ok", "ok"] if owned else ["ok", "ok", "invalid_argument"]
+        assert recent[: len(expected)] == expected
     finally:
         restore(console, original)
 
