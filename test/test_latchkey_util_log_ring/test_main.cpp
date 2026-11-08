@@ -324,7 +324,12 @@ struct Joined {
     latchkey_util::LogJoiner joiner;
 
     void feed(uintptr_t writer, std::string_view piece) {
-        joiner.feed(writer, piece, [this](std::string_view line) { lines.emplace_back(line); });
+        const bool ends = !piece.empty() && piece.back() == '\n';
+        joiner.feed(writer, piece, ends, [this](std::string_view line) { lines.emplace_back(line); });
+    }
+
+    void feedCut(uintptr_t writer, std::string_view piece) {
+        joiner.feed(writer, piece, true, [this](std::string_view line) { lines.emplace_back(line); });
     }
 };
 
@@ -388,8 +393,30 @@ static void test_an_overlong_line_is_cut() {
     TEST_ASSERT_EQUAL_UINT32(latchkey_util::LogJoiner::kCapacity, joined.lines[0].size());
 }
 
+static void test_a_line_the_console_cut_does_not_swallow_the_next_one() {
+    Joined joined;
+    const std::string cut = "I (9) http: " + std::string(243, 'c');
+    joined.feedCut(1, cut);
+    joined.feed(1, "I (10) a: next\n");
+    TEST_ASSERT_EQUAL_UINT32(2, joined.lines.size());
+    TEST_ASSERT_EQUAL_STRING(cut.c_str(), joined.lines[0].c_str());
+    TEST_ASSERT_EQUAL_STRING("I (10) a: next\n", joined.lines[1].c_str());
+}
+
+static void test_a_cut_line_ends_the_pieces_before_it() {
+    Joined joined;
+    joined.feed(1, "I (11) wifi:");
+    joined.feedCut(1, std::string(250, 'w'));
+    joined.feed(1, "I (12) b: after\n");
+    TEST_ASSERT_EQUAL_UINT32(2, joined.lines.size());
+    TEST_ASSERT_EQUAL_UINT32(latchkey_util::LogJoiner::kCapacity, joined.lines[0].size());
+    TEST_ASSERT_EQUAL_STRING("I (12) b: after\n", joined.lines[1].c_str());
+}
+
 int main() {
     UNITY_BEGIN();
+    RUN_TEST(test_a_line_the_console_cut_does_not_swallow_the_next_one);
+    RUN_TEST(test_a_cut_line_ends_the_pieces_before_it);
     RUN_TEST(test_a_whole_line_passes_at_once);
     RUN_TEST(test_pieces_of_one_writer_become_one_line);
     RUN_TEST(test_empty_lines_are_dropped);

@@ -16,7 +16,7 @@ struct Stats {
     uint32_t withheld = 0;
 };
 
-void capture(const char* text, size_t length);
+void capture(const char* text, size_t length, bool cut);
 
 Cursor oldestCursor();
 

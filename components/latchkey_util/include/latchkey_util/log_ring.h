@@ -113,8 +113,7 @@ public:
     static constexpr size_t kCapacity = 256;
 
     template <typename Emit>
-    void feed(uintptr_t writer, std::string_view piece, Emit emit) {
-        const bool ends = !piece.empty() && piece.back() == '\n';
+    void feed(uintptr_t writer, std::string_view piece, bool ends, Emit emit) {
         if (length_ > 0 && writer != writer_) {
             if (ends) {
                 emitLine(piece.substr(0, kCapacity), emit);

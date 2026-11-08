@@ -58,7 +58,7 @@ void file(uint32_t upMs, std::string_view text) {
 
 }
 
-void capture(const char* text, size_t length) {
+void capture(const char* text, size_t length, bool cut) {
     if (xPortInIsrContext()) {
         return;
     }
@@ -67,7 +67,8 @@ void capture(const char* text, size_t length) {
     bool filed = false;
     {
         std::lock_guard<std::mutex> lock(s_mutex);
-        s_joiner.feed(writer, std::string_view(text, length), [&filed, up](std::string_view line) {
+        const bool ends = cut || (length > 0 && text[length - 1] == '\n');
+        s_joiner.feed(writer, std::string_view(text, length), ends, [&filed, up](std::string_view line) {
             file(up, line);
             filed = true;
         });
