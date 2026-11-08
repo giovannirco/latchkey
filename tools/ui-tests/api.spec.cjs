@@ -83,6 +83,14 @@ test('the page is served gzipped with a hash-based CSP and no-store caching', as
   expect(html).not.toMatch(/\ssrc="app\.js"|href="style\.css"/);
 });
 
+test('the page also sends its policy as a header, with frame-ancestors', async ({ request }) => {
+  const response = await request.get('/');
+  const meta = (await response.text()).match(/http-equiv="Content-Security-Policy" content="([^"]+)"/)[1];
+  expect(response.headers()['content-security-policy']).toBe(`${meta}; frame-ancestors 'none'`);
+  expect(response.headers()['x-frame-options']).toBe('DENY');
+  expect(response.headers()['referrer-policy']).toBe('no-referrer');
+});
+
 test('locks.pair answers with a job id and reports the outcome as job.done', async ({ page }) => {
   await login(page);
   const outcome = await page.evaluate(async () => {

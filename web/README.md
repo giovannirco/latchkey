@@ -1,3 +1,4 @@
+<!-- SPDX-License-Identifier: GPL-3.0-or-later -->
 # Web UI
 
 The owner's single-page app: plain HTML, CSS and JavaScript, no framework and nothing fetched from the internet. `tools/build_web.py` inlines `style.css`, `app.js` and `icons.svg` into `index.html`, adds a Content-Security-Policy that allows only the hashes of that inline script and style, and writes one reproducible gzip for the firmware to serve at `/`.
@@ -5,6 +6,17 @@ The owner's single-page app: plain HTML, CSS and JavaScript, no framework and no
 ```sh
 python3 tools/build_web.py <output.gz>      # fails above the 60 KiB gzipped budget
 ```
+
+It also writes `<output.gz>.csp.txt`, the Content-Security-Policy header value: the meta tag's policy plus `frame-ancestors 'none'`, which a meta tag cannot carry.
+
+## Headers the firmware must send
+
+- With the page, `GET /`:
+  - `Content-Encoding: gzip`;
+  - `Content-Security-Policy:` the contents of `<output.gz>.csp.txt`;
+  - `X-Frame-Options: DENY`, `X-Content-Type-Options: nosniff`, `Referrer-Policy: no-referrer`, `Cache-Control: no-store`.
+- With every API response (`/api/rpc`, `/api/ota`): `Cache-Control: no-store` and `X-Content-Type-Options: nosniff`.
+- The session cookie: `Secure; HttpOnly; SameSite=Strict; Path=/`. The mock leaves out `Secure` because it serves plain HTTP.
 
 ## Develop against the mock
 

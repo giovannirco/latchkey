@@ -13,6 +13,10 @@ web/index.html must contain each of these markers exactly once:
 
 The gzip stream has no file name and mtime 0, so the same sources give the same bytes.
 The build fails above the gzipped size budget (default 60 KiB).
+
+Next to the gzip it writes `<output>.csp.txt`: the same policy plus `frame-ancestors 'none'`,
+which a <meta> policy cannot carry, for the firmware to send as the Content-Security-Policy
+header (no trailing newline).
 """
 
 from __future__ import annotations
@@ -31,6 +35,7 @@ ICONS_MARKER = "<!-- icons -->"
 CSP_MARKER = "__CSP__"
 DEFAULT_BUDGET = 60 * 1024
 DEFAULT_WEB_DIR = Path(__file__).resolve().parents[1] / "web"
+FRAME_ANCESTORS = "frame-ancestors 'none'"
 STYLE_ATTRIBUTE = re.compile(r"\sstyle\s*=", re.IGNORECASE)
 
 
@@ -77,7 +82,8 @@ def _check_sources(template: str, css: str, js: str, icons: str) -> None:
             raise BuildError(f"{name} has a style attribute, which the hash-based CSP blocks; use a class")
 
 
-def bundle(web_dir: Path) -> bytes:
+def build(web_dir: Path) -> tuple[bytes, str]:
+    """Return the bundled page and the Content-Security-Policy header value that goes with it."""
     web_dir = Path(web_dir)
     template = _read(web_dir, "index.html")
     css = _read(web_dir, "style.css")
@@ -92,7 +98,15 @@ def bundle(web_dir: Path) -> bytes:
     }
     pattern = re.compile("|".join(re.escape(marker) for marker in replacements))
     html = pattern.sub(lambda match: replacements[match.group(0)], template)
-    return html.encode("utf-8")
+    return html.encode("utf-8"), f"{replacements[CSP_MARKER]}; {FRAME_ANCESTORS}"
+
+
+def bundle(web_dir: Path) -> bytes:
+    return build(web_dir)[0]
+
+
+def header_policy(web_dir: Path) -> str:
+    return build(web_dir)[1]
 
 
 def gzip_bundle(web_dir: Path) -> bytes:
@@ -107,7 +121,7 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     try:
-        raw = bundle(args.web_dir)
+        raw, policy = build(args.web_dir)
     except BuildError as err:
         print(f"build_web: {err}", file=sys.stderr)
         return 1
@@ -117,10 +131,13 @@ def main(argv: list[str] | None = None) -> int:
         return 1
 
     args.output.parent.mkdir(parents=True, exist_ok=True)
-    partial = args.output.with_name(args.output.name + ".partial")
-    partial.write_bytes(data)
-    partial.replace(args.output)
+    policy_path = args.output.with_name(args.output.name + ".csp.txt")
+    for target, content in ((args.output, data), (policy_path, policy.encode("utf-8"))):
+        partial = target.with_name(target.name + ".partial")
+        partial.write_bytes(content)
+        partial.replace(target)
     print(f"{args.output}: {len(raw)} bytes, {len(data)} gzipped (budget {args.budget})")
+    print(f"{policy_path}: Content-Security-Policy header value")
     return 0
 
 

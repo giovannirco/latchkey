@@ -35,6 +35,7 @@ from __future__ import annotations
 import argparse
 import base64
 import copy
+import gzip
 import hashlib
 import hmac
 import json
@@ -1401,10 +1402,12 @@ class Handler(BaseHTTPRequestHandler):
         path = urlsplit(self.path).path
         if path in ("/", "/index.html"):
             try:
-                page = build_web.gzip_bundle(self.server.web_dir)
+                html, policy = build_web.build(self.server.web_dir)
             except build_web.BuildError as err:
                 return self._send(500, str(err).encode(), "text/plain; charset=utf-8")
-            return self._send(200, page, "text/html; charset=utf-8", [("Content-Encoding", "gzip")])
+            page = gzip.compress(html, compresslevel=9, mtime=0)
+            headers = [("Content-Encoding", "gzip"), ("Content-Security-Policy", policy)]
+            return self._send(200, page, "text/html; charset=utf-8", headers)
         if path == "/api/events":
             return self._events()
         if path == "/__mock/health":

@@ -81,6 +81,14 @@ class BundleTest(unittest.TestCase):
         self.assertEqual(directives["style-src"], csp_hash(CSS))
         self.assertIn("'self'", directives["connect-src"])
 
+    def test_header_policy_is_the_meta_policy_plus_frame_ancestors(self):
+        with WebDir() as web:
+            html, header = build_web.build(web)
+            self.assertEqual(build_web.header_policy(web), header)
+        meta = re.search(r'http-equiv="Content-Security-Policy" content="([^"]+)"', html.decode()).group(1)
+        self.assertNotIn("frame-ancestors", meta)
+        self.assertEqual(header, f"{meta}; frame-ancestors 'none'")
+
     def test_inserted_text_is_not_rescanned_for_markers(self):
         js = "// SPDX-License-Identifier: GPL-3.0-or-later\nconst a = '<!-- icons -->', b = '__CSP__';\n"
         with WebDir(js=js) as web:
@@ -132,6 +140,15 @@ class MainTest(unittest.TestCase):
             self.assertEqual(gzip.decompress(first.read_bytes()), build_web.bundle(web))
             self.assertEqual(first.read_bytes(), build_web.gzip_bundle(web))
 
+    def test_writes_the_header_policy_next_to_the_gzip(self):
+        with WebDir() as web, tempfile.TemporaryDirectory() as out_dir:
+            target = Path(out_dir) / "index.html.gz"
+            self.assertEqual(self.run_main(str(target), "--web-dir", str(web))[0], 0)
+            policy = (Path(out_dir) / "index.html.gz.csp.txt").read_text()
+            self.assertEqual(policy, build_web.header_policy(web))
+            self.assertIn(csp_hash(JS), policy)
+            self.assertTrue(policy.endswith("; frame-ancestors 'none'"))
+
     def test_budget_exceeded_fails_without_writing(self):
         with WebDir() as web, tempfile.TemporaryDirectory() as out_dir:
             target = Path(out_dir) / "index.html.gz"
@@ -139,6 +156,7 @@ class MainTest(unittest.TestCase):
             self.assertEqual(code, 1)
             self.assertIn("budget", err)
             self.assertFalse(target.exists())
+            self.assertFalse((Path(out_dir) / "index.html.gz.csp.txt").exists())
 
 
 class RealWebTest(unittest.TestCase):
