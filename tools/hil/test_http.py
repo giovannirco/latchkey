@@ -27,7 +27,7 @@ import build_web
 import pytest
 from board import is_json_object
 from latchkey_cli import Console
-from owner import Private, claim_secret, holds_no_secret, otpauth_secret, totp_code
+from owner import Codes, Private, holds_no_secret, prepare_web_login
 from relay import Relay, body, header, headers, json_body
 
 WEB_DIR = Path(__file__).resolve().parents[2] / "web"
@@ -40,34 +40,11 @@ SESSION_COOKIE = re.compile(r"lk_session=([0-9a-f]{64}); Path=/; Secure; HttpOnl
 CLEARED_COOKIE = "lk_session=; Path=/; Max-Age=0; Secure; HttpOnly; SameSite=Strict"
 AUDIT_KEYS = {"seq", "time", "source", "method", "target", "result"}
 MIN_FREE_HEAP = 30_000
-TOTP_STEP_S = 30
-SAFE_STEP_WINDOW = (2.0, 24.0)
 LOCK_JOB_S = 150
 VALUE_HEAVY_REQUESTS = 12
 STALLED_HANDSHAKE_LIMIT_MS = 7000
 SECURITY_HEADERS = ("content-security-policy", "x-frame-options", "referrer-policy", "x-content-type-options")
 seen_tokens: list[str] = []
-
-
-class Codes:
-    """Hands out TOTP codes for strictly increasing steps, away from step boundaries."""
-
-    def __init__(self, secret: bytes) -> None:
-        self.secret = secret
-        self.last: int | None = None
-
-    def next(self) -> str:
-        while True:
-            position = time.time() % TOTP_STEP_S
-            if not SAFE_STEP_WINDOW[0] <= position <= SAFE_STEP_WINDOW[1]:
-                time.sleep((SAFE_STEP_WINDOW[0] - position) % TOTP_STEP_S + 0.1)
-                continue
-            current = int(time.time()) // TOTP_STEP_S
-            step = current - 1 if self.last is None else max(self.last + 1, current - 1)
-            if step <= current + 1:
-                self.last = step
-                return totp_code(self.secret, step * TOTP_STEP_S)
-            time.sleep(TOTP_STEP_S - position + SAFE_STEP_WINDOW[0])
 
 
 @dataclass
@@ -168,21 +145,7 @@ def origin(board_settings: dict[str, Any]) -> str:
 
 @pytest.fixture(scope="module")
 def codes(console: Console, relay: Relay, secrets: dict[str, Any], board_settings: dict[str, Any]) -> Codes:
-    info = console.wait_ready()
-    owned = board_settings.get("totp_uri")
-    online = info["claimed"] and info["wifi"]["connected"] and info["wifi"]["ssid"] == secrets["wifi_ssid"]
-    if not online:
-        if owned or console.call("locks.list")["locks"]:
-            pytest.fail("the board is not online on the real Wi-Fi and holds lock keys or the owner's login")
-        console.call_and_wait_restart("system.factoryReset")
-        claim_secret(console, secrets, board_settings, info["board"])
-        console.wait_info(lambda state: state["wifi"]["connected"], 60.0, "wifi to connect")
-    console.wait_info(lambda state: state["time"]["synced"], 90.0, "SNTP to sync")
-    console.wait_info(lambda state: state["certFingerprint"] is not None, 60.0, "the HTTPS certificate")
-    if owned:
-        return Codes(otpauth_secret(owned, info["board"]))
-    rotated = console.call("auth.rotateTotp", timeout=30.0)
-    return Codes(otpauth_secret(rotated["otpauth"], info["board"]))
+    return prepare_web_login(console, secrets, board_settings)
 
 
 @pytest.fixture(scope="module")
