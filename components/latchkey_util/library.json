@@ -1,0 +1,10 @@
+{
+  "name": "latchkey_util",
+  "version": "0.1.0",
+  "description": "Pure helpers for the Latchkey firmware, free of ESP-IDF dependencies",
+  "license": "GPL-3.0-or-later",
+  "build": {
+    "srcDir": "src",
+    "includeDir": "include"
+  }
+}

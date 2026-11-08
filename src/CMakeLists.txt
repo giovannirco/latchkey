@@ -1,6 +1,29 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 idf_component_register(
-    SRCS "main.cpp" "board.cpp"
+    SRCS
+        "audit.cpp"
+        "board.cpp"
+        "clock.cpp"
+        "console.cpp"
+        "events.cpp"
+        "main.cpp"
+        "methods_system.cpp"
+        "rpc.cpp"
+        "store.cpp"
+        "wifi.cpp"
     INCLUDE_DIRS "."
-    PRIV_REQUIRES esp_app_format
+    PRIV_REQUIRES
+        esp_app_format
+        esp_driver_gpio
+        esp_driver_uart
+        esp_driver_usb_serial_jtag
+        esp_event
+        esp_netif
+        esp_timer
+        esp_wifi
+        latchkey_util
+        lwip
+        mbedtls
+        nvs_flash
+        vfs
 )

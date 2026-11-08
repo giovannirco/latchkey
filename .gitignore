@@ -8,3 +8,4 @@ managed_components/
 secrets.local.json
 .superpowers/
 _worktrees/
+__pycache__/
