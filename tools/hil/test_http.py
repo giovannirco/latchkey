@@ -21,6 +21,7 @@ from typing import Any
 
 import build_web
 import pytest
+from board import is_json_object
 from latchkey_cli import Console
 from owner import Private, claim_secret, holds_no_secret, otpauth_secret, totp_code
 from relay import Relay, body, header, headers, json_body
@@ -423,10 +424,14 @@ def test_heap_holds_with_one_tls_session_and_events(relay: Relay, session: Login
 
 
 def test_no_secret_reaches_the_console_or_the_audit(console: Console, secrets: dict[str, Any]) -> None:
-    lines = "\n".join(console.lines)
     assert seen_tokens, "the suite saw no session token"
-    clean = holds_no_secret(lines, secrets, tuple(seen_tokens) + (OTHER_PASSWORD,))
-    assert clean, "the console printed a secret or a session token"
+    extra = tuple(seen_tokens) + (OTHER_PASSWORD,)
+    output = "\n".join(line for line in console.lines if not is_json_object(line))
+    clean_output = holds_no_secret(output, secrets, extra)
+    assert clean_output, "the console printed a secret or a session token"
+    clean_events = holds_no_secret(json.dumps(console.events), secrets, extra)
+    assert clean_events, "a console event carries a secret or a session token"
+    assert [event for event in console.events if event.get("event") == "job.done"] == []
     entries = console.call("audit.list", {"limit": 50})["entries"]
-    clean_audit = holds_no_secret(json.dumps(entries), secrets, tuple(seen_tokens) + (OTHER_PASSWORD,))
+    clean_audit = holds_no_secret(json.dumps(entries), secrets, extra)
     assert clean_audit, "an audit entry contains a secret or a session token"
