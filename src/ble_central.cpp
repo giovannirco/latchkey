@@ -48,6 +48,7 @@ constexpr uint32_t kProcedureTimeoutMs = 5000;
 constexpr uint32_t kWriteTimeoutMs = 2000;
 constexpr uint32_t kDisconnectTimeoutMs = 2000;
 constexpr uint32_t kConnectGraceMs = 2000;
+constexpr uint32_t kCancelWaitMs = 1000;
 constexpr uint32_t kReceiveSliceMs = 200;
 constexpr int kNoResponseRetries = 20;
 constexpr int kBusyRetries = 5;
@@ -83,6 +84,7 @@ std::atomic<bool> s_ready{false};
 std::atomic<ScanMode> s_scan{ScanMode::Off};
 std::atomic<uint16_t> s_connection{BLE_HS_CONN_HANDLE_NONE};
 std::atomic<uint32_t> s_link{0};
+std::atomic<uintptr_t> s_attempt{0};
 std::atomic<uint16_t> s_notifyHandle{0};
 std::atomic<uint32_t> s_procedure{0};
 std::atomic<uint32_t> s_reports{0};
@@ -152,9 +154,15 @@ void dropLink(int reason) {
     xSemaphoreGive(s_disconnectDone);
 }
 
-int onLinkEvent(struct ble_gap_event* event, void*) {
+int onLinkEvent(struct ble_gap_event* event, void* attempt) {
     switch (event->type) {
         case BLE_GAP_EVENT_CONNECT:
+            if (reinterpret_cast<uintptr_t>(attempt) != s_attempt) {
+                if (event->connect.status == 0) {
+                    ble_gap_terminate(event->connect.conn_handle, BLE_ERR_REM_USER_CONN_TERM);
+                }
+                return 0;
+            }
             s_connectStatus = event->connect.status;
             if (event->connect.status == 0) {
                 s_connection = event->connect.conn_handle;
@@ -162,10 +170,12 @@ int onLinkEvent(struct ble_gap_event* event, void*) {
             xSemaphoreGive(s_connectDone);
             return 0;
         case BLE_GAP_EVENT_DISCONNECT:
-            dropLink(event->disconnect.reason);
+            if (event->disconnect.conn.conn_handle == s_connection) {
+                dropLink(event->disconnect.reason);
+            }
             return 0;
         case BLE_GAP_EVENT_NOTIFY_RX: {
-            if (event->notify_rx.attr_handle != s_notifyHandle) {
+            if (event->notify_rx.conn_handle != s_connection || event->notify_rx.attr_handle != s_notifyHandle) {
                 return 0;
             }
             Message message{};
@@ -493,18 +503,26 @@ int connect(const Address& address, uint32_t timeoutMs, LinkInfo& info) {
     peer.type = address.type;
     std::memcpy(peer.val, address.value, sizeof(peer.val));
     s_connectStatus = 0;
+    void* attempt = reinterpret_cast<void*>(s_attempt.fetch_add(1) + 1);
     int rc = BLE_HS_EBUSY;
-    for (int attempt = 0; rc == BLE_HS_EBUSY && attempt < kBusyRetries; ++attempt) {
-        if (attempt > 0) {
+    for (int tries = 0; rc == BLE_HS_EBUSY && tries < kBusyRetries; ++tries) {
+        if (tries > 0) {
             vTaskDelay(kBusyRetryDelay);
         }
-        rc = ble_gap_connect(s_ownAddressType, &peer, static_cast<int32_t>(timeoutMs), nullptr, onLinkEvent, nullptr);
+        rc = ble_gap_connect(s_ownAddressType, &peer, static_cast<int32_t>(timeoutMs), nullptr, onLinkEvent, attempt);
     }
     if (rc != 0) {
         return rc;
     }
     if (xSemaphoreTake(s_connectDone, pdMS_TO_TICKS(timeoutMs + kConnectGraceMs)) != pdTRUE) {
-        ble_gap_conn_cancel();
+        const int cancelled = ble_gap_conn_cancel();
+        if (xSemaphoreTake(s_connectDone, pdMS_TO_TICKS(kCancelWaitMs)) != pdTRUE) {
+            ESP_LOGW(TAG, "no connect event after cancelling the attempt: %d", cancelled);
+        }
+        s_attempt.fetch_add(1);
+        if (connected()) {
+            disconnect();
+        }
         return BLE_HS_ETIMEOUT;
     }
     if (s_connectStatus != 0) {
