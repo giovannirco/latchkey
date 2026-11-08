@@ -22,6 +22,7 @@ idf_component_register(
         "methods_locks.cpp"
         "methods_log.cpp"
         "methods_passcodes.cpp"
+        "methods_settings.cpp"
         "methods_system.cpp"
         "rpc.cpp"
         "store.cpp"

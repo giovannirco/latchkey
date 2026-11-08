@@ -56,6 +56,7 @@ extern "C" void app_main() {
     methods::registerPasscodes();
     methods::registerCredentials();
     methods::registerAdminPasscode();
+    methods::registerSettings();
     methods::registerLog();
     jobs::start();
     http::start();
