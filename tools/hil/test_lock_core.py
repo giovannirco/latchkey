@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from board import events_for, prepare, stored, wait_idle
 from latchkey_cli import Console
 
 PAIRING_CHIP = "esp32s3"
@@ -28,7 +29,6 @@ SCAN_SECONDS = 15
 ADVERT_WATCH_S = 60
 ADVERT_SAMPLE_S = 5
 MAX_ADVERT_GAP_S = 20
-IDLE_TIMEOUT_S = 45.0
 SUMMARY_KEYS = {
     "id",
     "mac",
@@ -90,26 +90,6 @@ FEATURE_NAMES = {
 def error_code(console: Console, method: str, params: dict[str, Any] | None = None) -> str | None:
     reply = console.request(method, params, timeout=LOCK_TIMEOUT_S)
     return reply.get("error", {}).get("code")
-
-
-def stored(console: Console, mac: str) -> dict[str, Any] | None:
-    return next((lock for lock in console.call("locks.list")["locks"] if lock["id"] == mac), None)
-
-
-def events_for(console: Console, name: str, mac: str) -> list[dict[str, Any]]:
-    return [event["data"] for event in console.events if event["event"] == name and event["data"].get("lock") == mac]
-
-
-def prepare(console: Console) -> dict[str, Any]:
-    info = console.wait_ready()
-    assert console.call("system.time.set", {"utc": int(time.time())}) == {}
-    assert console.call("system.log.set", {"tag": "ble", "level": "debug"}) == {}
-    console.wait_info(lambda state: state["ble"]["ready"], 15.0, "the Bluetooth host to sync")
-    return info
-
-
-def wait_idle(console: Console) -> dict[str, Any]:
-    return console.wait_info(lambda state: not state["ble"]["connected"], IDLE_TIMEOUT_S, "the lock link to close")
 
 
 def utc_stamp() -> str:
