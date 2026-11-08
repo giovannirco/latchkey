@@ -10,6 +10,7 @@ import json
 import re
 import time
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -19,6 +20,9 @@ from latchkey_cli import Console
 from owner import claim_secret, holds_no_secret, setup_params, wifi_params
 
 BOARDS = {"esp32": ("esp32-devkit", 0), "esp32s3": ("esp32s3-atom", 0)}
+FIRMWARE = re.search(
+    r'set\(PROJECT_VER "([^"]+)"\)', (Path(__file__).resolve().parents[2] / "CMakeLists.txt").read_text()
+).group(1)
 AUDIT_CAPACITY = 200
 MIN_UTC = 1704067200
 SYNC_TOLERANCE_S = 10
@@ -59,7 +63,7 @@ def test_info_reports_identity(console: Console) -> None:
     board, button = BOARDS[info["chip"]]
     assert info["board"] == board
     assert info["button"]["gpio"] == button
-    assert info["firmware"] == "0.1.0"
+    assert info["firmware"] == FIRMWARE
     assert re.fullmatch(r"\d+\.\d+\.\d+", info["idf"])
     assert 0 < info["heap"]["minFree"] <= info["heap"]["free"]
     assert 0 < info["heap"]["largestBlock"] <= info["heap"]["free"]
@@ -117,7 +121,7 @@ def test_factory_reset_takes_force_as_a_boolean(console: Console, fresh: list[st
 
 
 def test_log_lines_start_with_hash(fresh: list[str]) -> None:
-    banners = [i for i, line in enumerate(fresh) if line.startswith("# latchkey 0.1.0 board=")]
+    banners = [i for i, line in enumerate(fresh) if line.startswith(f"# latchkey {FIRMWARE} board=")]
     assert banners, "the boot banner was not seen after the restart"
     after = [line for line in fresh[banners[-1] :] if line]
     unprefixed = [line for line in after if not line.startswith("#") and not is_json_object(line)]
