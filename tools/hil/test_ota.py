@@ -69,6 +69,7 @@ REQUEST_TIMEOUT_S = 30
 UPLOAD_TIMEOUT_S = 120
 RESTART_S = 120.0
 RESTART_SLACK_S = 5
+MARK_UPTIME_S = 20
 KEPT_S = 150.0
 ONLINE_S = 90.0
 LOCK_JOB_S = 150
@@ -366,7 +367,8 @@ def credential_counts(console: Console, lock: str) -> dict[str, int]:
 
 
 def uptime_mark(console: Console) -> tuple[int, float]:
-    return console.call("system.info")["uptime"], time.monotonic()
+    info = console.wait_info(lambda state: state["uptime"] >= MARK_UPTIME_S, RESTART_S, "an uptime a restart shows")
+    return info["uptime"], time.monotonic()
 
 
 def wait_for_restart(console: Console, mark: tuple[int, float]) -> dict[str, Any]:
