@@ -266,13 +266,20 @@ def test_audit_keeps_the_last_200_entries(console: Console, fresh: list[str]) ->
     assert nvs["availableEntries"] >= NVS_HEADROOM_ENTRIES
 
 
-def test_factory_reset_unclaims_and_a_new_claim_gets_a_new_secret(
+def certificate(console: Console, what: str) -> str:
+    return console.wait_info(lambda state: state["certFingerprint"] is not None, 60.0, what)["certFingerprint"]
+
+
+def test_factory_reset_unclaims_and_a_new_claim_gets_a_new_secret_and_certificate(
     console: Console, claimed: bytes, secrets: dict[str, Any], board_settings: dict[str, Any]
 ) -> None:
+    first = certificate(console, "the HTTPS certificate")
     info = console.call_and_wait_restart("system.factoryReset")
     assert info["claimed"] is False
     assert info["wifi"]["configured"] is False
+    assert info["certFingerprint"] is None
     assert [entry["method"] for entry in audit_entries(console)] == ["system.factoryReset"]
     second = claim_secret(console, secrets, board_settings, info["board"])
     different = second != claimed
     assert different, "a new claim reused the previous TOTP secret"
+    assert certificate(console, "a new HTTPS certificate") != first

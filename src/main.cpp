@@ -16,6 +16,7 @@
 #include "certs.h"
 #include "clock.h"
 #include "console.h"
+#include "http.h"
 #include "lock_manager.h"
 #include "methods.h"
 #include "store.h"
@@ -51,5 +52,6 @@ extern "C" void app_main() {
     methods::registerSystem();
     methods::registerAuth();
     methods::registerLocks();
+    http::start();
     console::start();
 }

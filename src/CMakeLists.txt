@@ -9,6 +9,7 @@ idf_component_register(
         "clock.cpp"
         "console.cpp"
         "events.cpp"
+        "http.cpp"
         "lock_manager.cpp"
         "main.cpp"
         "methods_auth.cpp"
@@ -25,6 +26,8 @@ idf_component_register(
         esp_driver_uart
         esp_driver_usb_serial_jtag
         esp_event
+        esp_http_server
+        esp_https_server
         esp_netif
         esp_timer
         esp_wifi
@@ -35,3 +38,5 @@ idf_component_register(
         ttlock
         vfs
 )
+
+include("${CMAKE_CURRENT_LIST_DIR}/web_assets.cmake")
