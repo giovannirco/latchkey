@@ -9,7 +9,9 @@
 #include "esp_log.h"
 
 #include "audit.h"
+#include "auth.h"
 #include "clock.h"
+#include "latchkey_util/access.h"
 #include "latchkey_util/json_depth.h"
 
 namespace rpc {
@@ -30,10 +32,14 @@ std::map<std::string, Method, std::less<>>& methods() {
     return table;
 }
 
-cJSON* errorObject(const std::string& code, const std::string& message) {
+cJSON* errorObject(const Reply& reply) {
     cJSON* error = cJSON_CreateObject();
-    cJSON_AddStringToObject(error, "code", code.c_str());
-    cJSON_AddStringToObject(error, "message", message.c_str());
+    cJSON_AddStringToObject(error, "code", reply.error.c_str());
+    cJSON_AddStringToObject(error, "message", reply.message.c_str());
+    const cJSON* item = nullptr;
+    cJSON_ArrayForEach(item, reply.errorData.get()) {
+        cJSON_AddItemToObject(error, item->string, cJSON_Duplicate(item, true));
+    }
     return error;
 }
 
@@ -44,7 +50,7 @@ std::string render(const cJSON* id, Reply reply) {
         cJSON_AddItemToObject(envelope.get(), "result",
                               reply.result != nullptr ? reply.result.release() : cJSON_CreateObject());
     } else {
-        cJSON_AddItemToObject(envelope.get(), "error", errorObject(reply.error, reply.message));
+        cJSON_AddItemToObject(envelope.get(), "error", errorObject(reply));
     }
     char* text = cJSON_PrintUnformatted(envelope.get());
     if (text == nullptr) {
@@ -60,17 +66,24 @@ bool isValidId(const cJSON* id) {
     return id == nullptr || cJSON_IsNull(id) || cJSON_IsNumber(id) || cJSON_IsString(id);
 }
 
-Reply checkAccess(const Access& access, Transport origin) {
-    if (origin == Transport::Serial) {
+Reply checkAccess(const Access& access, const Context& context) {
+    const latchkey_util::AccessDecision decision =
+        latchkey_util::decideAccess({access.needsSession, access.needsButton, access.serialOnly},
+                                    context.origin == Transport::Serial, context.session.has_value());
+    if (decision.error == nullptr) {
         return ok();
     }
-    if (access.serialOnly) {
-        return fail("forbidden", "serial console only");
-    }
-    if (access.needsSession || access.needsButton) {
-        return fail("unauthorized", "no web session");
-    }
-    return ok();
+    Reply reply = fail(decision.error, decision.message);
+    reply.audited = decision.audited;
+    return reply;
+}
+
+Response respond(const cJSON* id, Reply reply) {
+    Response response;
+    response.sessionToken = std::move(reply.sessionToken);
+    response.endSession = reply.endSession;
+    response.json = render(id, std::move(reply));
+    return response;
 }
 
 uint32_t auditTime() { return wallclock::synced() ? static_cast<uint32_t>(wallclock::utcSeconds()) : 0; }
@@ -79,9 +92,18 @@ uint32_t auditTime() { return wallclock::synced() ? static_cast<uint32_t>(wallcl
 
 const char* toString(Transport transport) { return transport == Transport::Serial ? "serial" : "web"; }
 
-Reply ok(cJSON* result) { return Reply{Json(result), {}, {}, {}}; }
+Reply ok(cJSON* result) {
+    Reply reply;
+    reply.result.reset(result);
+    return reply;
+}
 
-Reply fail(const char* code, const char* message) { return Reply{nullptr, code, message, {}}; }
+Reply fail(const char* code, const char* message) {
+    Reply reply;
+    reply.error = code;
+    reply.message = message;
+    return reply;
+}
 
 void registerMethod(const char* name, Access access, Handler handler) {
     const bool inserted = methods().emplace(name, Method{access, std::move(handler)}).second;
@@ -91,21 +113,21 @@ void registerMethod(const char* name, Access access, Handler handler) {
     }
 }
 
-std::string dispatch(const char* requestJson, Transport origin) {
+Response dispatch(const char* requestJson, Transport origin, std::string_view sessionToken) {
     if (!latchkey_util::jsonNestingWithin(requestJson, kMaxNesting)) {
-        return render(nullptr, fail("bad_request", "request nested too deeply"));
+        return respond(nullptr, fail("bad_request", "request nested too deeply"));
     }
     Json request(cJSON_ParseWithOpts(requestJson, nullptr, true));
     if (request == nullptr || !cJSON_IsObject(request.get())) {
-        return render(nullptr, fail("bad_request", "request must be a JSON object"));
+        return respond(nullptr, fail("bad_request", "request must be a JSON object"));
     }
     const cJSON* id = cJSON_GetObjectItemCaseSensitive(request.get(), "id");
     if (!isValidId(id)) {
-        return render(nullptr, fail("bad_request", "id must be a number or a string"));
+        return respond(nullptr, fail("bad_request", "id must be a number or a string"));
     }
     const cJSON* method = cJSON_GetObjectItemCaseSensitive(request.get(), "method");
     if (!cJSON_IsString(method) || method->valuestring == nullptr) {
-        return render(id, fail("bad_request", "method must be a string"));
+        return respond(id, fail("bad_request", "method must be a string"));
     }
     const cJSON* params = cJSON_GetObjectItemCaseSensitive(request.get(), "params");
     Json emptyParams;
@@ -114,21 +136,22 @@ std::string dispatch(const char* requestJson, Transport origin) {
         params = emptyParams.get();
     }
     if (!cJSON_IsObject(params)) {
-        return render(id, fail("invalid_params", "params must be an object"));
+        return respond(id, fail("invalid_argument", "params must be an object"));
     }
     const auto entry = methods().find(std::string_view(method->valuestring));
     if (entry == methods().end()) {
-        return render(id, fail("unknown_method", "no such method"));
+        return respond(id, fail("unknown_method", "no such method"));
     }
     const Method& target = entry->second;
-    Reply reply = checkAccess(target.access, origin);
+    const Context context{origin, origin == Transport::Web ? auth::sessionFor(sessionToken) : std::nullopt};
+    Reply reply = checkAccess(target.access, context);
     if (reply.error.empty()) {
-        reply = target.handler(params, Context{origin});
+        reply = target.handler(params, context);
     }
-    if (target.access.audited) {
+    if (target.access.audited && reply.audited) {
         audit::append({auditTime(), origin, entry->first, reply.target, reply.error.empty() ? "ok" : reply.error});
     }
-    return render(id, std::move(reply));
+    return respond(id, std::move(reply));
 }
 
 std::string errorLine(const char* code, const char* message) { return render(nullptr, fail(code, message)); }

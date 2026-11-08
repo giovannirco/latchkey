@@ -5,6 +5,8 @@ namespace methods {
 
 void registerSystem();
 
+void registerAuth();
+
 void registerLocks();
 
 }

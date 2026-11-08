@@ -17,16 +17,17 @@
 #include "freertos/task.h"
 #include "lwip/inet.h"
 #include "mbedtls/platform_util.h"
-#include "psa/crypto.h"
 #include "sdkconfig.h"
 
 #include "audit.h"
+#include "auth.h"
 #include "ble_central.h"
 #include "board.h"
 #include "clock.h"
 #include "console.h"
 #include "latchkey_util/ipv4.h"
 #include "latchkey_util/otpauth.h"
+#include "latchkey_util/tz.h"
 #include "lock_manager.h"
 #include "methods.h"
 #include "rpc.h"
@@ -38,9 +39,6 @@ namespace methods {
 namespace {
 
 constexpr const char* TAG = "system";
-constexpr uint32_t kPasswordIterations = 4400;
-constexpr size_t kMinPassword = 12;
-constexpr size_t kMaxPassword = 128;
 constexpr size_t kMaxSsid = 32;
 constexpr size_t kMinWifiPassword = 8;
 constexpr size_t kMaxWifiPassword = 63;
@@ -111,21 +109,6 @@ bool readWifi(const cJSON* object, store::cfg::Wifi& out) {
     }
     out = std::move(wifi);
     return true;
-}
-
-bool hashPassword(const std::string& password, store::auth::Owner& owner) {
-    psa_key_derivation_operation_t operation = PSA_KEY_DERIVATION_OPERATION_INIT;
-    const bool derived =
-        psa_key_derivation_setup(&operation, PSA_ALG_PBKDF2_HMAC(PSA_ALG_SHA_256)) == PSA_SUCCESS &&
-        psa_key_derivation_input_integer(&operation, PSA_KEY_DERIVATION_INPUT_COST, owner.iterations) == PSA_SUCCESS &&
-        psa_key_derivation_input_bytes(&operation, PSA_KEY_DERIVATION_INPUT_SALT, owner.salt.data(),
-                                       owner.salt.size()) == PSA_SUCCESS &&
-        psa_key_derivation_input_bytes(&operation, PSA_KEY_DERIVATION_INPUT_PASSWORD,
-                                       reinterpret_cast<const uint8_t*>(password.data()),
-                                       password.size()) == PSA_SUCCESS &&
-        psa_key_derivation_output_bytes(&operation, owner.hash.data(), owner.hash.size()) == PSA_SUCCESS;
-    psa_key_derivation_abort(&operation);
-    return derived;
 }
 
 void restartNow(void*) {
@@ -216,10 +199,15 @@ rpc::Reply info(const cJSON*, const rpc::Context&) {
     cJSON_AddItemToObject(result, "wifi", wifiJson());
     const bool synced = wallclock::synced();
     cJSON_AddBoolToObject(result, "time_synced", synced);
+    cJSON_AddStringToObject(result, "timezone", wallclock::timezone().c_str());
     if (synced) {
-        cJSON_AddNumberToObject(result, "utc", static_cast<double>(wallclock::utcSeconds()));
+        const int64_t utc = wallclock::utcSeconds();
+        cJSON_AddNumberToObject(result, "utc", static_cast<double>(utc));
+        cJSON_AddStringToObject(result, "localTime",
+                                latchkey_util::localTimestamp(utc, wallclock::utcOffsetAt(utc)).c_str());
     } else {
         cJSON_AddNullToObject(result, "utc");
+        cJSON_AddNullToObject(result, "localTime");
     }
     cJSON* button = cJSON_AddObjectToObject(result, "button");
     cJSON_AddNumberToObject(button, "gpio", board::buttonGpio());
@@ -235,23 +223,23 @@ rpc::Reply setup(const cJSON* params, const rpc::Context&) {
     }
     store::cfg::Wifi wifi;
     if (!readWifi(member(params, "wifi"), wifi)) {
-        return rpc::fail("invalid_params", kWifiParamsMessage);
+        return rpc::fail("invalid_argument", kWifiParamsMessage);
     }
     std::string password;
-    if (!readString(params, "password", kMinPassword, kMaxPassword, password)) {
-        return rpc::fail("invalid_params", "password must be 12 to 128 bytes");
+    if (!readString(params, "password", auth::kMinPassword, auth::kMaxPassword, password)) {
+        return rpc::fail("invalid_argument", "password must be 12 to 128 bytes");
     }
     store::auth::Owner owner;
-    owner.iterations = kPasswordIterations;
-    esp_fill_random(owner.salt.data(), owner.salt.size());
+    owner.password.iterations = auth::kPasswordIterations;
+    esp_fill_random(owner.password.salt.data(), owner.password.salt.size());
     esp_fill_random(owner.totpSecret.data(), owner.totpSecret.size());
     const int64_t started = esp_timer_get_time();
-    const bool hashed = hashPassword(password, owner);
+    const bool hashed = auth::hashPassword(password, owner.password);
     mbedtls_platform_zeroize(password.data(), password.size());
     if (!hashed) {
         return rpc::fail("internal", "password hashing failed");
     }
-    ESP_LOGI(TAG, "owner password hashed with %u iterations in %lld ms", static_cast<unsigned>(owner.iterations),
+    ESP_LOGI(TAG, "owner password hashed with %u iterations in %lld ms", static_cast<unsigned>(owner.password.iterations),
              static_cast<long long>((esp_timer_get_time() - started) / 1000));
     if (store::cfg::saveWifi(wifi) != ESP_OK || wifi::apply(wifi) != ESP_OK) {
         mbedtls_platform_zeroize(&owner, sizeof(owner));
@@ -272,7 +260,7 @@ rpc::Reply setup(const cJSON* params, const rpc::Context&) {
 rpc::Reply wifiSet(const cJSON* params, const rpc::Context&) {
     store::cfg::Wifi wifi;
     if (!readWifi(params, wifi)) {
-        return rpc::fail("invalid_params", kWifiParamsMessage);
+        return rpc::fail("invalid_argument", kWifiParamsMessage);
     }
     if (store::cfg::saveWifi(wifi) != ESP_OK) {
         return rpc::fail("internal", "cannot store the Wi-Fi configuration");
@@ -290,7 +278,7 @@ rpc::Reply reboot(const cJSON*, const rpc::Context&) {
 rpc::Reply factoryReset(const cJSON* params, const rpc::Context&) {
     const cJSON* forceItem = member(params, "force");
     if (forceItem != nullptr && !cJSON_IsNull(forceItem) && !cJSON_IsBool(forceItem)) {
-        return rpc::fail("invalid_params", "force must be true or false");
+        return rpc::fail("invalid_argument", "force must be true or false");
     }
     const bool force = cJSON_IsTrue(forceItem);
     std::lock_guard<std::mutex> lock(s_claimMutex);
@@ -317,7 +305,7 @@ rpc::Reply factoryReset(const cJSON* params, const rpc::Context&) {
 rpc::Reply timeSet(const cJSON* params, const rpc::Context&) {
     double utc = 0;
     if (!readWhole(member(params, "utc"), wallclock::kMinUtc, wallclock::kMaxUtc, utc)) {
-        return rpc::fail("invalid_params", "utc must be whole seconds from 2024 to 2100");
+        return rpc::fail("invalid_argument", "utc must be whole seconds from 2024 to 2100");
     }
     if (!wallclock::set(static_cast<int64_t>(utc))) {
         return rpc::fail("internal", "cannot set the clock");
@@ -325,11 +313,40 @@ rpc::Reply timeSet(const cJSON* params, const rpc::Context&) {
     return rpc::ok();
 }
 
+cJSON* timezoneJson() {
+    cJSON* result = cJSON_CreateObject();
+    cJSON_AddStringToObject(result, "tz", wallclock::timezone().c_str());
+    if (wallclock::synced()) {
+        cJSON_AddNumberToObject(result, "utcOffset", wallclock::utcOffsetSeconds());
+    } else {
+        cJSON_AddNullToObject(result, "utcOffset");
+    }
+    return result;
+}
+
+rpc::Reply timezoneGet(const cJSON*, const rpc::Context&) { return rpc::ok(timezoneJson()); }
+
+rpc::Reply timezoneSet(const cJSON* params, const rpc::Context&) {
+    std::string timezone;
+    if (!readString(params, "tz", 1, latchkey_util::kMaxTimeZoneLength, timezone)) {
+        return rpc::fail("invalid_argument", "tz must be a POSIX TZ string such as CET-1CEST,M3.5.0,M10.5.0/3");
+    }
+    const esp_err_t error = wallclock::setTimezone(timezone);
+    if (error == ESP_ERR_INVALID_ARG) {
+        return rpc::fail("invalid_argument",
+                         "tz must be a POSIX TZ string such as CET-1CEST,M3.5.0,M10.5.0/3, with rules for daylight time");
+    }
+    if (error != ESP_OK) {
+        return rpc::fail("internal", "cannot store the time zone");
+    }
+    return rpc::ok(timezoneJson());
+}
+
 rpc::Reply logSet(const cJSON* params, const rpc::Context&) {
     std::string tag;
     std::string level;
     if (!readString(params, "tag", 1, kMaxLogTag, tag) || !readString(params, "level", 1, 8, level)) {
-        return rpc::fail("invalid_params", "log.set needs a tag and a level");
+        return rpc::fail("invalid_argument", "log.set needs a tag and a level");
     }
     for (const LogLevelName& entry : kLogLevels) {
         if (level == entry.name) {
@@ -337,19 +354,19 @@ rpc::Reply logSet(const cJSON* params, const rpc::Context&) {
             return rpc::ok();
         }
     }
-    return rpc::fail("invalid_params", "level is none, error, warn, info, debug or verbose");
+    return rpc::fail("invalid_argument", "level is none, error, warn, info, debug or verbose");
 }
 
 rpc::Reply auditList(const cJSON* params, const rpc::Context&) {
     double before = UINT32_MAX;
     const cJSON* beforeItem = member(params, "before");
     if (beforeItem != nullptr && !cJSON_IsNull(beforeItem) && !readWhole(beforeItem, 1, UINT32_MAX, before)) {
-        return rpc::fail("invalid_params", "before must be a sequence number");
+        return rpc::fail("invalid_argument", "before must be a sequence number");
     }
     double limit = kDefaultAuditPage;
     const cJSON* limitItem = member(params, "limit");
     if (limitItem != nullptr && !readWhole(limitItem, 1, audit::kMaxPage, limit)) {
-        return rpc::fail("invalid_params", "limit must be 1 to 50");
+        return rpc::fail("invalid_argument", "limit must be 1 to 50");
     }
     const audit::Page page = audit::list(static_cast<uint32_t>(before), static_cast<size_t>(limit));
     cJSON* result = cJSON_CreateObject();
@@ -382,6 +399,8 @@ void registerSystem() {
     rpc::registerMethod("system.reboot", {}, reboot);
     rpc::registerMethod("system.factoryReset", {.needsButton = true}, factoryReset);
     rpc::registerMethod("system.time.set", {.serialOnly = true}, timeSet);
+    rpc::registerMethod("system.timezone.get", {.audited = false}, timezoneGet);
+    rpc::registerMethod("system.timezone.set", {}, timezoneSet);
     rpc::registerMethod("system.log.set", {.serialOnly = true, .audited = false}, logSet);
     rpc::registerMethod("audit.list", {.audited = false}, auditList);
 }

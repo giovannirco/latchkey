@@ -4,6 +4,7 @@
 #include <cstdio>
 #include <utility>
 
+#include "mbedtls/platform_util.h"
 #include "nvs.h"
 #include "nvs_flash.h"
 
@@ -15,6 +16,8 @@ constexpr const char* kCfgNamespace = "cfg";
 constexpr const char* kAuthNamespace = "auth";
 constexpr const char* kAuditNamespace = "audit";
 constexpr const char* kLocksNamespace = "locks";
+constexpr const char* kPasswordKey = "password";
+constexpr const char* kTotpKey = "totp";
 constexpr size_t kLockKeySize = 13;
 
 class Handle {
@@ -147,6 +150,20 @@ esp_err_t saveWifi(const Wifi& wifi) {
     return error == ESP_OK ? nvs_commit(h) : error;
 }
 
+bool loadTimezone(std::string& out) {
+    Handle handle(kCfgNamespace, NVS_READONLY);
+    return handle.ok() && readString(handle.get(), "tz", out);
+}
+
+esp_err_t saveTimezone(const std::string& timezone) {
+    Handle handle(kCfgNamespace, NVS_READWRITE);
+    if (!handle.ok()) {
+        return handle.error();
+    }
+    const esp_err_t error = nvs_set_str(handle.get(), "tz", timezone.c_str());
+    return error == ESP_OK ? nvs_commit(handle.get()) : error;
+}
+
 esp_err_t erase() { return eraseNamespace(kCfgNamespace); }
 
 }
@@ -159,7 +176,8 @@ bool claimed() {
         return false;
     }
     size_t length = 0;
-    return nvs_get_blob(handle.get(), "hash", nullptr, &length) == ESP_OK && length == Owner{}.hash.size();
+    return nvs_get_blob(handle.get(), kPasswordKey, nullptr, &length) == ESP_OK &&
+           length == latchkey_util::kPasswordRecordSize;
 }
 
 bool loadOwner(Owner& out) {
@@ -168,34 +186,90 @@ bool loadOwner(Owner& out) {
         return false;
     }
     Owner owner;
-    const nvs_handle_t h = handle.get();
-    const bool complete = readBlob(h, "salt", owner.salt) &&
-                          nvs_get_u32(h, "iterations", &owner.iterations) == ESP_OK &&
-                          readBlob(h, "totp", owner.totpSecret) && readBlob(h, "hash", owner.hash);
-    if (!complete) {
-        return false;
+    latchkey_util::PasswordRecordBytes bytes{};
+    size_t length = bytes.size();
+    const bool complete = nvs_get_blob(handle.get(), kPasswordKey, bytes.data(), &length) == ESP_OK &&
+                          latchkey_util::decodePasswordRecord(bytes.data(), length, owner.password) &&
+                          readBlob(handle.get(), kTotpKey, owner.totpSecret);
+    mbedtls_platform_zeroize(bytes.data(), bytes.size());
+    if (complete) {
+        out = owner;
     }
-    out = owner;
-    return true;
+    mbedtls_platform_zeroize(&owner, sizeof(owner));
+    return complete;
 }
 
 esp_err_t saveOwner(const Owner& owner) {
+    const esp_err_t error = saveTotpSecret(owner.totpSecret);
+    return error == ESP_OK ? savePassword(owner.password) : error;
+}
+
+esp_err_t savePassword(const latchkey_util::PasswordRecord& password) {
     Handle handle(kAuthNamespace, NVS_READWRITE);
     if (!handle.ok()) {
         return handle.error();
     }
-    const nvs_handle_t h = handle.get();
-    esp_err_t error = nvs_set_blob(h, "salt", owner.salt.data(), owner.salt.size());
-    if (error == ESP_OK) {
-        error = nvs_set_u32(h, "iterations", owner.iterations);
+    latchkey_util::PasswordRecordBytes bytes = latchkey_util::encodePasswordRecord(password);
+    const esp_err_t error = nvs_set_blob(handle.get(), kPasswordKey, bytes.data(), bytes.size());
+    mbedtls_platform_zeroize(bytes.data(), bytes.size());
+    return error == ESP_OK ? nvs_commit(handle.get()) : error;
+}
+
+esp_err_t saveTotpSecret(const TotpSecret& secret) {
+    Handle handle(kAuthNamespace, NVS_READWRITE);
+    if (!handle.ok()) {
+        return handle.error();
     }
-    if (error == ESP_OK) {
-        error = nvs_set_blob(h, "totp", owner.totpSecret.data(), owner.totpSecret.size());
+    const esp_err_t error = nvs_set_blob(handle.get(), kTotpKey, secret.data(), secret.size());
+    return error == ESP_OK ? nvs_commit(handle.get()) : error;
+}
+
+esp_err_t loadLoginState(LoginState& out) {
+    Handle handle(kAuthNamespace, NVS_READONLY);
+    if (handle.error() == ESP_ERR_NVS_NOT_FOUND) {
+        out = LoginState{};
+        return ESP_OK;
     }
-    if (error == ESP_OK) {
-        error = nvs_set_blob(h, "hash", owner.hash.data(), owner.hash.size());
+    if (!handle.ok()) {
+        return handle.error();
     }
-    return error == ESP_OK ? nvs_commit(h) : error;
+    LoginState state;
+    esp_err_t error = nvs_get_u32(handle.get(), "fails", &state.failures);
+    if (error == ESP_ERR_NVS_NOT_FOUND) {
+        state.failures = 0;
+        error = ESP_OK;
+    }
+    if (error != ESP_OK) {
+        return error;
+    }
+    error = nvs_get_u64(handle.get(), "totp_step", &state.lastStep);
+    if (error == ESP_ERR_NVS_NOT_FOUND) {
+        state.lastStep = 0;
+        error = ESP_OK;
+    }
+    if (error != ESP_OK) {
+        return error;
+    }
+    out = state;
+    return ESP_OK;
+}
+
+esp_err_t saveFailures(uint32_t failures) {
+    Handle handle(kAuthNamespace, NVS_READWRITE);
+    if (!handle.ok()) {
+        return handle.error();
+    }
+    const esp_err_t error = nvs_set_u32(handle.get(), "fails", failures);
+    return error == ESP_OK ? nvs_commit(handle.get()) : error;
+}
+
+esp_err_t saveLastStep(uint64_t step) {
+    Handle handle(kAuthNamespace, NVS_READWRITE);
+    if (!handle.ok()) {
+        return handle.error();
+    }
+    const esp_err_t error = nvs_set_u64(handle.get(), "totp_step", step);
+    return error == ESP_OK ? nvs_commit(handle.get()) : error;
 }
 
 esp_err_t erase() { return eraseNamespace(kAuthNamespace); }

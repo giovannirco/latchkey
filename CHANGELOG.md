@@ -13,3 +13,9 @@ Notable changes to Latchkey, in the format of [Keep a Changelog](https://keepach
 - CI on every push and pull request: source checks, host tests, both firmware builds with the 1.8 MB gate for the classic ESP32, and the web UI suite.
 - Release workflow for `v*` tags: factory and OTA images per board with `SHA256SUMS`, a GitHub Release, and the browser flasher on GitHub Pages with the images on the same origin.
 - `SECURITY.md`, protocol notes (`docs/protocol.md`) and hardware notes (`docs/hardware.md`).
+- Owner login checks on the board: `auth.login` with the owner password and a TOTP code (one step of drift, replayed steps refused, compared in constant time), a login rate limit whose 30 s to 15 min wait survives reboots, and web sessions kept as token hashes in RAM with idle and absolute limits; `auth.logout`, `auth.sessions`, `auth.revoke`, `auth.changePassword` and `auth.rotateTotp`. Over USB a login takes `dryRun` and only checks; the HTTPS transport that opens sessions is still to come.
+- A time zone setting: `system.timezone.get` and `system.timezone.set` with a POSIX TZ string; the lock is given local time, and `system.info` reports `timezone` and `localTime`.
+
+### Changed
+
+- Wrong or missing parameters answer `invalid_argument` in every method; the `system.*` methods and `audit.list` answered `invalid_params`.

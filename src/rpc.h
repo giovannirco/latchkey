@@ -4,7 +4,9 @@
 #include <cstdint>
 #include <functional>
 #include <memory>
+#include <optional>
 #include <string>
+#include <string_view>
 
 #include "cJSON.h"
 
@@ -26,6 +28,7 @@ struct Access {
 
 struct Context {
     Transport origin;
+    std::optional<uint32_t> session;
 };
 
 struct JsonDeleter {
@@ -39,6 +42,16 @@ struct Reply {
     std::string error;
     std::string message;
     std::string target;
+    Json errorData;
+    std::string sessionToken;
+    bool endSession = false;
+    bool audited = true;
+};
+
+struct Response {
+    std::string json;
+    std::string sessionToken;
+    bool endSession = false;
 };
 
 Reply ok(cJSON* result = nullptr);
@@ -49,7 +62,7 @@ using Handler = std::function<Reply(const cJSON* params, const Context& context)
 
 void registerMethod(const char* name, Access access, Handler handler);
 
-std::string dispatch(const char* requestJson, Transport origin);
+Response dispatch(const char* requestJson, Transport origin, std::string_view sessionToken);
 
 std::string errorLine(const char* code, const char* message);
 

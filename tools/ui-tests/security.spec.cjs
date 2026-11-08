@@ -139,6 +139,13 @@ test('changing the password checks the repeat and reports success', async ({ pag
   await expect(form.getByLabel('Current password')).toHaveValue('');
 });
 
+test('a new password needs 12 characters, like the board', async ({ page }) => {
+  await login(page, '#/security');
+  const form = page.getByRole('form', { name: 'Change password' });
+  await expect(form.getByLabel('New password', { exact: true })).toHaveAttribute('minlength', '12');
+  await expect(form).toContainText('At least 12 characters');
+});
+
 test('sign out everywhere ends every session', async ({ page, request }) => {
   await request.post('/api/rpc', {
     data: { id: 1, method: 'auth.login', params: { password: 'owner-pass', totp: '123456' } },
