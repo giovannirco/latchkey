@@ -25,6 +25,8 @@ void init();
 
 esp_err_t usage(Usage& out);
 
+size_t reservedEntries();
+
 namespace cfg {
 
 struct Wifi {
@@ -141,6 +143,8 @@ enum class Kind : char {
 esp_err_t load(const char* mac, Kind kind, latchkey_util::LabelTable& out);
 
 esp_err_t save(const char* mac, Kind kind, const latchkey_util::LabelTable& table);
+
+bool fits(const char* mac, Kind kind, const latchkey_util::LabelTable& table);
 
 esp_err_t erase(const char* mac);
 

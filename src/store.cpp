@@ -9,6 +9,8 @@
 #include "nvs.h"
 #include "nvs_flash.h"
 
+#include "latchkey_util/storage_budget.h"
+
 namespace store {
 
 namespace {
@@ -25,6 +27,7 @@ constexpr const char* kTlsKey = "tls";
 constexpr size_t kLockKeySize = 13;
 constexpr size_t kLabelKeySize = kLockKeySize + 1;
 constexpr labels::Kind kLabelKinds[] = {labels::Kind::Passcodes, labels::Kind::Fingerprints, labels::Kind::Cards};
+constexpr size_t kSpareEntries = 48;
 
 class Handle {
 public:
@@ -109,6 +112,25 @@ bool labelKey(const char* mac, labels::Kind kind, char (&key)[kLabelKeySize]) {
     return true;
 }
 
+size_t storedBlobSize(const char* name, const char* key) {
+    Handle handle(name, NVS_READONLY);
+    size_t length = 0;
+    if (!handle.ok() || nvs_get_blob(handle.get(), key, nullptr, &length) != ESP_OK) {
+        return 0;
+    }
+    return length;
+}
+
+bool roomAboveReserve(size_t blobBytes) {
+    nvs_stats_t stats{};
+    return nvs_get_stats(nullptr, &stats) == ESP_OK &&
+           latchkey_util::fitsAboveReserve(stats.available_entries, blobBytes, reservedEntries());
+}
+
+bool growthFits(const char* name, const char* key, size_t blobBytes) {
+    return blobBytes <= storedBlobSize(name, key) || roomAboveReserve(blobBytes);
+}
+
 esp_err_t eraseKey(const char* name, const char* key) {
     Handle handle(name, NVS_READWRITE);
     if (!handle.ok()) {
@@ -132,6 +154,16 @@ esp_err_t usage(Usage& out) {
         out = Usage{stats.used_entries, stats.available_entries, stats.total_entries};
     }
     return error;
+}
+
+size_t reservedEntries() {
+    latchkey_util::StorageNeeds needs;
+    needs.auditRecordsLeft = latchkey_util::auditRecordsLeft(audit::loadNextSeq(), audit::kCapacity);
+    needs.auditRecordBytes = sizeof(audit::Record);
+    needs.lockRecordBytes = sizeof(locks::Record);
+    needs.seedTableBytes = latchkey_util::kSeedTableSize;
+    needs.spareEntries = kSpareEntries;
+    return latchkey_util::reservedEntries(needs);
 }
 
 namespace cfg {
@@ -477,13 +509,21 @@ esp_err_t save(const char* mac, Kind kind, const latchkey_util::LabelTable& tabl
     if (table.size() == 0) {
         return eraseKey(kLabelsNamespace, key);
     }
+    const std::vector<uint8_t> bytes = table.encode();
+    if (!growthFits(kLabelsNamespace, key, bytes.size())) {
+        return ESP_ERR_NVS_NOT_ENOUGH_SPACE;
+    }
     Handle handle(kLabelsNamespace, NVS_READWRITE);
     if (!handle.ok()) {
         return handle.error();
     }
-    const std::vector<uint8_t> bytes = table.encode();
     const esp_err_t error = nvs_set_blob(handle.get(), key, bytes.data(), bytes.size());
     return error == ESP_OK ? nvs_commit(handle.get()) : error;
+}
+
+bool fits(const char* mac, Kind kind, const latchkey_util::LabelTable& table) {
+    char key[kLabelKeySize];
+    return labelKey(mac, kind, key) && growthFits(kLabelsNamespace, key, table.encode().size());
 }
 
 esp_err_t erase(const char* mac) {
@@ -510,6 +550,9 @@ esp_err_t save(const char* mac, const latchkey_util::SeedTable& table) {
     char key[kLockKeySize];
     if (!lockKey(mac, key)) {
         return ESP_ERR_INVALID_ARG;
+    }
+    if (!growthFits(kSeedsNamespace, key, latchkey_util::kSeedTableSize)) {
+        return ESP_ERR_NVS_NOT_ENOUGH_SPACE;
     }
     Handle handle(kSeedsNamespace, NVS_READWRITE);
     if (!handle.ok()) {
