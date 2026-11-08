@@ -8,6 +8,7 @@
 #include <vector>
 
 #include "esp_log.h"
+#include "esp_timer.h"
 #include "mbedtls/platform_util.h"
 
 #include "auth.h"
@@ -24,6 +25,7 @@ constexpr const char* TAG = "ws";
 constexpr size_t kMaxPending = 32;
 constexpr size_t kMaxClientFrame = 128;
 constexpr size_t kTokenBuffer = 65;
+constexpr uint64_t kSweepPeriodUs = 5 * 1000 * 1000;
 
 struct Outgoing {
     bool broadcast = true;
@@ -135,12 +137,25 @@ std::optional<uint32_t> sessionOf(httpd_req_t* req) {
 
 void init() {
     events::addSink([](const std::string& line) { enqueue(Outgoing{true, 0, line}); });
+    auth::onSessionsEnded(service);
 }
 
 void attach(httpd_handle_t server, size_t maxSockets) {
-    std::lock_guard<std::mutex> lock(s_mutex);
-    s_maxSockets = maxSockets;
-    s_server = server;
+    {
+        std::lock_guard<std::mutex> lock(s_mutex);
+        s_maxSockets = maxSockets;
+        s_server = server;
+    }
+    const esp_timer_create_args_t sweep = {
+        .callback = [](void*) { service(); },
+        .arg = nullptr,
+        .dispatch_method = ESP_TIMER_TASK,
+        .name = "ws_sweep",
+        .skip_unhandled_events = true,
+    };
+    esp_timer_handle_t timer = nullptr;
+    ESP_ERROR_CHECK(esp_timer_create(&sweep, &timer));
+    ESP_ERROR_CHECK(esp_timer_start_periodic(timer, kSweepPeriodUs));
 }
 
 esp_err_t admit(httpd_req_t* req) {

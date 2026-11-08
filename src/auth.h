@@ -68,6 +68,8 @@ std::optional<uint32_t> sessionFor(std::string_view token);
 
 bool sessionOpen(uint32_t id);
 
+void onSessionsEnded(void (*hook)());
+
 std::vector<Session> sessions();
 
 bool revoke(uint32_t id);
