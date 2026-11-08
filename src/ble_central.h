@@ -68,6 +68,7 @@ struct Stats {
     bool connected = false;
     ScanMode scan = ScanMode::Off;
     uint32_t reports = 0;
+    uint32_t lockReports = 0;
     uint32_t frames = 0;
     uint32_t badCrc = 0;
     uint32_t dropped = 0;

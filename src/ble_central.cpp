@@ -86,6 +86,7 @@ std::atomic<uint32_t> s_link{0};
 std::atomic<uint16_t> s_notifyHandle{0};
 std::atomic<uint32_t> s_procedure{0};
 std::atomic<uint32_t> s_reports{0};
+std::atomic<uint32_t> s_lockReports{0};
 std::atomic<uint32_t> s_frames{0};
 std::atomic<uint32_t> s_badCrc{0};
 std::atomic<uint32_t> s_dropped{0};
@@ -127,6 +128,7 @@ int onScanEvent(struct ble_gap_event* event, void*) {
     if (!looksLikeLock(event->disc.data, event->disc.length_data)) {
         return 0;
     }
+    s_lockReports.fetch_add(1);
     Message message{};
     message.kind = Message::Kind::Advert;
     message.advert.address.type = event->disc.addr.type;
@@ -416,7 +418,8 @@ const char* addressTypeName(uint8_t type) {
 }
 
 bool isConnectable(const Advert& advert) {
-    return advert.eventType == BLE_HCI_ADV_RPT_EVTYPE_ADV_IND || advert.eventType == BLE_HCI_ADV_RPT_EVTYPE_DIR_IND;
+    return advert.eventType == BLE_HCI_ADV_RPT_EVTYPE_ADV_IND || advert.eventType == BLE_HCI_ADV_RPT_EVTYPE_DIR_IND ||
+           advert.eventType == BLE_HCI_ADV_RPT_EVTYPE_SCAN_RSP;
 }
 
 void init() {
@@ -458,7 +461,7 @@ int scan(ScanMode mode) {
         return 0;
     }
     struct ble_gap_disc_params params{};
-    params.passive = 1;
+    params.passive = mode == ScanMode::Fast ? 0 : 1;
     params.filter_duplicates = 0;
     params.filter_policy = 0;
     params.limited = 0;
@@ -547,6 +550,7 @@ Stats stats() {
     result.connected = connected();
     result.scan = s_scan;
     result.reports = s_reports;
+    result.lockReports = s_lockReports;
     result.frames = s_frames;
     result.badCrc = s_badCrc;
     result.dropped = s_dropped;

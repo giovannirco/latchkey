@@ -180,6 +180,7 @@ cJSON* bleJson() {
     cJSON_AddBoolToObject(json, "scanning", stats.scan != ble::ScanMode::Off);
     cJSON_AddBoolToObject(json, "connected", stats.connected);
     cJSON_AddNumberToObject(json, "reports", stats.reports);
+    cJSON_AddNumberToObject(json, "lock_reports", stats.lockReports);
     cJSON_AddNumberToObject(json, "frames", stats.frames);
     cJSON_AddNumberToObject(json, "bad_crc", stats.badCrc);
     cJSON_AddNumberToObject(json, "dropped", stats.dropped);

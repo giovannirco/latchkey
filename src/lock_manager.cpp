@@ -819,6 +819,7 @@ bool awaitAdvert(const std::string& mac, uint32_t waitMs, ble::Advert& raw, ttlo
                  std::string& name) {
     const uint32_t started = nowMs();
     bool warnedUnconnectable = false;
+    std::set<std::string> others;
     while (true) {
         const uint32_t elapsed = nowMs() - started;
         if (elapsed >= waitMs) {
@@ -845,6 +846,10 @@ bool awaitAdvert(const std::string& mac, uint32_t waitMs, ble::Advert& raw, ttlo
         }
         const std::string address = latchkey_util::formatBleAddress(message.advert.address.value);
         if (parsed.mac != mac && address != mac) {
+            if (others.insert(parsed.mac).second) {
+                ESP_LOGI(TAG, "pairing wait heard another lock %s (advert type %u)", parsed.mac.c_str(),
+                         message.advert.eventType);
+            }
             continue;
         }
         if (!ble::isConnectable(message.advert)) {
