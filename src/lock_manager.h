@@ -18,6 +18,8 @@ rpc::Reply pair(const std::string& mac, const std::string& name, uint32_t waitSe
 
 rpc::Reply list();
 
+bool holds(const std::string& mac);
+
 rpc::Reply rename(const std::string& mac, const std::string& name);
 
 rpc::Reply forget(const std::string& mac);

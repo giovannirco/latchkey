@@ -1266,6 +1266,8 @@ rpc::Reply list() {
     return rpc::ok(result);
 }
 
+bool holds(const std::string& mac) { return exists(mac); }
+
 rpc::Reply rename(const std::string& mac, const std::string& name) {
     std::lock_guard<std::mutex> guard(s_mutex);
     Lock* lock = findLocked(mac);

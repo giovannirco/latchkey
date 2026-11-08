@@ -63,7 +63,26 @@ void addOutcome(cJSON* object, Reply reply);
 
 using Handler = std::function<Reply(const cJSON* params, const Context& context)>;
 
-void registerMethod(const char* name, Access access, Handler handler);
+void registerMethod(const char* name, Access access, Handler handler, Handler check = nullptr);
+
+enum class Presence : uint8_t {
+    Confirmed,
+    NotPressed,
+    SessionEnded,
+};
+
+Presence confirmPresence(const std::string& action, const Context& context);
+
+struct JobSpec {
+    std::string action;
+    Context context;
+    bool confirm = false;
+    std::function<Reply()> check;
+    std::function<Reply()> run;
+    std::function<void(const Reply&)> finish;
+};
+
+Reply startJob(JobSpec spec);
 
 Response dispatch(const char* requestJson, Transport origin, std::string_view sessionToken);
 

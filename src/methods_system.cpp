@@ -288,13 +288,16 @@ rpc::Reply reboot(const cJSON*, const rpc::Context&) {
     return restartLater() == ESP_OK ? rpc::ok() : rpc::fail("internal", "cannot schedule the restart");
 }
 
-rpc::Reply factoryReset(const cJSON* params, const rpc::Context&) {
+bool readForce(const cJSON* params, bool& force) {
     const cJSON* forceItem = member(params, "force");
     if (forceItem != nullptr && !cJSON_IsNull(forceItem) && !cJSON_IsBool(forceItem)) {
-        return rpc::fail("invalid_argument", "force must be true or false");
+        return false;
     }
-    const bool force = cJSON_IsTrue(forceItem);
-    std::lock_guard<std::mutex> lock(s_claimMutex);
+    force = cJSON_IsTrue(forceItem);
+    return true;
+}
+
+rpc::Reply checkLocksKept(bool force) {
     size_t locks = 0;
     if (lock_manager::storedCount(locks) != ESP_OK) {
         return rpc::fail("internal", "cannot read the stored locks");
@@ -302,6 +305,27 @@ rpc::Reply factoryReset(const cJSON* params, const rpc::Context&) {
     if (locks > 0 && !force) {
         return rpc::fail("locks_paired",
                          "the board holds lock keys: factory-reset or forget each lock first, or pass force");
+    }
+    return rpc::ok();
+}
+
+rpc::Reply checkFactoryReset(const cJSON* params, const rpc::Context&) {
+    bool force = false;
+    if (!readForce(params, force)) {
+        return rpc::fail("invalid_argument", "force must be true or false");
+    }
+    return checkLocksKept(force);
+}
+
+rpc::Reply factoryReset(const cJSON* params, const rpc::Context&) {
+    bool force = false;
+    if (!readForce(params, force)) {
+        return rpc::fail("invalid_argument", "force must be true or false");
+    }
+    std::lock_guard<std::mutex> lock(s_claimMutex);
+    rpc::Reply problem = checkLocksKept(force);
+    if (!problem.error.empty()) {
+        return problem;
     }
     if (lock_manager::eraseAll() != ESP_OK) {
         return rpc::fail("internal", "cannot erase the lock keys");
@@ -411,7 +435,7 @@ void registerSystem() {
     rpc::registerMethod("system.setup", {.needsSession = false, .serialOnly = true}, setup);
     rpc::registerMethod("system.wifi.set", {}, wifiSet);
     rpc::registerMethod("system.reboot", {}, reboot);
-    rpc::registerMethod("system.factoryReset", {.needsButton = true}, factoryReset);
+    rpc::registerMethod("system.factoryReset", {.needsButton = true}, factoryReset, checkFactoryReset);
     rpc::registerMethod("system.time.set", {.serialOnly = true}, timeSet);
     rpc::registerMethod("system.timezone.get", {.audited = false}, timezoneGet);
     rpc::registerMethod("system.timezone.set", {}, timezoneSet);

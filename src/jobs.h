@@ -16,6 +16,8 @@ void start();
 
 std::optional<std::string> submit(std::optional<uint32_t> session, Work work);
 
+bool idle();
+
 uint32_t stackFree();
 
 }

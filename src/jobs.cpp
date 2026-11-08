@@ -38,6 +38,7 @@ std::mutex s_mutex;
 latchkey_util::JobQueue<Job*> s_queue(kCapacity);
 TaskHandle_t s_task = nullptr;
 uint32_t s_nextId = 0;
+bool s_running = false;
 
 uint32_t nowMs() { return static_cast<uint32_t>(esp_timer_get_time() / 1000); }
 
@@ -76,12 +77,15 @@ void worker(void*) {
             std::lock_guard<std::mutex> lock(s_mutex);
             late = s_queue.expire(nowMs());
             next = s_queue.pop(nowMs());
+            s_running = next.has_value();
         }
         for (Job* job : late) {
             finish(job, true);
         }
         if (next.has_value()) {
             finish(*next, false);
+            std::lock_guard<std::mutex> lock(s_mutex);
+            s_running = false;
             continue;
         }
         ulTaskNotifyTake(pdTRUE, kIdleWait);
@@ -109,6 +113,11 @@ std::optional<std::string> submit(std::optional<uint32_t> session, Work work) {
     }
     xTaskNotifyGive(s_task);
     return std::string(id);
+}
+
+bool idle() {
+    std::lock_guard<std::mutex> lock(s_mutex);
+    return !s_running && s_queue.empty();
 }
 
 uint32_t stackFree() { return s_task != nullptr ? uxTaskGetStackHighWaterMark(s_task) : 0; }

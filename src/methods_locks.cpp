@@ -113,20 +113,48 @@ rpc::Reply scan(const cJSON* params, const rpc::Context&) {
 
 rpc::Reply list(const cJSON*, const rpc::Context&) { return lock_manager::list(); }
 
-rpc::Reply pair(const cJSON* params, const rpc::Context&) {
+struct PairRequest {
     std::string mac;
-    if (!readMac(params, "mac", mac)) {
+    std::string name;
+    uint32_t wait = 0;
+};
+
+rpc::Reply readPair(const cJSON* params, PairRequest& out) {
+    if (!readMac(params, "mac", out.mac)) {
         return invalid(std::string("mac ") + kMacMessage);
     }
-    std::string name;
-    if (!readOptionalName(member(params, "name"), name)) {
-        return withTarget(invalid(kNameMessage), mac);
+    if (!readOptionalName(member(params, "name"), out.name)) {
+        return withTarget(invalid(kNameMessage), out.mac);
     }
-    uint32_t wait = 0;
-    if (!readSeconds(member(params, "wait"), kDefaultPairWaitSeconds, kMaxPairWaitSeconds, wait)) {
-        return withTarget(invalid("wait must be a whole number of seconds from 1 to 600"), mac);
+    if (!readSeconds(member(params, "wait"), kDefaultPairWaitSeconds, kMaxPairWaitSeconds, out.wait)) {
+        return withTarget(invalid("wait must be a whole number of seconds from 1 to 600"), out.mac);
     }
-    return withTarget(lock_manager::pair(mac, name, wait), mac);
+    return withTarget(rpc::ok(), out.mac);
+}
+
+rpc::Reply checkPair(const cJSON* params, const rpc::Context&) {
+    PairRequest request;
+    return readPair(params, request);
+}
+
+rpc::Reply pair(const cJSON* params, const rpc::Context&) {
+    PairRequest request;
+    rpc::Reply problem = readPair(params, request);
+    if (!problem.error.empty()) {
+        return problem;
+    }
+    return withTarget(lock_manager::pair(request.mac, request.name, request.wait), request.mac);
+}
+
+rpc::Reply checkHeldLock(const cJSON* params, const rpc::Context&) {
+    std::string mac;
+    if (!readMac(params, "lock", mac)) {
+        return invalid(std::string("lock ") + kMacMessage);
+    }
+    if (!lock_manager::holds(mac)) {
+        return withTarget(rpc::fail("not_paired", "the board has no keys for this lock"), mac);
+    }
+    return withTarget(rpc::ok(), mac);
 }
 
 rpc::Reply rename(const cJSON* params, const rpc::Context&) {
@@ -148,14 +176,15 @@ void registerLocks() {
     rpc::registerMethod("locks.list", {.audited = false}, list);
     rpc::registerMethod("locks.rename", {}, rename);
     rpc::registerMethod("locks.forget", {}, forLock(lock_manager::forget));
-    rpc::registerMethod("locks.pair", {.needsButton = true, .job = true}, pair);
+    rpc::registerMethod("locks.pair", {.needsButton = true, .job = true}, pair, checkPair);
     rpc::registerMethod("lock.status", {.audited = false, .job = true}, forLock(lock_manager::status));
     rpc::registerMethod("lock.info", {.audited = false, .job = true}, forLock(lock_manager::info));
     rpc::registerMethod("lock.features", {.audited = false, .job = true}, forLock(lock_manager::features));
     rpc::registerMethod("lock.unlock", {.job = true}, forLock(lock_manager::unlock));
     rpc::registerMethod("lock.lock", {.job = true}, forLock(lock_manager::lock));
     rpc::registerMethod("lock.time.sync", {.job = true}, forLock(lock_manager::syncTime));
-    rpc::registerMethod("lock.factoryReset", {.needsButton = true, .job = true}, forLock(lock_manager::factoryReset));
+    rpc::registerMethod("lock.factoryReset", {.needsButton = true, .job = true}, forLock(lock_manager::factoryReset),
+                        checkHeldLock);
 }
 
 }

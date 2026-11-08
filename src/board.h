@@ -2,6 +2,7 @@
 #pragma once
 
 #include <cstdint>
+#include <functional>
 
 namespace board {
 
@@ -15,6 +16,6 @@ bool buttonPressed();
 
 uint32_t buttonPresses();
 
-bool waitForPress(uint32_t timeoutMs);
+bool waitForPress(uint32_t timeoutMs, const std::function<bool()>& keepWaiting);
 
 }

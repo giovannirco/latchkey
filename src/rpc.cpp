@@ -31,6 +31,7 @@ constexpr uint32_t kConfirmTimeoutMs = 30000;
 struct Method {
     Access access;
     Handler handler;
+    Handler check;
 };
 
 std::map<std::string, Method, std::less<>>& methods() {
@@ -88,42 +89,52 @@ void record(const std::string& method, const Method& target, const Context& cont
     }
 }
 
-bool confirmPresence(const std::string& action) {
-    cJSON* required = cJSON_CreateObject();
-    cJSON_AddStringToObject(required, "action", action.c_str());
-    cJSON_AddNumberToObject(required, "timeoutMs", kConfirmTimeoutMs);
-    events::publish("confirm.required", required);
-    const bool pressed = board::waitForPress(kConfirmTimeoutMs);
-    cJSON* result = cJSON_CreateObject();
-    cJSON_AddStringToObject(result, "action", action.c_str());
-    cJSON_AddBoolToObject(result, "confirmed", pressed);
-    events::publish("confirm.result", result);
-    return pressed;
+bool sessionOpen(const Context& context) { return !context.session.has_value() || auth::sessionOpen(*context.session); }
+
+Reply sessionEnded() { return fail("unauthorized", "the session ended before the request ran"); }
+
+Reply pressThenRun(const JobSpec& spec) {
+    switch (confirmPresence(spec.action, spec.context)) {
+        case Presence::Confirmed:
+            return spec.run();
+        case Presence::NotPressed:
+            return fail("confirm_timeout", "the button was not pressed within 30 s");
+        case Presence::SessionEnded:
+            break;
+    }
+    return sessionEnded();
 }
 
-Reply startJob(const std::string& method, const Method& target, const cJSON* params, const Context& context,
-               bool confirm) {
-    std::shared_ptr<cJSON> copy(cJSON_Duplicate(params, true), cJSON_Delete);
-    if (copy == nullptr) {
-        return fail("internal", "out of memory");
+Reply runJob(const JobSpec& spec, bool expired) {
+    if (expired) {
+        return fail("busy", "the board was busy with other requests for 60 s; try again");
     }
-    const std::optional<std::string> job =
-        jobs::submit(context.session, [&method, &target, copy, context, confirm](bool expired) {
-            Reply reply = expired ? fail("busy", "the board was busy with other requests for 60 s; try again")
-                          : confirm && !confirmPresence(method)
-                              ? fail("confirm_timeout", "the button was not pressed within 30 s")
-                              : target.handler(copy.get(), context);
-            record(method, target, context, reply);
-            return reply;
-        });
-    if (!job.has_value()) {
-        return fail("busy", "too many requests are waiting; try again");
+    if (!sessionOpen(spec.context)) {
+        return sessionEnded();
     }
-    cJSON* result = cJSON_CreateObject();
-    cJSON_AddStringToObject(result, "job", job->c_str());
-    Reply reply = ok(result);
-    reply.audited = false;
+    Reply verdict = spec.check ? spec.check() : ok();
+    if (!verdict.error.empty()) {
+        return verdict;
+    }
+    Reply reply = spec.confirm ? pressThenRun(spec) : spec.run();
+    if (reply.target.empty()) {
+        reply.target = verdict.target;
+    }
     return reply;
+}
+
+JobSpec methodJob(const std::string& method, const Method& target, const Context& context, bool confirm,
+                  std::shared_ptr<cJSON> copy) {
+    JobSpec spec;
+    spec.action = method;
+    spec.context = context;
+    spec.confirm = confirm;
+    if (target.check) {
+        spec.check = [check = target.check, copy, context] { return check(copy.get(), context); };
+    }
+    spec.run = [handler = target.handler, copy, context] { return handler(copy.get(), context); };
+    spec.finish = [&method, &target, context](const Reply& reply) { record(method, target, context, reply); };
+    return spec;
 }
 
 }
@@ -151,12 +162,51 @@ void addOutcome(cJSON* object, Reply reply) {
     }
 }
 
-void registerMethod(const char* name, Access access, Handler handler) {
-    const bool inserted = methods().emplace(name, Method{access, std::move(handler)}).second;
+void registerMethod(const char* name, Access access, Handler handler, Handler check) {
+    const bool inserted = methods().emplace(name, Method{access, std::move(handler), std::move(check)}).second;
     if (!inserted) {
         ESP_LOGE(TAG, "method %s registered twice", name);
         abort();
     }
+}
+
+Presence confirmPresence(const std::string& action, const Context& context) {
+    cJSON* required = cJSON_CreateObject();
+    cJSON_AddStringToObject(required, "action", action.c_str());
+    cJSON_AddNumberToObject(required, "timeoutMs", kConfirmTimeoutMs);
+    events::publish("confirm.required", required);
+    const bool pressed = board::waitForPress(kConfirmTimeoutMs, [&context] { return sessionOpen(context); });
+    const bool open = sessionOpen(context);
+    cJSON* result = cJSON_CreateObject();
+    cJSON_AddStringToObject(result, "action", action.c_str());
+    cJSON_AddBoolToObject(result, "confirmed", pressed && open);
+    events::publish("confirm.result", result);
+    if (!open) {
+        return Presence::SessionEnded;
+    }
+    return pressed ? Presence::Confirmed : Presence::NotPressed;
+}
+
+Reply startJob(JobSpec spec) {
+    if (spec.confirm && !jobs::idle()) {
+        return fail("busy", "the board is waiting on another request; try again when it is done");
+    }
+    const std::optional<uint32_t> session = spec.context.session;
+    const std::optional<std::string> job = jobs::submit(session, [spec = std::move(spec)](bool expired) {
+        Reply reply = runJob(spec, expired);
+        if (spec.finish) {
+            spec.finish(reply);
+        }
+        return reply;
+    });
+    if (!job.has_value()) {
+        return fail("busy", "too many requests are waiting; try again");
+    }
+    cJSON* result = cJSON_CreateObject();
+    cJSON_AddStringToObject(result, "job", job->c_str());
+    Reply reply = ok(result);
+    reply.audited = false;
+    return reply;
 }
 
 Response dispatch(const char* requestJson, Transport origin, std::string_view sessionToken) {
@@ -199,7 +249,9 @@ Response dispatch(const char* requestJson, Transport origin, std::string_view se
         reply = fail(decision.error, decision.message);
         reply.audited = decision.audited;
     } else if (decision.job) {
-        reply = startJob(entry->first, target, params, context, decision.confirm);
+        std::shared_ptr<cJSON> copy(cJSON_Duplicate(params, true), cJSON_Delete);
+        reply = copy == nullptr ? fail("internal", "out of memory")
+                                : startJob(methodJob(entry->first, target, context, decision.confirm, copy));
     } else {
         reply = target.handler(params, context);
     }

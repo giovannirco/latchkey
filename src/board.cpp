@@ -70,10 +70,10 @@ bool buttonPressed() { return s_pressed; }
 
 uint32_t buttonPresses() { return s_presses; }
 
-bool waitForPress(uint32_t timeoutMs) {
+bool waitForPress(uint32_t timeoutMs, const std::function<bool()>& keepWaiting) {
     const uint32_t before = s_presses;
     const int64_t deadline = esp_timer_get_time() + static_cast<int64_t>(timeoutMs) * 1000;
-    while (s_presses == before && esp_timer_get_time() < deadline) {
+    while (s_presses == before && esp_timer_get_time() < deadline && keepWaiting()) {
         vTaskDelay(kPressPoll);
     }
     return s_presses != before;
