@@ -24,6 +24,7 @@
 
 #include "certs.h"
 #include "latchkey_util/web.h"
+#include "ota.h"
 #include "rpc.h"
 #include "wifi.h"
 #include "ws.h"
@@ -317,11 +318,15 @@ esp_err_t startHttps(const latchkey_util::TlsIdentity& identity) {
     api.uri = "/api/rpc";
     api.method = HTTP_POST;
     api.handler = acceptRpc;
+    httpd_uri_t firmware{};
+    firmware.uri = "/api/ota";
+    firmware.method = HTTP_POST;
+    firmware.handler = ota::accept;
     httpd_uri_t page{};
     page.uri = "/*";
     page.method = HTTP_GET;
     page.handler = servePage;
-    for (const httpd_uri_t* uri : {&events, &api, &page}) {
+    for (const httpd_uri_t* uri : {&events, &api, &firmware, &page}) {
         const esp_err_t registered = httpd_register_uri_handler(s_https, uri);
         if (registered != ESP_OK) {
             return registered;
