@@ -2,11 +2,14 @@
 #include "store.h"
 
 #include <cstdio>
+#include <cstring>
 #include <utility>
 
 #include "mbedtls/platform_util.h"
 #include "nvs.h"
 #include "nvs_flash.h"
+
+#include "latchkey_util/storage_budget.h"
 
 namespace store {
 
@@ -16,10 +19,15 @@ constexpr const char* kCfgNamespace = "cfg";
 constexpr const char* kAuthNamespace = "auth";
 constexpr const char* kAuditNamespace = "audit";
 constexpr const char* kLocksNamespace = "locks";
+constexpr const char* kLabelsNamespace = "labels";
+constexpr const char* kSeedsNamespace = "seeds";
 constexpr const char* kPasswordKey = "password";
 constexpr const char* kTotpKey = "totp";
 constexpr const char* kTlsKey = "tls";
 constexpr size_t kLockKeySize = 13;
+constexpr size_t kLabelKeySize = kLockKeySize + 1;
+constexpr labels::Kind kLabelKinds[] = {labels::Kind::Passcodes, labels::Kind::Fingerprints, labels::Kind::Cards};
+constexpr size_t kSpareEntries = 48;
 
 class Handle {
 public:
@@ -93,6 +101,48 @@ bool lockKey(const char* mac, char (&key)[kLockKeySize]) {
     return length == sizeof(key) - 1;
 }
 
+bool labelKey(const char* mac, labels::Kind kind, char (&key)[kLabelKeySize]) {
+    char lock[kLockKeySize];
+    if (!lockKey(mac, lock)) {
+        return false;
+    }
+    std::memcpy(key, lock, kLockKeySize - 1);
+    key[kLockKeySize - 1] = static_cast<char>(kind);
+    key[kLockKeySize] = '\0';
+    return true;
+}
+
+size_t storedBlobSize(const char* name, const char* key) {
+    Handle handle(name, NVS_READONLY);
+    size_t length = 0;
+    if (!handle.ok() || nvs_get_blob(handle.get(), key, nullptr, &length) != ESP_OK) {
+        return 0;
+    }
+    return length;
+}
+
+bool roomAboveReserve(size_t blobBytes) {
+    nvs_stats_t stats{};
+    return nvs_get_stats(nullptr, &stats) == ESP_OK &&
+           latchkey_util::fitsAboveReserve(stats.available_entries, blobBytes, reservedEntries());
+}
+
+bool growthFits(const char* name, const char* key, size_t blobBytes) {
+    return blobBytes <= storedBlobSize(name, key) || roomAboveReserve(blobBytes);
+}
+
+esp_err_t eraseKey(const char* name, const char* key) {
+    Handle handle(name, NVS_READWRITE);
+    if (!handle.ok()) {
+        return handle.error();
+    }
+    const esp_err_t error = nvs_erase_key(handle.get(), key);
+    if (error != ESP_OK && error != ESP_ERR_NVS_NOT_FOUND) {
+        return error;
+    }
+    return nvs_commit(handle.get());
+}
+
 }
 
 void init() { ESP_ERROR_CHECK(nvs_flash_init()); }
@@ -104,6 +154,16 @@ esp_err_t usage(Usage& out) {
         out = Usage{stats.used_entries, stats.available_entries, stats.total_entries};
     }
     return error;
+}
+
+size_t reservedEntries() {
+    latchkey_util::StorageNeeds needs;
+    needs.auditRecordsLeft = latchkey_util::auditRecordsLeft(audit::loadNextSeq(), audit::kCapacity);
+    needs.auditRecordBytes = sizeof(audit::Record);
+    needs.lockRecordBytes = sizeof(locks::Record);
+    needs.seedTableBytes = latchkey_util::kSeedTableSize;
+    needs.spareEntries = kSpareEntries;
+    return latchkey_util::reservedEntries(needs);
 }
 
 namespace cfg {
@@ -406,6 +466,113 @@ esp_err_t erase(const char* mac) {
 }
 
 esp_err_t eraseAll() { return eraseNamespace(kLocksNamespace); }
+
+}
+
+namespace labels {
+
+esp_err_t load(const char* mac, Kind kind, latchkey_util::LabelTable& out) {
+    char key[kLabelKeySize];
+    if (!labelKey(mac, kind, key)) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    Handle handle(kLabelsNamespace, NVS_READONLY);
+    if (handle.error() == ESP_ERR_NVS_NOT_FOUND) {
+        out = latchkey_util::LabelTable{};
+        return ESP_OK;
+    }
+    if (!handle.ok()) {
+        return handle.error();
+    }
+    size_t length = 0;
+    esp_err_t error = nvs_get_blob(handle.get(), key, nullptr, &length);
+    if (error == ESP_ERR_NVS_NOT_FOUND) {
+        out = latchkey_util::LabelTable{};
+        return ESP_OK;
+    }
+    if (error != ESP_OK) {
+        return error;
+    }
+    std::vector<uint8_t> bytes(length);
+    error = nvs_get_blob(handle.get(), key, bytes.data(), &length);
+    if (error != ESP_OK) {
+        return error;
+    }
+    return latchkey_util::LabelTable::decode(bytes.data(), length, out) ? ESP_OK : ESP_ERR_INVALID_CRC;
+}
+
+esp_err_t save(const char* mac, Kind kind, const latchkey_util::LabelTable& table) {
+    char key[kLabelKeySize];
+    if (!labelKey(mac, kind, key)) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    if (table.size() == 0) {
+        return eraseKey(kLabelsNamespace, key);
+    }
+    const std::vector<uint8_t> bytes = table.encode();
+    if (!growthFits(kLabelsNamespace, key, bytes.size())) {
+        return ESP_ERR_NVS_NOT_ENOUGH_SPACE;
+    }
+    Handle handle(kLabelsNamespace, NVS_READWRITE);
+    if (!handle.ok()) {
+        return handle.error();
+    }
+    const esp_err_t error = nvs_set_blob(handle.get(), key, bytes.data(), bytes.size());
+    return error == ESP_OK ? nvs_commit(handle.get()) : error;
+}
+
+bool fits(const char* mac, Kind kind, const latchkey_util::LabelTable& table) {
+    char key[kLabelKeySize];
+    return labelKey(mac, kind, key) && growthFits(kLabelsNamespace, key, table.encode().size());
+}
+
+esp_err_t erase(const char* mac) {
+    for (const Kind kind : kLabelKinds) {
+        char key[kLabelKeySize];
+        if (!labelKey(mac, kind, key)) {
+            return ESP_ERR_INVALID_ARG;
+        }
+        const esp_err_t error = eraseKey(kLabelsNamespace, key);
+        if (error != ESP_OK) {
+            return error;
+        }
+    }
+    return ESP_OK;
+}
+
+esp_err_t eraseAll() { return eraseNamespace(kLabelsNamespace); }
+
+}
+
+namespace seeds {
+
+esp_err_t save(const char* mac, const latchkey_util::SeedTable& table) {
+    char key[kLockKeySize];
+    if (!lockKey(mac, key)) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    if (!growthFits(kSeedsNamespace, key, latchkey_util::kSeedTableSize)) {
+        return ESP_ERR_NVS_NOT_ENOUGH_SPACE;
+    }
+    Handle handle(kSeedsNamespace, NVS_READWRITE);
+    if (!handle.ok()) {
+        return handle.error();
+    }
+    std::array<uint8_t, latchkey_util::kSeedTableSize> bytes = latchkey_util::encodeSeedTable(table);
+    const esp_err_t error = nvs_set_blob(handle.get(), key, bytes.data(), bytes.size());
+    mbedtls_platform_zeroize(bytes.data(), bytes.size());
+    return error == ESP_OK ? nvs_commit(handle.get()) : error;
+}
+
+esp_err_t erase(const char* mac) {
+    char key[kLockKeySize];
+    if (!lockKey(mac, key)) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    return eraseKey(kSeedsNamespace, key);
+}
+
+esp_err_t eraseAll() { return eraseNamespace(kSeedsNamespace); }
 
 }
 

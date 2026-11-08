@@ -4,6 +4,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <string>
+#include <string_view>
 
 #include "ttlock/bytes.h"
 #include "ttlock/frame.h"
@@ -116,6 +117,21 @@ struct Passcode {
     std::string code;
     Validity validity;
 };
+
+inline constexpr size_t kMinPasscodeDigits = 4;
+inline constexpr size_t kMaxPasscodeDigits = 9;
+
+inline bool isPasscode(std::string_view code) {
+    if (code.size() < kMinPasscodeDigits || code.size() > kMaxPasscodeDigits) {
+        return false;
+    }
+    for (char digit : code) {
+        if (digit < '0' || digit > '9') {
+            return false;
+        }
+    }
+    return true;
+}
 
 struct Credential {
     uint64_t id = 0;

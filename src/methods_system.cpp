@@ -201,6 +201,7 @@ rpc::Reply info(const cJSON*, const rpc::Context&) {
     cJSON_AddNumberToObject(nvs, "usedEntries", usage.usedEntries);
     cJSON_AddNumberToObject(nvs, "availableEntries", usage.availableEntries);
     cJSON_AddNumberToObject(nvs, "totalEntries", usage.totalEntries);
+    cJSON_AddNumberToObject(nvs, "reservedEntries", store::reservedEntries());
     cJSON_AddBoolToObject(result, "claimed", store::auth::claimed());
     cJSON_AddItemToObject(result, "wifi", wifiJson());
     const bool synced = wallclock::synced();

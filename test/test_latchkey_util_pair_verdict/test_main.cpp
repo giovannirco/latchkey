@@ -1,7 +1,11 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include <unity.h>
 
+#include <string>
+
 #include "latchkey_util/pair_verdict.h"
+#include "ttlock/frame.h"
+#include "ttlock/status.h"
 
 using latchkey_util::judgePairing;
 using latchkey_util::PairEnd;
@@ -43,6 +47,23 @@ static void test_a_pairing_that_failed_before_the_keys_stays_failed() {
     assertVerdict(PairVerdict::Failed, judgePairing(PairEnd::Failed, true, true));
 }
 
+static void test_unsupported_after_a_new_mismatch_means_another_lock_type() {
+    TEST_ASSERT_TRUE(latchkey_util::answeredAsAnotherLockType(ttlock::Status::Unsupported, 0, 1));
+    TEST_ASSERT_TRUE(latchkey_util::answeredAsAnotherLockType(ttlock::Status::Unsupported, 2, 5));
+    TEST_ASSERT_FALSE(latchkey_util::answeredAsAnotherLockType(ttlock::Status::Unsupported, 2, 2));
+    TEST_ASSERT_FALSE(latchkey_util::answeredAsAnotherLockType(ttlock::Status::Unsupported, 0, 0));
+    TEST_ASSERT_FALSE(latchkey_util::answeredAsAnotherLockType(ttlock::Status::Timeout, 0, 1));
+    TEST_ASSERT_FALSE(latchkey_util::answeredAsAnotherLockType(ttlock::Status::PairIncomplete, 0, 1));
+}
+
+static void test_the_mismatch_message_names_both_lock_types() {
+    const std::string text =
+        latchkey_util::lockTypeMismatch(ttlock::LockVersion{5, 4, 2, 1, 1}, ttlock::LockVersion{5, 3, 1, 1, 1});
+    TEST_ASSERT_EQUAL_STRING("the lock answered as lock type 5.4 scene 2, but its advert said 5.3 scene 1: this "
+                             "board only pairs the lock type it advertises",
+                             text.c_str());
+}
+
 int main() {
     UNITY_BEGIN();
     RUN_TEST(test_a_pairing_whose_result_was_stored_is_paired);
@@ -51,5 +72,7 @@ int main() {
     RUN_TEST(test_an_incomplete_pairing_keeps_the_keys_it_stored);
     RUN_TEST(test_an_incomplete_pairing_that_stored_nothing_has_lost_its_keys);
     RUN_TEST(test_a_pairing_that_failed_before_the_keys_stays_failed);
+    RUN_TEST(test_unsupported_after_a_new_mismatch_means_another_lock_type);
+    RUN_TEST(test_the_mismatch_message_names_both_lock_types);
     return UNITY_END();
 }

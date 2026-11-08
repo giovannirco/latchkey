@@ -27,6 +27,9 @@ const ERROR_TEXT = {
   bad_crc: 'The lock sent a damaged answer. Try again.',
   lock_error: 'The lock refused the command.',
   invalid_argument: 'Some values are not valid.',
+  storage_full:
+    "The board's storage is nearly full; it keeps the rest for pairing and the audit log. Remove names, or forget a lock you no longer use.",
+  too_large: 'The board does not have enough free memory to show this list.',
   already_claimed: 'This board already has an owner.',
   backup_required:
     "Back up this lock's keys before hardening it. Hardening turns off the reset button, so the backup is the only way back if the board is lost.",
@@ -43,6 +46,7 @@ const ACTION_TEXT = {
   'lock.harden': 'Harden the lock',
   'lock.factoryReset': 'Factory-reset the lock',
   'lock.adminPasscode.set': 'Change the super admin passcode',
+  'lock.adminPasscode.get': 'Show the super admin passcode',
   'lock.resetButton.set': 'Enable the reset button',
   'keys.export': 'Export the key backup',
   'keys.import': 'Import a key backup',
@@ -357,7 +361,9 @@ async function call(method, params = {}) {
 
 async function rpc(method, params) {
   try {
-    return await call(method, params);
+    const result = await call(method, params);
+    showWarning(result);
+    return result;
   } catch (failure) {
     if (failure.code === 'unauthorized' && state.authed) sessionLost();
     throw failure;
@@ -522,11 +528,12 @@ function listen(name, handler) {
   cleanups.push(events.on(name, handler));
 }
 
-function toast(message, { error = false, detail = null } = {}) {
+function toast(message, { error = false, warning = false, detail = null } = {}) {
+  const kind = error ? ' toast-error' : warning ? ' toast-warning' : '';
   const item = h(
     'div',
-    { class: `toast${error ? ' toast-error' : ''}`, role: error ? 'alert' : null },
-    icon(error ? 'alert' : 'check'),
+    { class: `toast${kind}`, role: error || warning ? 'alert' : null },
+    icon(error || warning ? 'alert' : 'check'),
     h('div', { class: 'toast-body' }, h('strong', null, message), detail ? h('span', null, detail) : null),
     h(
       'button',
@@ -535,7 +542,13 @@ function toast(message, { error = false, detail = null } = {}) {
     ),
   );
   toasts.append(item);
-  setTimeout(() => item.remove(), error ? ERROR_TOAST_MS : TOAST_MS);
+  if (!warning) setTimeout(() => item.remove(), error ? ERROR_TOAST_MS : TOAST_MS);
+}
+
+function showWarning(result) {
+  if (result && typeof result.warning === 'string' && result.warning) {
+    toast('Done, with a warning', { warning: true, detail: capitalize(result.warning) });
+  }
 }
 
 function toastError(failure) {
@@ -665,7 +678,9 @@ function confirmDialog(title, message, action, { danger = true, typed = null } =
   return formDialog(title, { intro: message, fields, submit: action, danger, onSubmit: async () => true });
 }
 
-function secretDialog(title, { intro, secret, label, extra = null, long = false }) {
+const ONCE_NOTE = 'It will not be shown again. Write it down or store it in a password manager now.';
+
+function secretDialog(title, { intro, secret, label, extra = null, long = false, note = ONCE_NOTE }) {
   openDialog(title, (dialog) =>
     dialog.append(
       h(
@@ -674,7 +689,7 @@ function secretDialog(title, { intro, secret, label, extra = null, long = false 
         intro ? h('p', null, intro) : null,
         h('output', { class: `secret${long ? ' long' : ''}`, 'aria-label': label }, secret),
         extra,
-        h('p', { class: 'muted' }, 'It will not be shown again. Write it down or store it in a password manager now.'),
+        h('p', { class: 'muted' }, note),
         h(
           'div',
           { class: 'actions' },
@@ -1265,6 +1280,7 @@ async function viewPair(view) {
     autocomplete: 'off',
     placeholder: 'Front door',
   });
+  const adminPasscode = codeInput();
   const pair = h('button', { class: 'button primary', type: 'submit', disabled: true }, 'Pair');
   const error = h('p', { class: 'form-error', role: 'alert', hidden: true });
   const form = h(
@@ -1278,6 +1294,11 @@ async function viewPair(view) {
     h('div', { class: 'row' }, scan, status),
     results,
     field('Name', name, 'Shown on the dashboard. You can change it later.'),
+    field(
+      'Super admin passcode (optional)',
+      adminPasscode,
+      'Four to nine digits that always open the lock from its keypad. Leave empty and the lock gets a random seven-digit code; you can show or change it later.',
+    ),
     error,
     h('div', { class: 'actions' }, pair),
   );
@@ -1351,7 +1372,10 @@ async function viewPair(view) {
     }
     setStep(1);
     try {
-      const { lock } = await pending(pair, () => rpc('locks.pair', { mac, name: name.value.trim() }));
+      const params = { mac, name: name.value.trim() };
+      if (adminPasscode.value) params.adminPasscode = adminPasscode.value;
+      const { lock } = await pending(pair, () => rpc('locks.pair', params));
+      adminPasscode.value = '';
       state.locks.push(lock);
       setStep(2);
       panel.replaceChildren(hardeningPanel(lock, { title: `Harden ${lock.name}`, finish: true }));
@@ -1590,9 +1614,56 @@ function validityText(validity) {
   return `${formatTime(validity.start)} to ${formatTime(validity.end)}`;
 }
 
+function dayNames(days) {
+  const key = [...days].sort((a, b) => a - b).join(',');
+  if (key === '1,2,3,4,5') return 'Weekdays';
+  if (key === '6,7') return 'Weekends';
+  if (key === '1,2,3,4,5,6,7') return 'Every day';
+  return [...days]
+    .sort((a, b) => a - b)
+    .map((day) => WEEKDAYS[day - 1])
+    .join(', ');
+}
+
+function scheduleText(days, start, end) {
+  return days.length ? `${dayNames(days)} ${start}-${end}` : 'No day picked yet';
+}
+
 function cycleText(cycle) {
-  const days = (cycle.days || []).map((day) => WEEKDAYS[day - 1]).join(', ');
-  return `${days}, ${cycle.start} to ${cycle.end}`;
+  return scheduleText(cycle.days || [], cycle.start, cycle.end);
+}
+
+function zoneLabel(offsetMinutes) {
+  const magnitude = Math.abs(offsetMinutes);
+  return `UTC${offsetMinutes < 0 ? '-' : '+'}${pad(Math.floor(magnitude / 60))}:${pad(magnitude % 60)}`;
+}
+
+function zoneHint() {
+  const here = zoneLabel(-new Date().getTimezoneOffset());
+  const local = state.info && typeof state.info.localTime === 'string' ? state.info.localTime : '';
+  const board = /[+-]\d\d:\d\d$/.test(local) ? `UTC${local.slice(-6)}` : null;
+  const named = state.info && state.info.timezone ? ` (${state.info.timezone})` : '';
+  if (!board) return `Dates and times are in this device's time zone, ${here}.`;
+  if (board === here)
+    return `Dates and times are in this device's time zone, ${here}, the same as the board's${named}.`;
+  return `Dates and times are in this device's time zone, ${here}. The board keeps ${board}${named}, and the lock follows the board.`;
+}
+
+function codeInput(props = {}) {
+  return h('input', {
+    type: 'text',
+    class: 'masked',
+    inputmode: 'numeric',
+    pattern: '[0-9]{4,9}',
+    maxlength: '9',
+    autocomplete: 'off',
+    autocorrect: 'off',
+    autocapitalize: 'off',
+    spellcheck: 'false',
+    'data-1p-ignore': true,
+    'data-lpignore': 'true',
+    ...props,
+  });
 }
 
 function readWindow(from, until) {
@@ -1613,7 +1684,108 @@ function windowFields(validity, defaultHours) {
   return {
     from,
     until,
-    group: h('div', { class: 'field-group' }, field('Valid from', from), field('Valid until', until)),
+    group: h(
+      'div',
+      { class: 'stack' },
+      h('div', { class: 'field-group' }, field('Valid from', from), field('Valid until', until)),
+      h('p', { class: 'hint' }, zoneHint()),
+    ),
+  };
+}
+
+function weeklyEditor(cycle) {
+  const selected = new Set(cycle ? cycle.days : [1, 2, 3, 4, 5]);
+  const from = h('input', { type: 'time', value: cycle ? cycle.start : '08:00', required: true });
+  const until = h('input', { type: 'time', value: cycle ? cycle.end : '18:00', required: true });
+  const summary = h('p', { class: 'summary', 'aria-live': 'polite' });
+  const toggles = WEEKDAYS.map((day, index) =>
+    h('button', { class: 'day-toggle', type: 'button', 'aria-label': WEEKDAY_NAMES[index] }, day),
+  );
+  function refresh() {
+    toggles.forEach((button, index) => button.setAttribute('aria-pressed', String(selected.has(index + 1))));
+    summary.textContent = scheduleText([...selected], from.value, until.value);
+  }
+  function pick(days) {
+    selected.clear();
+    days.forEach((day) => selected.add(day));
+    refresh();
+  }
+  toggles.forEach((button, index) =>
+    button.addEventListener('click', () => {
+      if (selected.has(index + 1)) selected.delete(index + 1);
+      else selected.add(index + 1);
+      refresh();
+    }),
+  );
+  const weekdays = h(
+    'button',
+    { class: 'button small', type: 'button', onclick: () => pick([1, 2, 3, 4, 5]) },
+    'Weekdays',
+  );
+  const everyDay = h(
+    'button',
+    { class: 'button small', type: 'button', onclick: () => pick([1, 2, 3, 4, 5, 6, 7]) },
+    'Every day',
+  );
+  from.addEventListener('input', refresh);
+  until.addEventListener('input', refresh);
+  refresh();
+  return {
+    el: h(
+      'div',
+      { class: 'stack weekly' },
+      h('div', { class: 'day-toggles', role: 'group', 'aria-label': 'Days' }, toggles),
+      h('div', { class: 'row' }, weekdays, everyDay),
+      h('div', { class: 'field-group' }, field('From', from), field('Until', until)),
+      summary,
+    ),
+    read() {
+      const days = [...selected].sort((a, b) => a - b);
+      if (!days.length) throw new Error('Pick at least one day.');
+      if (until.value <= from.value) throw new Error('The daily window must end after it starts.');
+      return { days, start: from.value, end: until.value };
+    },
+  };
+}
+
+function scheduleEditor(entry, weeklyAllowed) {
+  const current = entry.cycle && weeklyAllowed ? 'weekly' : entry.validity ? 'dates' : 'always';
+  const group = uid('when');
+  const choices = [
+    ['always', 'Always'],
+    ['dates', 'Between dates'],
+  ];
+  if (weeklyAllowed) choices.push(['weekly', 'Weekly schedule']);
+  const radios = choices.map(([value, text]) => {
+    const input = h('input', { type: 'radio', name: group, value, checked: value === current });
+    return { input, label: h('label', { class: 'choice' }, input, h('span', null, text)) };
+  });
+  const period = windowFields(entry.validity, 24 * 30);
+  const weekly = weeklyAllowed ? weeklyEditor(entry.cycle) : null;
+  const chosen = () => radios.find(({ input }) => input.checked).input.value;
+  const sync = () => {
+    period.group.hidden = chosen() !== 'dates';
+    if (weekly) weekly.el.hidden = chosen() !== 'weekly';
+  };
+  radios.forEach(({ input }) => input.addEventListener('change', sync));
+  sync();
+  return {
+    el: [
+      h(
+        'fieldset',
+        { class: 'choices' },
+        h('legend', null, 'When it opens the lock'),
+        radios.map((r) => r.label),
+      ),
+      period.group,
+      weekly ? weekly.el : null,
+    ],
+    read() {
+      const mode = chosen();
+      const plan = { validity: mode === 'dates' ? readWindow(period.from, period.until) : null };
+      if (weeklyAllowed) plan.cycle = mode === 'weekly' ? weekly.read() : null;
+      return plan;
+    },
   };
 }
 
@@ -1638,8 +1810,8 @@ function renderItems(part, items, emptyText) {
 async function renderAccess(panel, lock, has) {
   const parts = [];
   if (has('passcode')) parts.push(passcodeSection(lock, has));
-  if (has('finger_print')) parts.push(credentialSection(lock, 'fingerprint'));
-  if (has('ic')) parts.push(credentialSection(lock, 'card'));
+  if (has('finger_print')) parts.push(credentialSection(lock, 'fingerprint', has));
+  if (has('ic')) parts.push(credentialSection(lock, 'card', has));
   if (!parts.length) {
     panel.append(h('p', { class: 'card empty' }, 'This lock reports no passcodes, cards or fingerprints.'));
     return;
@@ -1652,6 +1824,14 @@ function passcodeSection(lock, has) {
   const add = h('button', { class: 'button small primary', type: 'button' }, icon('plus'), 'Add passcode');
   const clear = h('button', { class: 'button small', type: 'button' }, icon('trash'), 'Delete all');
   const part = section('Passcodes', 'keypad', [add, clear]);
+  part.el.insertBefore(
+    h(
+      'p',
+      { class: 'hint' },
+      'The lock opens when a code appears anywhere among the digits typed, so others can hide it in a longer string. Use 7 to 9 digits, and avoid runs like 123456 or one repeated digit.',
+    ),
+    part.body,
+  );
 
   function item(entry) {
     const label = entry.name || 'Passcode';
@@ -1718,13 +1898,7 @@ function passcodeSection(lock, has) {
 
   async function editPasscode(entry) {
     const name = h('input', { type: 'text', maxlength: '24', value: entry.name || '', autocomplete: 'off' });
-    const code = h('input', {
-      type: 'text',
-      inputmode: 'numeric',
-      pattern: '[0-9]{4,9}',
-      maxlength: '9',
-      autocomplete: 'off',
-    });
+    const code = codeInput();
     const period = entry.type === 'permanent' ? null : windowFields(entry.validity, 24);
     const done = await formDialog('Edit passcode', {
       fields: [
@@ -1749,33 +1923,12 @@ function passcodeSection(lock, has) {
     const type = h(
       'select',
       null,
-      PASSCODE_TYPES.filter(([key]) => key !== 'cyclic' || has('cyclic_password')).map(([key, text]) =>
-        h('option', { value: key }, text),
-      ),
+      PASSCODE_TYPES.filter(([key]) => key !== 'cyclic').map(([key, text]) => h('option', { value: key }, text)),
     );
-    const code = h('input', {
-      type: 'text',
-      inputmode: 'numeric',
-      pattern: '[0-9]{4,9}',
-      maxlength: '9',
-      autocomplete: 'off',
-      placeholder: 'Random',
-    });
+    const code = codeInput({ placeholder: 'Random' });
     const period = windowFields(null, 24);
-    const days = weekdayChecks([1, 2, 3, 4, 5]);
-    const dailyFrom = h('input', { type: 'time', value: '08:00', required: true });
-    const dailyUntil = h('input', { type: 'time', value: '18:00', required: true });
-    const cycle = h(
-      'fieldset',
-      { class: 'field-group' },
-      h('legend', null, 'Repeats every week'),
-      days.el,
-      field('Daily from', dailyFrom),
-      field('Daily until', dailyUntil),
-    );
     const sync = () => {
       period.group.hidden = type.value === 'permanent';
-      cycle.hidden = type.value !== 'cyclic';
       if (type.value === 'one_time') {
         const start = fromLocalInput(period.from.value) || Math.floor(Date.now() / 1000);
         period.until.value = toLocalInput(start + 6 * 3600);
@@ -1787,21 +1940,18 @@ function passcodeSection(lock, has) {
       fields: [
         field('Name', name, 'Kept on the board to tell passcodes apart.'),
         field('Type', type),
-        field('Code (optional)', code, 'Four to nine digits. Leave empty and the board picks a random six-digit code.'),
+        field(
+          'Code (optional)',
+          code,
+          'Four to nine digits; seven to nine are safer. Leave empty and the board picks a random six-digit code.',
+        ),
         period.group,
-        cycle,
       ],
       submit: 'Add',
       onSubmit: async () => {
         const params = { lock: lock.id, type: type.value, name: name.value.trim() };
         if (code.value) params.code = code.value;
         if (type.value !== 'permanent') params.validity = readWindow(period.from, period.until);
-        if (type.value === 'cyclic') {
-          const selected = days.values();
-          if (!selected.length) throw new Error('Pick at least one day.');
-          if (dailyUntil.value <= dailyFrom.value) throw new Error('The daily window must end after it starts.');
-          params.cycle = { days: selected, start: dailyFrom.value, end: dailyUntil.value };
-        }
         const result = await rpc('lock.passcodes.add', params);
         code.value = '';
         return result.passcode || {};
@@ -1830,7 +1980,7 @@ function passcodeSection(lock, has) {
   return part;
 }
 
-function credentialSection(lock, kind) {
+function credentialSection(lock, kind, has) {
   const info = CREDENTIALS[kind];
   const add = h('button', { class: 'button small primary', type: 'button' }, icon('plus'), `Add ${info.noun}`);
   const clear = h('button', { class: 'button small', type: 'button' }, icon('trash'), 'Delete all');
@@ -1848,7 +1998,11 @@ function credentialSection(lock, kind) {
         { class: 'item-main' },
         h('strong', null, label),
         number ? [' ', h('span', { class: 'mask' }, number)] : null,
-        h('p', { class: 'muted small' }, validityText(entry.validity)),
+        h(
+          'p',
+          { class: 'muted small' },
+          [validityText(entry.validity), entry.cycle ? cycleText(entry.cycle) : null].filter(Boolean).join(' · '),
+        ),
       ),
       h(
         'div',
@@ -1881,21 +2035,11 @@ function credentialSection(lock, kind) {
     });
 
   async function editValidity(entry) {
-    const permanent = h('input', { type: 'checkbox', checked: !entry.validity });
-    const period = windowFields(entry.validity, 24 * 30);
-    period.group.hidden = !entry.validity;
-    permanent.addEventListener('change', () => {
-      period.group.hidden = permanent.checked;
-    });
+    const schedule = scheduleEditor(entry, has('cyclic_ic_or_finger_print'));
     const done = await formDialog(`${info.Noun} validity`, {
-      fields: [checkField('Permanent', permanent), period.group],
+      fields: schedule.el,
       submit: 'Save',
-      onSubmit: () =>
-        rpc(`${info.method}.setValidity`, {
-          lock: lock.id,
-          id: entry.id,
-          validity: permanent.checked ? null : readWindow(period.from, period.until),
-        }),
+      onSubmit: () => rpc(`${info.method}.setValidity`, { lock: lock.id, id: entry.id, ...schedule.read() }),
     });
     if (done) await part.reload();
   }
@@ -2069,40 +2213,56 @@ async function renderSettings(panel, lock, has) {
   if (has('passcode')) {
     const part = section('Super admin passcode', 'key');
     part.load = async () => {
-      const random = h('button', { class: 'button small', type: 'button' }, 'New random passcode');
-      const choose = h('button', { class: 'button small', type: 'button' }, 'Choose a passcode…');
-      random.addEventListener('click', async () => {
+      const show = h('button', { class: 'button small', type: 'button' }, 'Show admin passcode');
+      const change = h('button', { class: 'button small', type: 'button' }, 'Change admin passcode');
+      show.addEventListener('click', async () => {
         try {
-          const result = await pending(random, () => rpc('lock.adminPasscode.set', target));
-          if (result.code) {
-            secretDialog('New super admin passcode', {
-              intro: `This passcode always opens ${lock.name} from the keypad.`,
-              secret: result.code,
-              label: 'New super admin passcode',
-            });
-          } else {
-            toast('Super admin passcode changed');
-          }
+          const result = await pending(show, () => rpc('lock.adminPasscode.get', target));
+          const where =
+            result.source === 'lock'
+              ? result.matchesBoard === false
+                ? 'Read from the lock. It differs from the copy the board kept, so it was changed outside Latchkey.'
+                : 'Read from the lock.'
+              : 'The lock does not hand out its code, so this is the copy the board kept when it set it.';
+          secretDialog('Super admin passcode', {
+            intro: `${where} It always opens ${lock.name} from the keypad.`,
+            secret: result.code,
+            label: 'Super admin passcode',
+            note: 'Keep it private. Close this window when you are done.',
+          });
         } catch (failure) {
           toastError(failure);
         }
       });
-      choose.addEventListener('click', async () => {
-        const code = h('input', {
-          type: 'password',
-          inputmode: 'numeric',
-          pattern: '[0-9]{4,9}',
-          maxlength: '9',
-          required: true,
-          autocomplete: 'off',
-        });
-        const done = await formDialog('Choose the super admin passcode', {
-          intro: 'Four to nine digits. The board asks for its button.',
-          fields: [field('New super admin passcode', code)],
+      change.addEventListener('click', async () => {
+        const code = codeInput();
+        const result = await formDialog('Change the super admin passcode', {
+          intro: 'The board asks for its button before the lock gets the new code.',
+          fields: [
+            field(
+              'New super admin passcode (optional)',
+              code,
+              'Four to nine digits; seven to nine are safer. Leave empty and the board picks a random seven-digit code.',
+            ),
+          ],
           submit: 'Save',
-          onSubmit: () => rpc('lock.adminPasscode.set', { ...target, code: code.value }),
+          onSubmit: async () => {
+            const params = code.value ? { ...target, code: code.value } : target;
+            const outcome = await rpc('lock.adminPasscode.set', params);
+            code.value = '';
+            return outcome || {};
+          },
         });
-        if (done) toast('Super admin passcode changed');
+        if (!result) return;
+        if (result.code) {
+          secretDialog('New super admin passcode', {
+            intro: `This passcode always opens ${lock.name} from the keypad.`,
+            secret: result.code,
+            label: 'New super admin passcode',
+          });
+        } else {
+          toast('Super admin passcode changed');
+        }
       });
       part.body.replaceChildren(
         h(
@@ -2110,7 +2270,7 @@ async function renderSettings(panel, lock, has) {
           { class: 'hint' },
           'This passcode always opens the lock from the keypad. Hardening replaces it with a random one.',
         ),
-        h('div', { class: 'row' }, random, choose),
+        h('div', { class: 'row' }, show, change),
       );
     };
     parts.push(part);
