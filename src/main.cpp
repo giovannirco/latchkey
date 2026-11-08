@@ -53,6 +53,7 @@ extern "C" void app_main() {
     methods::registerSystem();
     methods::registerAuth();
     methods::registerLocks();
+    methods::registerAccess();
     jobs::start();
     http::start();
     console::start();

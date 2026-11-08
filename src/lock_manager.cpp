@@ -73,6 +73,7 @@ enum class Kind : uint8_t {
     Lock,
     TimeSync,
     FactoryReset,
+    Access,
 };
 
 struct Job {
@@ -81,6 +82,8 @@ struct Job {
     std::string name;
     uint32_t seconds = 0;
     std::string adminPasscode;
+    const char* action = nullptr;
+    LockWork work;
     rpc::Reply reply;
     StaticSemaphore_t doneBuffer{};
     SemaphoreHandle_t done = nullptr;
@@ -164,8 +167,14 @@ const char* kindName(Kind kind) {
             return "lock.time.sync";
         case Kind::FactoryReset:
             return "lock.factoryReset";
+        case Kind::Access:
+            break;
     }
-    return "job";
+    return "lock job";
+}
+
+const char* jobName(const Job& job) {
+    return job.kind == Kind::Access && job.action != nullptr ? job.action : kindName(job.kind);
 }
 
 const char* stateName(LockState state) {
@@ -804,7 +813,7 @@ void runLockJob(Job& job) {
     }
     Status status = openLink(lock.record);
     if (status != Status::Ok) {
-        ESP_LOGW(TAG, "%s: no link to %s: %s", kindName(job.kind), job.mac.c_str(), ttlock::toString(status));
+        ESP_LOGW(TAG, "%s: no link to %s: %s", jobName(job), job.mac.c_str(), ttlock::toString(status));
         finish(job, failure(status, 0));
         return;
     }
@@ -836,14 +845,19 @@ void runLockJob(Job& job) {
         case Kind::FactoryReset:
             status = resetLock(session, lock, reply);
             break;
+        case Kind::Access:
+            status = job.work(session, lock.record, reply);
+            break;
         case Kind::Scan:
         case Kind::Pair:
             break;
     }
     const uint8_t lockError = s_link.session ? s_link.session->lockErrorCode() : 0;
     if (status != Status::Ok) {
-        ESP_LOGW(TAG, "%s failed: %s (lock error 0x%02x)", kindName(job.kind), ttlock::toString(status), lockError);
-        reply = failure(status, lockError);
+        ESP_LOGW(TAG, "%s failed: %s (lock error 0x%02x)", jobName(job), ttlock::toString(status), lockError);
+        if (reply.error.empty()) {
+            reply = failure(status, lockError);
+        }
     }
     if (s_link.open && (breaksLink(status) || !ble::connected())) {
         closeLink();
@@ -1362,6 +1376,54 @@ rpc::Reply list() {
 }
 
 bool holds(const std::string& mac) { return exists(mac); }
+
+bool record(const std::string& mac, Record& out) {
+    std::lock_guard<std::mutex> guard(s_mutex);
+    const Lock* lock = findLocked(mac);
+    if (lock == nullptr) {
+        return false;
+    }
+    out = lock->record;
+    return true;
+}
+
+rpc::Reply featureMask(const std::string& mac, uint64_t& out) {
+    Record stored;
+    if (!record(mac, stored)) {
+        return notPaired();
+    }
+    if (stored.features == 0) {
+        rpc::Reply read = submit(Kind::Features, mac, {}, 0);
+        if (!read.error.empty()) {
+            return read;
+        }
+        if (!record(mac, stored)) {
+            return notPaired();
+        }
+    }
+    out = stored.features;
+    mbedtls_platform_zeroize(&stored, sizeof(stored));
+    return rpc::ok();
+}
+
+rpc::Reply runOnLock(const std::string& mac, const char* action, LockWork work) {
+    if (!exists(mac)) {
+        return notPaired();
+    }
+    Job job;
+    job.kind = Kind::Access;
+    job.mac = mac;
+    job.action = action;
+    job.work = std::move(work);
+    return submit(job);
+}
+
+bool storeAdminPasscode(const std::string& mac, const std::string& code) {
+    return updateRecord(mac, [&code](Record& stored) {
+        copyText(stored.adminPasscode, code);
+        stored.flags |= store::locks::kFlagAdminPasscodeConfirmed;
+    });
+}
 
 rpc::Reply rename(const std::string& mac, const std::string& name) {
     std::lock_guard<std::mutex> guard(s_mutex);

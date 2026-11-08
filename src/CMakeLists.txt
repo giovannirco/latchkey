@@ -13,6 +13,7 @@ idf_component_register(
         "jobs.cpp"
         "lock_manager.cpp"
         "main.cpp"
+        "methods_access.cpp"
         "methods_auth.cpp"
         "methods_locks.cpp"
         "methods_system.cpp"

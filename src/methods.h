@@ -9,4 +9,6 @@ void registerAuth();
 
 void registerLocks();
 
+void registerAccess();
+
 }

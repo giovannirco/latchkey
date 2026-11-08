@@ -3,12 +3,19 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <string>
 
 #include "esp_err.h"
 #include "rpc.h"
+#include "store.h"
+#include "ttlock/session.h"
+#include "ttlock/status.h"
 
 namespace lock_manager {
+
+using LockWork =
+    std::function<ttlock::Status(ttlock::Session& session, const store::locks::Record& record, rpc::Reply& reply)>;
 
 void start();
 
@@ -20,6 +27,14 @@ rpc::Reply pair(const std::string& mac, const std::string& name, uint32_t waitSe
 rpc::Reply list();
 
 bool holds(const std::string& mac);
+
+bool record(const std::string& mac, store::locks::Record& out);
+
+rpc::Reply featureMask(const std::string& mac, uint64_t& out);
+
+rpc::Reply runOnLock(const std::string& mac, const char* action, LockWork work);
+
+bool storeAdminPasscode(const std::string& mac, const std::string& code);
 
 rpc::Reply rename(const std::string& mac, const std::string& name);
 
