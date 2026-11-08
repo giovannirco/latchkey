@@ -16,7 +16,9 @@ constexpr size_t kDescriptionAt = 32;
 constexpr uint32_t kDescriptionMagic = 0xABCD5432;
 constexpr size_t kVersionAt = kDescriptionAt + 16;
 constexpr size_t kProjectAt = kDescriptionAt + 48;
+constexpr size_t kElfShaAt = kDescriptionAt + 144;
 constexpr size_t kTextField = 32;
+constexpr size_t kShaBytes = 32;
 
 struct Chip {
     uint16_t id;
@@ -40,6 +42,17 @@ std::string printable(const uint8_t* field) {
         if (c < 0x20 || c > 0x7E) {
             c = '?';
         }
+    }
+    return out;
+}
+
+std::string hex(const uint8_t* data, size_t size) {
+    constexpr char kDigits[] = "0123456789abcdef";
+    std::string out;
+    out.reserve(size * 2);
+    for (size_t i = 0; i < size; ++i) {
+        out += kDigits[data[i] >> 4];
+        out += kDigits[data[i] & 0x0F];
     }
     return out;
 }
@@ -82,6 +95,7 @@ ImageHeadVerdict checkAppImageHead(const uint8_t* data, size_t size, uint16_t ch
     head.chipId = static_cast<uint16_t>(data[kChipIdAt] | data[kChipIdAt + 1] << 8);
     head.project = printable(data + kProjectAt);
     head.version = printable(data + kVersionAt);
+    head.elfSha256 = hex(data + kElfShaAt, kShaBytes);
     if (head.chipId != chipId) {
         return ImageHeadVerdict::OtherChip;
     }

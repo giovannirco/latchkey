@@ -30,6 +30,9 @@ Head head(uint16_t chip, const char* project, const char* version) {
     std::memcpy(bytes.data() + 32, magic, sizeof(magic));
     std::memcpy(bytes.data() + 48, version, std::strlen(version));
     std::memcpy(bytes.data() + 80, project, std::strlen(project));
+    for (size_t i = 0; i < 32; ++i) {
+        bytes[176 + i] = static_cast<uint8_t>(0xA0 + i);
+    }
     return bytes;
 }
 
@@ -57,6 +60,7 @@ static void test_a_latchkey_head_for_this_chip_passes_and_names_its_version() {
     TEST_ASSERT_EQUAL_UINT16(kEsp32, parsed.chipId);
     TEST_ASSERT_EQUAL_STRING("latchkey", parsed.project.c_str());
     TEST_ASSERT_EQUAL_STRING("0.2.0", parsed.version.c_str());
+    TEST_ASSERT_EQUAL_STRING("a0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebf", parsed.elfSha256.c_str());
 }
 
 static void test_fewer_bytes_than_the_head_are_not_an_image() {

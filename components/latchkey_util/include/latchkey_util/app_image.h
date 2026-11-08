@@ -23,6 +23,7 @@ struct AppImageHead {
     uint16_t chipId = 0;
     std::string project;
     std::string version;
+    std::string elfSha256;
 };
 
 enum class ImageHeadVerdict : uint8_t {
