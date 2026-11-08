@@ -29,6 +29,12 @@ def pytest_addoption(parser: pytest.Parser) -> None:
         help="file the pairing test writes (UTC time) while someone must touch the lock's keypad",
     )
     parser.addoption(
+        "--button-file",
+        action="store",
+        default=None,
+        help="file the update tests write (UTC time) while someone must press the board button",
+    )
+    parser.addoption(
         "--allow-lock-reset",
         action="store_true",
         default=False,
@@ -83,6 +89,12 @@ def lock_mac(secrets: dict[str, Any]) -> str:
 @pytest.fixture(scope="session")
 def touch_file(request: pytest.FixtureRequest) -> Path | None:
     path = request.config.getoption("--touch-file")
+    return Path(path) if path else None
+
+
+@pytest.fixture(scope="session")
+def button_file(request: pytest.FixtureRequest) -> Path | None:
+    path = request.config.getoption("--button-file")
     return Path(path) if path else None
 
 
