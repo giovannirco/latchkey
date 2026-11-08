@@ -14,6 +14,7 @@
 #include "esp_https_server.h"
 #include "esp_log.h"
 #include "esp_netif.h"
+#include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
 #include "freertos/task.h"
@@ -49,11 +50,13 @@ constexpr UBaseType_t kTaskPriority = 5;
 constexpr uint16_t kUriHandlers = 4;
 constexpr uint16_t kResponseHeaders = 8;
 constexpr uint16_t kSendTimeoutS = 3;
+constexpr uint16_t kReceiveTimeoutS = 4;
+constexpr uint32_t kHandshakeTimeoutMs = 3500;
+constexpr int64_t kBodyDeadlineUs = 10 * 1000 * 1000;
 constexpr int kKeepAliveIdleS = 30;
 constexpr int kKeepAliveIntervalS = 5;
 constexpr int kKeepAliveCount = 3;
 constexpr size_t kMaxBody = 8192;
-constexpr int kMaxReadTimeouts = 3;
 constexpr size_t kHeaderValue = 300;
 constexpr size_t kTokenBuffer = 65;
 
@@ -149,11 +152,14 @@ esp_err_t servePage(httpd_req_t* req) {
 
 bool readBody(httpd_req_t* req, std::string& body) {
     body.resize(req->content_len);
+    const int64_t deadline = esp_timer_get_time() + kBodyDeadlineUs;
     size_t received = 0;
-    int timeouts = 0;
     while (received < body.size()) {
+        if (esp_timer_get_time() > deadline) {
+            return false;
+        }
         const int count = httpd_req_recv(req, body.data() + received, body.size() - received);
-        if (count == HTTPD_SOCK_ERR_TIMEOUT && ++timeouts < kMaxReadTimeouts) {
+        if (count == HTTPD_SOCK_ERR_TIMEOUT) {
             continue;
         }
         if (count <= 0) {
@@ -176,24 +182,17 @@ esp_err_t acceptRpc(httpd_req_t* req) {
     if (req->content_len > kMaxBody) {
         return refuse(req, "413 Content Too Large", "invalid_argument", "request too large");
     }
-    if (uxQueueSpacesAvailable(s_requests) == 0) {
-        return refuse(req, "503 Service Unavailable", "busy", "the board is answering other requests");
-    }
     auto* request = new (std::nothrow) Request{nullptr, {}};
-    if (request == nullptr) {
+    if (request == nullptr || httpd_req_async_handler_begin(req, &request->req) != ESP_OK) {
+        delete request;
         return refuse(req, "503 Service Unavailable", "busy", "the board is out of memory");
     }
-    if (!readBody(req, request->body)) {
-        mbedtls_platform_zeroize(request->body.data(), request->body.size());
+    if (xQueueSend(s_requests, &request, 0) != pdTRUE) {
+        refuse(request->req, "503 Service Unavailable", "busy", "the board is answering other requests");
+        httpd_req_async_handler_complete(request->req);
         delete request;
         return ESP_FAIL;
     }
-    if (httpd_req_async_handler_begin(req, &request->req) != ESP_OK) {
-        mbedtls_platform_zeroize(request->body.data(), request->body.size());
-        delete request;
-        return refuse(req, "503 Service Unavailable", "busy", "the board is out of memory");
-    }
-    xQueueSend(s_requests, &request, 0);
     return ESP_OK;
 }
 
@@ -208,8 +207,20 @@ std::string sessionToken(httpd_req_t* req) {
     return value;
 }
 
+void abandon(httpd_req_t* req) {
+    const httpd_handle_t server = req->handle;
+    const int fd = httpd_req_to_sockfd(req);
+    httpd_req_async_handler_complete(req);
+    httpd_sess_trigger_close(server, fd);
+}
+
 void answer(Request& request) {
     httpd_req_t* req = request.req;
+    if (!readBody(req, request.body)) {
+        mbedtls_platform_zeroize(request.body.data(), request.body.size());
+        abandon(req);
+        return;
+    }
     std::string token = sessionToken(req);
     rpc::Response response = rpc::dispatch(request.body.c_str(), rpc::Transport::Web, token);
     mbedtls_platform_zeroize(token.data(), token.size());
@@ -265,6 +276,8 @@ esp_err_t startHttps(const latchkey_util::TlsIdentity& identity) {
     config.prvtkey_pem = identity.key.data();
     config.prvtkey_len = identity.key.size();
     config.session_tickets = true;
+    config.tls_handshake_timeout_ms = kHandshakeTimeoutMs;
+    config.httpd.recv_wait_timeout = kReceiveTimeoutS;
     config.httpd.stack_size = kHttpsStack;
     config.httpd.max_open_sockets = kHttpsSockets;
     config.httpd.max_uri_handlers = kUriHandlers;
