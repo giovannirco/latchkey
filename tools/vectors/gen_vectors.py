@@ -22,19 +22,28 @@ Where the inputs come from:
   kind3r's own paired lock and one request kind3r sent to it, encrypted under
   that lock's key. Only their CRCs are used, and each is checked against
   ttlock-ble before it is written.
+- command_vectors.h holds command payloads from the `commands` builders and
+  expected fields from the `commands` parsers and `models.LockEvent`, all over
+  synthetic inputs (made-up passcodes, card numbers and ids). The epoch-to-
+  civil-date cases come from the Python standard library.
+
+Commands that ttlock-ble does not implement get their vectors from
+tools/vectors/kind3r_vectors.ts, which runs kind3r's own command classes.
 
 The script is deterministic: a second run rewrites identical files.
 """
 
 from __future__ import annotations
 
+import datetime as dt
 from collections.abc import Callable
 from pathlib import Path
 
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
+from ttlock_ble import commands as cmd
 from ttlock_ble import crypto
-from ttlock_ble.constants import LockState
-from ttlock_ble.models import LockAdvertisement, LockVersion
+from ttlock_ble.constants import KeyboardPwdType, LockState
+from ttlock_ble.models import LockAdvertisement, LockEvent, LockVersion
 from ttlock_ble.protocol import Frame
 
 REFERENCE = "ttlock-ble 0.3.4"
@@ -381,6 +390,362 @@ def codec_header() -> str:
     return header("codec", body)
 
 
+def c_scalar(type_name: str, name: str, value: int) -> str:
+    suffix = "ULL" if type_name == "uint64_t" else ""
+    return f"inline constexpr {type_name} {name} = {value}{suffix};\n"
+
+
+def c_string(name: str, value: str) -> str:
+    assert value.isascii() and '"' not in value and "\\" not in value
+    return f'inline constexpr const char* {name} = "{value}";\n'
+
+
+def c_optional(value: int | None) -> int:
+    return -1 if value is None else value
+
+
+def date_fields(value: dt.datetime | None, fallback: tuple[int, ...]) -> tuple[int, ...]:
+    if value is None:
+        return fallback
+    return (value.year, value.month, value.day, value.hour, value.minute, value.second)
+
+
+START_SENTINEL_FIELDS = (2000, 1, 1, 0, 0, 0)
+END_SENTINEL_FIELDS = (2099, 1, 1, 0, 0, 0)
+
+EPOCH_SECONDS = [
+    -1,
+    0,
+    951782400,
+    1704067199,
+    1704067200,
+    1709164800,
+    1735689599,
+    1762524000,
+    4102444799,
+    4107542399,
+    4107542400,
+]
+
+LOG_RECORDS = [
+    ("app_unlock", 1, (123).to_bytes(4, "big") + (456).to_bytes(4, "big")),
+    ("keypad_unlock", 4, bytes([4]) + b"1357" + bytes([0])),
+    ("keypad_modify", 5, bytes([4]) + b"1357" + bytes([5]) + b"24680"),
+    ("wrong_passcode", 7, bytes([4]) + b"0000"),
+    ("clear_all_passcodes", 8, bytes([25, 11, 7, 14, 23])),
+    ("card_unlock", 17, (0xABCDEF).to_bytes(4, "big")),
+    ("fingerprint_unlock", 20, (0x010203040506).to_bytes(6, "big")),
+    ("ble_lock", 26, (7).to_bytes(4, "big") + (8).to_bytes(4, "big")),
+    ("mechanical_key", 27, b""),
+    ("door_sensor", 30, bytes([77])),
+    ("remote_control_key", 37, (1).to_bytes(4, "big") + (2).to_bytes(4, "big") + bytes([9])),
+    ("key_fob", 55, bytes([0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 3, 88])),
+    ("wireless_keypad", 56, bytes([0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 42])),
+    ("bong_unlock", 19, bytes([0x33, 0x22, 0x11, 0xCC, 0xBB, 0xAA])),
+]
+LOG_DATE = bytes([25, 11, 7, 14, 23, 7])
+LOG_BATTERY = 90
+LOG_SEQUENCE = 40
+
+
+def log_page_data() -> bytes:
+    records = bytearray()
+    for _name, record_type, tail in LOG_RECORDS:
+        record = bytes([record_type]) + LOG_DATE + bytes([LOG_BATTERY]) + tail
+        records.append(len(record))
+        records.extend(record)
+    body = LOG_SEQUENCE.to_bytes(2, "big") + bytes(records)
+    return len(body).to_bytes(2, "big") + body
+
+
+def success(command: int, data: bytes) -> bytes:
+    return bytes([command, cmd.RESPONSE_SUCCESS]) + data
+
+
+def handshake_vectors() -> str:
+    body = ""
+    body += c_array("kCheckUserTimeDefault", cmd.payload_check_user_time())
+    body += c_array("kCheckUserTimeFlagAndUid", cmd.payload_check_user_time(uid=0x01020304, lock_flag_pos=0x123456))
+    body += c_array("kCheckAdminDefault", cmd.payload_check_admin(0, "12345678", 0))
+    body += c_array("kCheckAdminFlagAndUid", cmd.payload_check_admin(0x01020304, "12345678", 0x123456))
+    body += c_array("kCheckRandom", cmd.payload_check_random(0x01020304, 87654321))
+    body += c_array("kCheckRandomWraps", cmd.payload_check_random(0xFFFFFFF0, 0x20))
+    ps = 0x87654321
+    assert cmd.parse_check_user_time_response(success(0x55, ps.to_bytes(4, "big") + b"\x09")) == ps
+    assert cmd.parse_check_admin_response(success(0x41, ps.to_bytes(4, "big"))) == ps
+    body += c_scalar("uint32_t", "kPsFromLock", ps)
+    body += c_array("kPsFromLockData", ps.to_bytes(4, "big") + b"\x09")
+    body += c_array("kUnlock", cmd.payload_unlock(0x0A0B0C0D, 87654321, 1762524000 * 1000))
+    body += c_array("kUnlockWraps", cmd.payload_unlock(0xFFFFFFFF, 2, 1762524000 * 1000))
+    calibrate_time = dt.datetime(2025, 11, 7, 11, 0, 5)
+    body += c_array("kCalibrateTime", cmd.payload_time_calibrate(calibrate_time))
+    body += c_array("kSearchStatus", cmd.payload_query_state())
+    return body
+
+
+def status_vectors() -> str:
+    body = "struct StatusCase {\n    const uint8_t* data;\n    size_t size;\n    int state;\n    int battery;\n};\n\n"
+    rows = []
+    for name, data in [("Locked", bytes([0x2C, 0x00])), ("Unlocked", bytes([0x2C, 0x01])), ("Odd", bytes([0x2C, 9]))]:
+        plain = success(0x14, data)
+        state = cmd.parse_lock_status(plain)
+        battery = cmd.parse_state_battery(plain)
+        array = f"kStatus{name}"
+        body += c_array(array, data)
+        rows.append(
+            f"    {{{array}, sizeof({array}), {c_optional(None if state is None else int(state))}, {battery}}},"
+        )
+    return body + "\ninline constexpr StatusCase kStatusCases[] = {\n" + "\n".join(rows) + "\n};\n"
+
+
+def feature_vectors() -> str:
+    body = "struct FeatureCase {\n    const uint8_t* data;\n    size_t size;\n    uint64_t mask;\n};\n\n"
+    rows = []
+    cases = [
+        ("TwoWords", bytes([0x5A]) + bytes.fromhex("754cf5f7") + bytes.fromhex("00000804")),
+        ("OneWord", bytes([0x64]) + bytes.fromhex("00000011")),
+        ("PartialWord", bytes([0x64]) + bytes.fromhex("00000001") + bytes([0xFF, 0xFF])),
+    ]
+    for name, data in cases:
+        features = cmd.parse_device_feature_response(success(0x01, data))
+        array = f"kFeatures{name}"
+        body += c_array(array, data)
+        rows.append(f"    {{{array}, sizeof({array}), 0x{features.mask:016x}ULL}},")
+    return body + "\ninline constexpr FeatureCase kFeatureCases[] = {\n" + "\n".join(rows) + "\n};\n"
+
+
+def device_info_vectors() -> str:
+    body = ""
+    for item in range(1, 5):
+        body += c_array(f"kReadDeviceInfo{item}", cmd.payload_device_property(item))
+    data = b"LK100_TEST\x00"
+    body += c_array("kDeviceInfoStringData", data)
+    body += c_string("kDeviceInfoString", cmd.parse_device_property_string(success(0x90, data)))
+    return body
+
+
+def passcode_vectors() -> str:
+    body = ""
+    body += c_array("kPasscodeAddPermanent", cmd.payload_passcode_add(KeyboardPwdType.PERMANENT, "13579", "0001010000"))
+    body += c_array(
+        "kPasscodeAddPeriod", cmd.payload_passcode_add(KeyboardPwdType.PERIOD, "246810", "2511070900", "2512312359")
+    )
+    body += c_array(
+        "kPasscodeAddCount", cmd.payload_passcode_add(KeyboardPwdType.COUNT, "8642", "2511070900", "2511071500")
+    )
+    body += c_array("kPasscodeDelete", cmd.payload_passcode_delete(KeyboardPwdType.PERMANENT, "13579"))
+    body += c_array("kPasscodeClear", cmd.payload_passcode_clear())
+    body += c_array("kPasscodeListRequest0", cmd.payload_passcode_list(0))
+    body += c_array("kPasscodeListRequest336", cmd.payload_passcode_list(336))
+    body += (
+        "struct PasscodePageCase {\n    const char* name;\n    const uint8_t* data;\n    size_t size;\n"
+        "    bool hasItem;\n    uint8_t type;\n    const char* code;\n    uint16_t next;\n"
+        "    uint16_t start[6];\n    uint16_t end[6];\n};\n\n"
+    )
+    pages = [
+        ("period", "002000011d0308323436383133353708323436383133353700010100001b09061100"),
+        ("permanent", "001b015018010839373533313836340839373533313836340001010000"),
+        ("cyclic", "001f00021c040931333537393234363809313335373932343638000101110004c0"),
+        ("last_entry", "00180000150304383634320438363432190b070900190b070f00"),
+        ("end_of_list", "0000"),
+    ]
+    rows = []
+    for name, hex_data in pages:
+        data = bytes.fromhex(hex_data)
+        entry, next_sequence = cmd.parse_passcode_list_response(success(0x07, data))
+        array = f"kPasscodePage{camel(name)}"
+        body += c_array(array, data)
+        if entry is None:
+            rows.append(f'    {{"{name}", {array}, sizeof({array}), false, 0, "", {next_sequence}, {{}}, {{}}}},')
+            continue
+        start = date_fields(entry.start_date, START_SENTINEL_FIELDS)
+        end = date_fields(entry.end_date, END_SENTINEL_FIELDS)
+        rows.append(
+            f'    {{"{name}", {array}, sizeof({array}), true, {int(entry.pwd_type)}, "{entry.passcode}", '
+            f"{next_sequence}, {{{', '.join(map(str, start))}}}, {{{', '.join(map(str, end))}}}}},"
+        )
+    return body + "\ninline constexpr PasscodePageCase kPasscodePages[] = {\n" + "\n".join(rows) + "\n};\n"
+
+
+def credential_vectors() -> str:
+    body = ""
+    body += c_array("kFingerprintListRequest0", cmd.payload_fingerprint_list(0))
+    body += c_array("kFingerprintListRequest300", cmd.payload_fingerprint_list(300))
+    body += c_array("kCardListRequest0", cmd.payload_card_list(0))
+    body += c_array("kCardListRequest300", cmd.payload_card_list(300))
+    body += (
+        "struct CredentialPageCase {\n    const char* name;\n    const uint8_t* data;\n    size_t size;\n"
+        "    bool hasItem;\n    uint64_t id;\n    uint16_t start[6];\n    uint16_t end[6];\n};\n\n"
+    )
+    fingerprints = [
+        (
+            "explicit_start",
+            bytes([0x64, 0x06, 0x00, 0x01, 0x00, 0x00, 0x00, 0x2A, 0x00, 0x03, 26, 3, 1, 8, 0]) + cmd.END_DATE_SENTINEL,
+        ),
+        (
+            "timed",
+            bytes([0x64, 0x06, 0x00, 0x02, 0xAA, 0xBB, 0xCC, 0xDD, 0x00, 0x04])
+            + cmd.START_DATE_SENTINEL
+            + bytes([26, 12, 31, 23, 59]),
+        ),
+        ("end_of_list", bytes([0x64, 0x06, 0xFF, 0xFF])),
+    ]
+    rows = []
+    for name, data in fingerprints:
+        entry = cmd.parse_fingerprint_list_response(success(0x06, data))
+        array = f"kFingerprintPage{camel(name)}"
+        body += c_array(array, data)
+        if entry is None:
+            rows.append(f'    {{"{name}", {array}, sizeof({array}), false, 0, {{}}, {{}}}},')
+            continue
+        identifier = (int.from_bytes(entry.fingerprint_id, "big") << 16) | entry.slot
+        start = date_fields(entry.start_date, START_SENTINEL_FIELDS)
+        end = date_fields(entry.end_date, END_SENTINEL_FIELDS)
+        rows.append(
+            f'    {{"{name}", {array}, sizeof({array}), true, 0x{identifier:x}ULL, '
+            f"{{{', '.join(map(str, start))}}}, {{{', '.join(map(str, end))}}}}},"
+        )
+    body += "\ninline constexpr CredentialPageCase kFingerprintPages[] = {\n" + "\n".join(rows) + "\n};\n\n"
+    cards = [
+        (
+            "short_id",
+            bytes([0x64, 0x01, 0x00, 0x01, 0x11, 0x22, 0x33, 0x44])
+            + cmd.START_DATE_SENTINEL
+            + bytes([0x1D, 0x09, 0x1D, 0x14, 0x2A]),
+        ),
+        (
+            "long_id",
+            bytes([0x64, 0x01, 0x00, 0x01, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88])
+            + cmd.START_DATE_SENTINEL
+            + cmd.END_DATE_SENTINEL,
+        ),
+        ("end_of_list", bytes([0x55, 0x01, 0xFF, 0xFF])),
+    ]
+    rows = []
+    for name, data in cards:
+        entry = cmd.parse_card_list_response(success(0x05, data))
+        array = f"kCardPage{camel(name)}"
+        body += c_array(array, data)
+        if entry is None:
+            rows.append(f'    {{"{name}", {array}, sizeof({array}), false, 0, {{}}, {{}}}},')
+            continue
+        start = date_fields(entry.start_date, START_SENTINEL_FIELDS)
+        end = date_fields(entry.end_date, END_SENTINEL_FIELDS)
+        rows.append(
+            f'    {{"{name}", {array}, sizeof({array}), true, 0x{int.from_bytes(entry.card_id, "big"):x}ULL, '
+            f"{{{', '.join(map(str, start))}}}, {{{', '.join(map(str, end))}}}}},"
+        )
+    return body + "\ninline constexpr CredentialPageCase kCardPages[] = {\n" + "\n".join(rows) + "\n};\n"
+
+
+def settings_vectors() -> str:
+    body = ""
+    body += c_array("kAutoLockQuery", cmd.payload_auto_lock_search())
+    body += c_array("kAutoLockSet300", cmd.payload_auto_lock_set(300))
+    auto_lock_data = bytes([0x5A, 0x01]) + (30).to_bytes(2, "big") + (5).to_bytes(2, "big") + (900).to_bytes(2, "big")
+    seconds, battery = cmd.parse_auto_lock_response(success(0x36, auto_lock_data))
+    limits = cmd.parse_auto_lock_limits_response(success(0x36, auto_lock_data))
+    body += c_array("kAutoLockReply", auto_lock_data)
+    body += c_scalar("uint16_t", "kAutoLockSeconds", seconds)
+    body += c_scalar("int", "kAutoLockBattery", battery or 0)
+    body += c_scalar("uint16_t", "kAutoLockMin", limits.min_allowed)
+    body += c_scalar("uint16_t", "kAutoLockMax", limits.max_allowed)
+    body += c_array("kSoundQuery", cmd.payload_get_lock_sound())
+    body += c_array("kSoundOn", cmd.payload_set_lock_sound(enabled=True))
+    body += c_array("kSoundOff", cmd.payload_set_lock_sound(enabled=False))
+    body += c_array("kSoundVolume3", cmd.payload_set_lock_volume(3))
+    for name, data in [("WithVolume", bytes([0x5A, 0x01, 0x01, 0x05])), ("WithoutVolume", bytes([0x5A, 0x01, 0x00]))]:
+        sound = cmd.parse_lock_sound_response(success(0x62, data))
+        body += c_array(f"kSoundReply{name}", data)
+        body += f"inline constexpr bool kSoundReply{name}Enabled = {c_bool(sound.enabled)};\n"
+        body += c_scalar("uint8_t", f"kSoundReply{name}Volume", 0 if sound.volume is None else int(sound.volume))
+    return body
+
+
+def log_vectors() -> str:
+    body = ""
+    body += c_array("kLogRequestNew", cmd.payload_operate_log_request())
+    body += c_array("kLogRequest5", cmd.payload_operate_log_request(5))
+    data = log_page_data()
+    entries, sequence = cmd.parse_operate_log_response(success(0x25, data))
+    assert len(entries) == len(LOG_RECORDS)
+    body += c_array("kLogPage", data)
+    body += c_scalar("uint16_t", "kLogPageSequence", sequence)
+    body += (
+        "struct LogCase {\n    const char* name;\n    uint16_t recordNumber;\n    uint8_t type;\n"
+        "    uint16_t time[6];\n    uint8_t battery;\n    uint32_t uid;\n    uint32_t recordId;\n"
+        "    const char* credential;\n    const char* newCredential;\n    int keyId;\n    int accessoryBattery;\n};\n\n"
+    )
+    rows = []
+    for (name, record_type, _tail), entry in zip(LOG_RECORDS, entries, strict=True):
+        assert int(entry.record_type) == record_type
+        time = date_fields(entry.operate_date, (0, 0, 0, 0, 0, 0))
+        rows.append(
+            f'    {{"{name}", {entry.record_number}, {record_type}, {{{", ".join(map(str, time))}}}, '
+            f"{entry.lock_battery}, {entry.uid or 0}, {entry.record_id or 0}, "
+            f'"{entry.password or ""}", "{entry.new_password or ""}", {c_optional(entry.key_id)}, '
+            f"{c_optional(entry.accessory_battery)}}},"
+        )
+    body += "inline constexpr LogCase kLogCases[] = {\n" + "\n".join(rows) + "\n};\n\n"
+    truncated = (3).to_bytes(2, "big") + (1).to_bytes(2, "big") + bytes([0x05, 0x99])
+    truncated_entries, truncated_sequence = cmd.parse_operate_log_response(success(0x25, truncated))
+    assert truncated_entries == [] and truncated_sequence == 1
+    body += c_array("kLogPageTruncated", truncated)
+    return body
+
+
+def event_vectors() -> str:
+    body = ""
+    state_push = bytes([0x5A, 0x01, 0x00])
+    event = LockEvent.from_payload(0x14, cmd.RESPONSE_SUCCESS, state_push)
+    assert event.lock_state == LockState.UNLOCKED
+    body += c_array("kStatePush", state_push)
+    body += c_scalar("int", "kStatePushBattery", event.battery or 0)
+    body += c_scalar("int", "kStatePushState", int(event.lock_state))
+    log_push = bytes([0x5A]) + (0).to_bytes(4, "big") + (42).to_bytes(4, "big") + bytes([25, 11, 7, 14, 0, 5])
+    event = LockEvent.from_payload(0x14, cmd.RESPONSE_SUCCESS, log_push)
+    assert event.timestamp is not None
+    body += c_array("kLogPush", log_push)
+    body += c_scalar("uint32_t", "kLogPushUid", event.uid or 0)
+    body += c_scalar("uint32_t", "kLogPushRecordId", event.record_id or 0)
+    stamp = event.timestamp
+    fields = (stamp.year, stamp.month, stamp.day, stamp.hour, stamp.minute, stamp.second)
+    body += f"inline constexpr uint16_t kLogPushTime[] = {{{', '.join(map(str, fields))}}};\n"
+    return body
+
+
+def epoch_vectors() -> str:
+    body = (
+        "struct EpochCase {\n    int64_t seconds;\n    uint16_t year;\n    uint8_t month;\n    uint8_t day;\n"
+        "    uint8_t hour;\n    uint8_t minute;\n    uint8_t second;\n};\n\n"
+    )
+    rows = []
+    for seconds in EPOCH_SECONDS:
+        civil = dt.datetime.fromtimestamp(seconds, dt.UTC)
+        rows.append(
+            f"    {{{seconds}, {civil.year}, {civil.month}, {civil.day}, {civil.hour}, {civil.minute}, {civil.second}}},"
+        )
+    return body + "inline constexpr EpochCase kEpochCases[] = {\n" + "\n".join(rows) + "\n};\n"
+
+
+COMMAND_SECTIONS = (
+    handshake_vectors,
+    status_vectors,
+    feature_vectors,
+    device_info_vectors,
+    passcode_vectors,
+    credential_vectors,
+    settings_vectors,
+    log_vectors,
+    event_vectors,
+    epoch_vectors,
+)
+
+
+def command_header() -> str:
+    return header("command", "\n".join(section() for section in COMMAND_SECTIONS))
+
+
 def main() -> None:
     frames = frame_cases()
     outputs = {
@@ -389,6 +754,7 @@ def main() -> None:
         "frame_vectors.h": frame_header(frames),
         "advert_vectors.h": advert_header(),
         "codec_vectors.h": codec_header(),
+        "command_vectors.h": command_header(),
     }
     OUT_DIR.mkdir(parents=True, exist_ok=True)
     for file_name, text in outputs.items():
