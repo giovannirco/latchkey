@@ -25,6 +25,7 @@ inline constexpr int64_t kEarliestUsableUtc = 1704067200;
 inline constexpr size_t kAdminPasscodeDigits = 7;
 
 struct Reply;
+struct LogPage;
 
 using EventSink = std::function<void(const LockEvent&)>;
 using EnrollCallback = std::function<void(const EnrollProgress&)>;
@@ -91,6 +92,7 @@ public:
     Status cardSetValidity(uint64_t number, const Validity& validity);
 
     Status fetchLog(uint16_t fromSequence, std::vector<LogEntry>& out);
+    Status fetchLogPage(uint16_t sequence, LogPage& out);
 
     Status soundGet(SoundSetting& out);
     Status soundSet(bool enabled);

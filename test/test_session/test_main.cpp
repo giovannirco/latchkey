@@ -991,6 +991,8 @@ static void test_methods_before_attach_return_not_paired_without_traffic() {
     assertStatus(Status::NotPaired, rig.session.autolockGet(autolock));
     assertStatus(Status::NotPaired, rig.session.passcodeList(passcodes));
     assertStatus(Status::NotPaired, rig.session.fetchLog(ttlock::kLogSinceLastRead, logs));
+    ttlock::LogPage page;
+    assertStatus(Status::NotPaired, rig.session.fetchLogPage(ttlock::kLogSinceLastRead, page));
     assertStatus(Status::NotPaired, rig.session.factoryReset());
     assertStatus(Status::NotPaired, rig.session.receiveEvent(10));
     bool visible = false;
@@ -1301,6 +1303,50 @@ static void test_fetch_log_stops_when_the_cursor_repeats_or_reaches_zero() {
     TEST_ASSERT_EQUAL_UINT(1, single.size());
     assertPayload(Bytes{0x00, 0x07}, zero.lock.requests()[0]);
     TEST_ASSERT_TRUE(zero.lock.scriptDone());
+}
+
+static Bytes vectorBytes(const uint8_t* data, size_t size) {
+    return Bytes(data, data + size);
+}
+
+static void test_fetch_log_page_reads_one_page_from_the_cursor_like_kind3r() {
+    Rig rig;
+    attach(rig);
+    rig.lock.expect(cmd::kGetOperateLog, kLockKey,
+                    {success(kLockKey, cmd::kGetOperateLog, vectorBytes(k3::kLogPageData, sizeof(k3::kLogPageData)))});
+    ttlock::LogPage page;
+    assertStatus(Status::Ok, rig.session.fetchLogPage(5, page));
+    assertCommands({cmd::kGetOperateLog}, rig.lock);
+    assertPayload(vectorBytes(k3::kLogRequest5, sizeof(k3::kLogRequest5)), rig.lock.requests()[0]);
+    TEST_ASSERT_EQUAL_UINT16(k3::kLogPageSequence, page.sequence);
+    TEST_ASSERT_EQUAL_UINT(k3::kLogPageCount, page.entries.size());
+    const ttlock::LogEntry& entry = page.entries[0];
+    TEST_ASSERT_EQUAL_INT(k3::kLogPageRecordNumber, entry.recordNumber);
+    TEST_ASSERT_EQUAL_INT(k3::kLogPageRecordType, entry.type);
+    TEST_ASSERT_TRUE(entry.time == (ttlock::LockTime{2025, 11, 7, 14, 0, 5}));
+    TEST_ASSERT_EQUAL_INT(k3::kLogPageBattery, entry.battery);
+    TEST_ASSERT_EQUAL_UINT32(k3::kLogPageUid, entry.uid);
+    TEST_ASSERT_EQUAL_UINT32(k3::kLogPageRecordId, entry.recordId);
+    TEST_ASSERT_TRUE(rig.lock.scriptDone());
+}
+
+static void test_fetch_log_page_from_the_unread_cursor_and_its_failures() {
+    Rig rig;
+    attach(rig);
+    rig.lock.expect(cmd::kGetOperateLog, kLockKey, {success(kLockKey, cmd::kGetOperateLog, Bytes{0x00, 0x00})});
+    rig.lock.expect(cmd::kGetOperateLog, kLockKey, {failure(kLockKey, cmd::kGetOperateLog, 0x09)});
+    rig.lock.expect(cmd::kGetOperateLog, kLockKey, {success(kLockKey, cmd::kGetOperateLog, Bytes{0x00})});
+    ttlock::LogPage page;
+    page.sequence = 77;
+    assertStatus(Status::Ok, rig.session.fetchLogPage(ttlock::kLogSinceLastRead, page));
+    assertCommands({cmd::kGetOperateLog}, rig.lock);
+    assertPayload(vectorBytes(k3::kLogRequestNew, sizeof(k3::kLogRequestNew)), rig.lock.requests()[0]);
+    TEST_ASSERT_TRUE(page.entries.empty());
+    TEST_ASSERT_EQUAL_UINT16(0, page.sequence);
+    assertStatus(Status::LockError, rig.session.fetchLogPage(3, page));
+    TEST_ASSERT_EQUAL_HEX8(0x09, rig.session.lockErrorCode());
+    assertStatus(Status::BadResponse, rig.session.fetchLogPage(3, page));
+    assertCommands({cmd::kGetOperateLog, cmd::kGetOperateLog, cmd::kGetOperateLog}, rig.lock);
 }
 
 static void test_factory_reset_logs_in_accepts_an_empty_reply_and_detaches() {
@@ -2017,6 +2063,8 @@ int main() {
     RUN_TEST(test_enroll_without_a_scan_times_out_and_a_refusal_is_a_lock_error);
     RUN_TEST(test_fetch_log_follows_the_cursor_until_an_empty_page);
     RUN_TEST(test_fetch_log_stops_when_the_cursor_repeats_or_reaches_zero);
+    RUN_TEST(test_fetch_log_page_reads_one_page_from_the_cursor_like_kind3r);
+    RUN_TEST(test_fetch_log_page_from_the_unread_cursor_and_its_failures);
     RUN_TEST(test_factory_reset_logs_in_accepts_an_empty_reply_and_detaches);
     RUN_TEST(test_factory_reset_maps_a_refusal_to_lock_error_and_stays_attached);
     RUN_TEST(test_sync_time_logs_in_and_sends_local_wall_time);
