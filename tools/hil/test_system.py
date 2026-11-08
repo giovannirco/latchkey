@@ -1,5 +1,8 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""system.* and audit.list over the USB serial console of a real board."""
+"""system.* and audit.list over the USB serial console of a real board.
+
+Each test builds its own state through the fresh, claimed and online fixtures, so any subset runs alone.
+"""
 
 from __future__ import annotations
 
@@ -57,6 +60,7 @@ def claim_secret(console: Console, secrets: dict[str, Any], board: dict[str, Any
     assert length == 20
     nonzero = any(secret)
     assert nonzero, "TOTP secret is all zeros"
+    claims.append(secret)
     return secret
 
 
@@ -80,13 +84,23 @@ def audit_entries(console: Console) -> list[dict[str, Any]]:
             return entries
 
 
-@pytest.fixture(scope="module")
+@pytest.fixture
 def fresh(console: Console) -> list[str]:
     console.wait_ready()
     console.lines.clear()
     console.events.clear()
     console.call_and_wait_restart("system.factoryReset")
     return list(console.lines)
+
+
+@pytest.fixture
+def claimed(console: Console, fresh: list[str], secrets: dict[str, Any], board_settings: dict[str, Any]) -> bytes:
+    return claim_secret(console, secrets, board_settings, console.call("system.info")["board"])
+
+
+@pytest.fixture
+def online(console: Console, claimed: bytes) -> dict[str, Any]:
+    return console.wait_info(lambda state: state["wifi"]["connected"], 45.0, "wifi to connect")
 
 
 def test_info_reports_identity(console: Console, fresh: list[str]) -> None:
@@ -135,7 +149,20 @@ def test_rejects_malformed_requests(console: Console, fresh: list[str]) -> None:
     assert console.call("system.info")["claimed"] is False
 
 
-def test_string_ids_are_echoed(console: Console, fresh: list[str]) -> None:
+def test_rejects_deep_nesting_and_keeps_answering(console: Console) -> None:
+    started = time.monotonic()
+    uptime = console.call("system.info")["uptime_ms"]
+    assert console.request_raw("[" * 1500)["error"]["code"] == "bad_request"
+    nine_deep = '{"id":null,"method":"system.info","params":' + '{"a":' * 7 + "{}" + "}" * 7 + "}"
+    assert console.request_raw(nine_deep)["error"]["code"] == "bad_request"
+    eight_deep = '{"id":null,"method":"system.info","params":' + '{"a":' * 6 + "{}" + "}" * 6 + "}"
+    assert console.request_raw(eight_deep)["result"]["chip"] in BOARDS
+    elapsed_ms = (time.monotonic() - started) * 1000.0
+    grown = console.call("system.info")["uptime_ms"] - uptime
+    assert grown >= elapsed_ms - 1000.0, "the board restarted"
+
+
+def test_string_ids_are_echoed(console: Console) -> None:
     reply = console.request_raw('{"id":"abc","method":"system.info"}', reply_id="abc")
     assert reply["result"]["chip"] in BOARDS
 
@@ -155,32 +182,35 @@ def test_setup_returns_otpauth_once(
     console: Console, fresh: list[str], secrets: dict[str, Any], board_settings: dict[str, Any]
 ) -> None:
     board = console.call("system.info")["board"]
-    assert error_code(console, "system.setup", {**setup_params(secrets, board_settings), "password": "short"}) == (
-        "invalid_params"
-    )
+    short = {**setup_params(secrets, board_settings), "password": "short"}
+    assert error_code(console, "system.setup", short) == "invalid_params"
     bad_ip = {
         "wifi": {**wifi_params(secrets, board_settings), "ip": "300.1.2.3"},
         "password": secrets["owner_password"],
     }
     assert error_code(console, "system.setup", bad_ip) == "invalid_params"
-    claims.append(claim_secret(console, secrets, board_settings, board))
+    claim_secret(console, secrets, board_settings, board)
     assert error_code(console, "system.setup", setup_params(secrets, board_settings)) == "already_claimed"
     info = console.call("system.info")
     assert info["claimed"] is True
     assert info["wifi"]["configured"] is True
 
 
-def test_audit_lists_actions_without_secrets(console: Console, fresh: list[str], secrets: dict[str, Any]) -> None:
+def test_audit_lists_actions_without_secrets(
+    console: Console, fresh: list[str], secrets: dict[str, Any], board_settings: dict[str, Any]
+) -> None:
+    assert error_code(console, "system.time.set", {"utc": MIN_UTC - 1}) == "invalid_params"
+    assert console.call("system.time.set", {"utc": int(time.time())}) == {}
+    short = {**setup_params(secrets, board_settings), "password": "short"}
+    assert error_code(console, "system.setup", short) == "invalid_params"
+    claim_secret(console, secrets, board_settings, console.call("system.info")["board"])
+    assert error_code(console, "system.setup", setup_params(secrets, board_settings)) == "already_claimed"
     entries = audit_entries(console)
     actions = [(entry["method"], entry["result"]) for entry in reversed(entries)]
     assert actions == [
         ("system.factoryReset", "ok"),
         ("system.time.set", "invalid_params"),
-        ("system.setup", "invalid_params"),
-        ("system.time.set", "invalid_params"),
-        ("system.time.set", "invalid_params"),
         ("system.time.set", "ok"),
-        ("system.setup", "invalid_params"),
         ("system.setup", "invalid_params"),
         ("system.setup", "ok"),
         ("system.setup", "already_claimed"),
@@ -193,16 +223,13 @@ def test_audit_lists_actions_without_secrets(console: Console, fresh: list[str],
     clean = holds_no_secret(json.dumps(entries), secrets)
     assert clean, "an audit entry contains a secret"
     appended = [event["data"] for event in console.events if event.get("event") == "audit.appended"]
-    assert [(data["method"], data["result"]) for data in appended][-2:] == [
-        ("system.setup", "ok"),
-        ("system.setup", "already_claimed"),
-    ]
+    assert [(data["method"], data["result"]) for data in appended] == actions
     clean_events = holds_no_secret(json.dumps(console.events), secrets)
     assert clean_events, "an event contains a secret"
 
 
 def test_joins_wifi_with_static_ip_after_reboot(
-    console: Console, fresh: list[str], secrets: dict[str, Any], board_settings: dict[str, Any]
+    console: Console, claimed: bytes, secrets: dict[str, Any], board_settings: dict[str, Any]
 ) -> None:
     console.call_and_wait_restart("system.reboot")
     info = console.wait_info(lambda state: state["wifi"]["connected"], 45.0, "wifi to connect")
@@ -217,13 +244,13 @@ def test_joins_wifi_with_static_ip_after_reboot(
     assert clean, "the console printed a secret"
 
 
-def test_sntp_syncs_after_joining(console: Console, fresh: list[str]) -> None:
+def test_sntp_syncs_after_joining(console: Console, online: dict[str, Any]) -> None:
     info = console.wait_info(lambda state: state["time_synced"], 60.0, "SNTP to sync")
     assert abs(info["utc"] - time.time()) <= SYNC_TOLERANCE_S
 
 
 def test_wifi_set_validates_and_reconnects(
-    console: Console, fresh: list[str], secrets: dict[str, Any], board_settings: dict[str, Any]
+    console: Console, online: dict[str, Any], secrets: dict[str, Any], board_settings: dict[str, Any]
 ) -> None:
     params = wifi_params(secrets, board_settings)
     assert error_code(console, "system.wifi.set", {**params, "netmask": "255.0.255.0"}) == "invalid_params"
@@ -254,12 +281,12 @@ def test_audit_keeps_the_last_200_entries(console: Console, fresh: list[str]) ->
 
 
 def test_factory_reset_unclaims_and_a_new_claim_gets_a_new_secret(
-    console: Console, fresh: list[str], secrets: dict[str, Any], board_settings: dict[str, Any]
+    console: Console, claimed: bytes, secrets: dict[str, Any], board_settings: dict[str, Any]
 ) -> None:
     info = console.call_and_wait_restart("system.factoryReset")
     assert info["claimed"] is False
     assert info["wifi"]["configured"] is False
     assert [entry["method"] for entry in audit_entries(console)] == ["system.factoryReset"]
-    claims.append(claim_secret(console, secrets, board_settings, info["board"]))
-    different = claims[-1] != claims[-2]
+    second = claim_secret(console, secrets, board_settings, info["board"])
+    different = second != claimed
     assert different, "a new claim reused the previous TOTP secret"
