@@ -27,6 +27,7 @@
 #include "events.h"
 #include "latchkey_util/ble_adv.h"
 #include "latchkey_util/job_queue.h"
+#include "latchkey_util/pair_verdict.h"
 #include "store.h"
 #include "ttlock/advert.h"
 #include "ttlock/errors.h"
@@ -258,15 +259,19 @@ esp_err_t persist(const Record& record) {
         return ESP_ERR_INVALID_STATE;
     }
     Lock* existing = findLocked(record.mac);
+    if (existing == nullptr && s_locks.size() >= store::locks::kMaxLocks) {
+        return ESP_ERR_NO_MEM;
+    }
+    const esp_err_t error = store::locks::save(record);
+    if (error != ESP_OK) {
+        return error;
+    }
     if (existing == nullptr) {
-        if (s_locks.size() >= store::locks::kMaxLocks) {
-            return ESP_ERR_NO_MEM;
-        }
         s_locks.push_back(Lock{record, Live{}});
     } else {
         existing->record = record;
     }
-    return store::locks::save(record);
+    return ESP_OK;
 }
 
 bool updateRecord(std::string_view mac, const std::function<void(Record&)>& change) {
@@ -275,12 +280,14 @@ bool updateRecord(std::string_view mac, const std::function<void(Record&)>& chan
     if (lock == nullptr || s_erased) {
         return false;
     }
-    change(lock->record);
-    const esp_err_t error = store::locks::save(lock->record);
+    Record record = lock->record;
+    change(record);
+    const esp_err_t error = store::locks::save(record);
     if (error != ESP_OK) {
         ESP_LOGE(TAG, "cannot store the lock record: %s", esp_err_to_name(error));
         return false;
     }
+    lock->record = record;
     return true;
 }
 
@@ -333,6 +340,7 @@ cJSON* summaryJson(const Lock& lock) {
     }
     cJSON_AddBoolToObject(json, "hardened", false);
     cJSON_AddBoolToObject(json, "backedUp", false);
+    cJSON_AddBoolToObject(json, "pairComplete", (lock.record.flags & store::locks::kFlagPairComplete) != 0);
     return json;
 }
 
@@ -381,7 +389,7 @@ rpc::Reply failure(Status status, uint8_t lockError) {
         case Status::NotPaired:
             return notPaired();
         case Status::PairIncomplete:
-            return rpc::fail("pair_incomplete", "pairing stopped before it finished; the keys received are stored");
+            return rpc::fail("pair_incomplete", "pairing stopped before it finished");
         case Status::Busy:
             return rpc::fail("busy", "the lock is busy");
         case Status::InvalidArgument:
@@ -678,6 +686,7 @@ Status readStatus(ttlock::Session& session, const Lock& lock, rpc::Reply& reply)
     addOptionalNumber(result, "battery", out.battery >= 0, out.battery);
     cJSON_AddBoolToObject(result, "adminPasscodeConfirmed",
                           (lock.record.flags & store::locks::kFlagAdminPasscodeConfirmed) != 0);
+    cJSON_AddBoolToObject(result, "pairComplete", (lock.record.flags & store::locks::kFlagPairComplete) != 0);
     reply = rpc::ok(result);
     return Status::Ok;
 }
@@ -874,7 +883,36 @@ bool roomFor(const std::string& mac) {
     return findLocked(mac) != nullptr || s_locks.size() < store::locks::kMaxLocks;
 }
 
-void finishPairing(Job& job, Record& record, const ttlock::PairResult& result) {
+struct PairStores {
+    bool keysTaken = false;
+    bool keysStored = false;
+    bool storeFailed = false;
+};
+
+rpc::Reply incompleteReply(bool lockFinished, bool storeFailed) {
+    if (lockFinished) {
+        return rpc::fail("pair_incomplete",
+                         "the lock finished pairing, but the board could not store the result: "
+                         "run lock.factoryReset, then pair again");
+    }
+    if (storeFailed) {
+        return rpc::fail("pair_incomplete",
+                         "pairing stopped before it finished and a later copy of the keys could not be stored; "
+                         "the board kept an earlier copy: run lock.factoryReset, then pair again");
+    }
+    return rpc::fail("pair_incomplete",
+                     "pairing stopped before it finished; the board kept the keys it received: "
+                     "run lock.factoryReset, then pair again");
+}
+
+latchkey_util::PairEnd pairEnd(Status status) {
+    if (status == Status::Ok) {
+        return latchkey_util::PairEnd::Paired;
+    }
+    return status == Status::PairIncomplete ? latchkey_util::PairEnd::Incomplete : latchkey_util::PairEnd::Failed;
+}
+
+void finishPairing(Job& job, Record& record, const ttlock::PairResult& result, bool storeFailed) {
     ttlock::Session& session = *s_link.session;
     ttlock::LockStatus status;
     const Status statusRead = session.status(status);
@@ -898,7 +936,7 @@ void finishPairing(Job& job, Record& record, const ttlock::PairResult& result) {
     storeKeys(record, session.keys());
     const esp_err_t stored = persist(record);
     if (stored != ESP_OK) {
-        ESP_LOGE(TAG, "cannot store the paired lock: %s", esp_err_to_name(stored));
+        ESP_LOGE(TAG, "the keys are stored, but not the status read after pairing: %s", esp_err_to_name(stored));
     }
     ESP_LOGI(TAG, "features 0x%08x%08x", static_cast<unsigned>(record.features >> 32),
              static_cast<unsigned>(record.features & 0xFFFFFFFF));
@@ -910,11 +948,15 @@ void finishPairing(Job& job, Record& record, const ttlock::PairResult& result) {
     }
     Lock view;
     if (!snapshot(job.mac, view)) {
-        finish(job, rpc::fail("internal", "the paired lock could not be stored"));
+        finish(job, rpc::fail("internal", "the paired lock is missing from the board's list"));
         return;
     }
     cJSON* reply = cJSON_CreateObject();
     cJSON_AddItemToObject(reply, "lock", summaryJson(view));
+    if (storeFailed) {
+        cJSON_AddStringToObject(reply, "warning",
+                                "an intermediate copy of the keys could not be stored; the final copy was stored");
+    }
     finish(job, rpc::ok(reply));
 }
 
@@ -955,14 +997,16 @@ void runPair(Job& job) {
     }
     s_transport.reset();
     std::unique_ptr<ttlock::Session> session = newSession(job.mac);
-    bool keysTaken = false;
-    const ttlock::PersistCallback persistEarly = [&record, &keysTaken](const ttlock::LockKeys& early) {
-        keysTaken = true;
+    PairStores stores;
+    const ttlock::PersistCallback persistEarly = [&record, &stores](const ttlock::LockKeys& early) {
+        stores.keysTaken = true;
         storeKeys(record, early);
         const esp_err_t error = persist(record);
         if (error != ESP_OK) {
+            stores.storeFailed = true;
             ESP_LOGE(TAG, "cannot store the lock's keys: %s", esp_err_to_name(error));
         } else {
+            stores.keysStored = true;
             ESP_LOGI(TAG, "lock keys stored");
         }
     };
@@ -970,7 +1014,7 @@ void runPair(Job& job) {
     keys.mac = job.mac;
     ttlock::PairResult result;
     Status paired = session->pair(frames, keys, persistEarly, result);
-    if (paired != Status::Ok && paired != Status::LockError && !keysTaken) {
+    if (paired != Status::Ok && paired != Status::LockError && !stores.keysTaken) {
         ESP_LOGW(TAG, "pairing failed before the lock took keys (%s); trying once more", ttlock::toString(paired));
         if (ble::connected() || connectWithRetries(addressOf(record)) == 0) {
             s_transport.reset();
@@ -979,29 +1023,48 @@ void runPair(Job& job) {
             paired = session->pair(frames, keys, persistEarly, result);
         }
     }
-    if (paired != Status::Ok) {
+    bool resultStored = false;
+    if (paired == Status::Ok) {
+        record.flags = store::locks::kFlagPairComplete;
+        if (result.adminPasscodeConfirmed) {
+            record.flags |= store::locks::kFlagAdminPasscodeConfirmed;
+        }
+        if (result.timeCalibrated) {
+            record.flags |= store::locks::kFlagTimeCalibrated;
+        }
+        storeKeys(record, keys);
+        const esp_err_t error = persist(record);
+        resultStored = error == ESP_OK;
+        if (!resultStored) {
+            ESP_LOGE(TAG, "cannot store the pairing result: %s", esp_err_to_name(error));
+        }
+    }
+    const latchkey_util::PairVerdict verdict =
+        latchkey_util::judgePairing(pairEnd(paired), stores.keysStored, resultStored);
+    if (verdict != latchkey_util::PairVerdict::Paired) {
         const uint8_t lockError = session->lockErrorCode();
-        ESP_LOGW(TAG, "pairing failed: %s, lock error 0x%02x, %u frames dropped", ttlock::toString(paired), lockError,
-                 static_cast<unsigned>(session->droppedFrames()));
+        ESP_LOGW(TAG, "pairing ended %s, lock error 0x%02x, %u frames dropped, keys %s", ttlock::toString(paired),
+                 lockError, static_cast<unsigned>(session->droppedFrames()),
+                 stores.keysStored ? "stored" : (stores.keysTaken ? "NOT stored" : "not taken"));
         session.reset();
         ble::disconnect();
-        finish(job, failure(paired, lockError));
+        if (verdict == latchkey_util::PairVerdict::KeysNotStored) {
+            finish(job, rpc::fail("internal",
+                                  "the lock may now be paired to this board, but its keys could not be stored: "
+                                  "reset the lock with its reset button, then pair it again"));
+        } else if (verdict == latchkey_util::PairVerdict::Incomplete) {
+            finish(job, incompleteReply(paired == Status::Ok, stores.storeFailed));
+        } else {
+            finish(job, failure(paired, lockError));
+        }
         return;
-    }
-    record.flags = store::locks::kFlagPairComplete;
-    if (result.adminPasscodeConfirmed) {
-        record.flags |= store::locks::kFlagAdminPasscodeConfirmed;
-    }
-    if (result.timeCalibrated) {
-        record.flags |= store::locks::kFlagTimeCalibrated;
     }
     ESP_LOGI(TAG, "paired: time %s, admin passcode %s, %u frames dropped",
              result.timeCalibrated ? "calibrated" : "not calibrated",
              result.adminPasscodeConfirmed ? "confirmed" : "not confirmed",
              static_cast<unsigned>(session->droppedFrames()));
-    storeKeys(record, keys);
     keepLink(job.mac, std::move(session), kLingerMs);
-    finishPairing(job, record, result);
+    finishPairing(job, record, result, stores.storeFailed);
 }
 
 void runScan(Job& job) {

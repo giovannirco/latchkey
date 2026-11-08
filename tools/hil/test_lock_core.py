@@ -41,6 +41,7 @@ SUMMARY_KEYS = {
     "lastEvent",
     "hardened",
     "backedUp",
+    "pairComplete",
 }
 INFO_KEYS = {"mac", "model", "hardware", "firmware", "manufactureDate", "protocol"}
 STATES = {"locked", "unlocked"}
@@ -182,6 +183,7 @@ def test_pairs_the_factory_fresh_lock(
     assert same, "pairing returned another lock"
     assert lock["name"] == LOCK_NAME
     assert lock["hardened"] is False
+    assert lock["pairComplete"] is True
     adverts = [event["data"] for event in console.events if event["event"] == "scan.result"]
     target = [data for data in adverts if data.get("mac") == lock_mac]
     assert target, "the pairing wait did not report the lock's advert"
@@ -194,6 +196,7 @@ def test_status_comes_first_after_pairing(console: Console, held: dict[str, Any]
     assert status["state"] in STATES
     assert 0 <= status["battery"] <= 100
     assert isinstance(status["adminPasscodeConfirmed"], bool)
+    assert status["pairComplete"] is True
 
 
 def test_info_reports_the_device(console: Console, held: dict[str, Any], lock_mac: str) -> None:
