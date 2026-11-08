@@ -235,11 +235,11 @@ rpc::Reply setup(const cJSON* params, const rpc::Context&) {
     }
     store::cfg::Wifi wifi;
     if (!readWifi(member(params, "wifi"), wifi)) {
-        return rpc::fail("invalid_params", kWifiParamsMessage);
+        return rpc::fail("invalid_argument", kWifiParamsMessage);
     }
     std::string password;
     if (!readString(params, "password", kMinPassword, kMaxPassword, password)) {
-        return rpc::fail("invalid_params", "password must be 12 to 128 bytes");
+        return rpc::fail("invalid_argument", "password must be 12 to 128 bytes");
     }
     store::auth::Owner owner;
     owner.iterations = kPasswordIterations;
@@ -272,7 +272,7 @@ rpc::Reply setup(const cJSON* params, const rpc::Context&) {
 rpc::Reply wifiSet(const cJSON* params, const rpc::Context&) {
     store::cfg::Wifi wifi;
     if (!readWifi(params, wifi)) {
-        return rpc::fail("invalid_params", kWifiParamsMessage);
+        return rpc::fail("invalid_argument", kWifiParamsMessage);
     }
     if (store::cfg::saveWifi(wifi) != ESP_OK) {
         return rpc::fail("internal", "cannot store the Wi-Fi configuration");
@@ -290,7 +290,7 @@ rpc::Reply reboot(const cJSON*, const rpc::Context&) {
 rpc::Reply factoryReset(const cJSON* params, const rpc::Context&) {
     const cJSON* forceItem = member(params, "force");
     if (forceItem != nullptr && !cJSON_IsNull(forceItem) && !cJSON_IsBool(forceItem)) {
-        return rpc::fail("invalid_params", "force must be true or false");
+        return rpc::fail("invalid_argument", "force must be true or false");
     }
     const bool force = cJSON_IsTrue(forceItem);
     std::lock_guard<std::mutex> lock(s_claimMutex);
@@ -317,7 +317,7 @@ rpc::Reply factoryReset(const cJSON* params, const rpc::Context&) {
 rpc::Reply timeSet(const cJSON* params, const rpc::Context&) {
     double utc = 0;
     if (!readWhole(member(params, "utc"), wallclock::kMinUtc, wallclock::kMaxUtc, utc)) {
-        return rpc::fail("invalid_params", "utc must be whole seconds from 2024 to 2100");
+        return rpc::fail("invalid_argument", "utc must be whole seconds from 2024 to 2100");
     }
     if (!wallclock::set(static_cast<int64_t>(utc))) {
         return rpc::fail("internal", "cannot set the clock");
@@ -329,7 +329,7 @@ rpc::Reply logSet(const cJSON* params, const rpc::Context&) {
     std::string tag;
     std::string level;
     if (!readString(params, "tag", 1, kMaxLogTag, tag) || !readString(params, "level", 1, 8, level)) {
-        return rpc::fail("invalid_params", "log.set needs a tag and a level");
+        return rpc::fail("invalid_argument", "log.set needs a tag and a level");
     }
     for (const LogLevelName& entry : kLogLevels) {
         if (level == entry.name) {
@@ -337,19 +337,19 @@ rpc::Reply logSet(const cJSON* params, const rpc::Context&) {
             return rpc::ok();
         }
     }
-    return rpc::fail("invalid_params", "level is none, error, warn, info, debug or verbose");
+    return rpc::fail("invalid_argument", "level is none, error, warn, info, debug or verbose");
 }
 
 rpc::Reply auditList(const cJSON* params, const rpc::Context&) {
     double before = UINT32_MAX;
     const cJSON* beforeItem = member(params, "before");
     if (beforeItem != nullptr && !cJSON_IsNull(beforeItem) && !readWhole(beforeItem, 1, UINT32_MAX, before)) {
-        return rpc::fail("invalid_params", "before must be a sequence number");
+        return rpc::fail("invalid_argument", "before must be a sequence number");
     }
     double limit = kDefaultAuditPage;
     const cJSON* limitItem = member(params, "limit");
     if (limitItem != nullptr && !readWhole(limitItem, 1, audit::kMaxPage, limit)) {
-        return rpc::fail("invalid_params", "limit must be 1 to 50");
+        return rpc::fail("invalid_argument", "limit must be 1 to 50");
     }
     const audit::Page page = audit::list(static_cast<uint32_t>(before), static_cast<size_t>(limit));
     cJSON* result = cJSON_CreateObject();

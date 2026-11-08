@@ -114,7 +114,7 @@ std::string dispatch(const char* requestJson, Transport origin) {
         params = emptyParams.get();
     }
     if (!cJSON_IsObject(params)) {
-        return render(id, fail("invalid_params", "params must be an object"));
+        return render(id, fail("invalid_argument", "params must be an object"));
     }
     const auto entry = methods().find(std::string_view(method->valuestring));
     if (entry == methods().end()) {

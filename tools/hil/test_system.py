@@ -69,8 +69,8 @@ def test_bluetooth_comes_up_idle(console: Console, fresh: list[str]) -> None:
 def test_factory_reset_takes_force_as_a_boolean(console: Console, fresh: list[str]) -> None:
     started = time.monotonic()
     uptime = console.call("system.info")["uptime_ms"]
-    assert error_code(console, "system.factoryReset", {"force": "yes"}) == "invalid_params"
-    assert error_code(console, "system.factoryReset", {"force": 1}) == "invalid_params"
+    assert error_code(console, "system.factoryReset", {"force": "yes"}) == "invalid_argument"
+    assert error_code(console, "system.factoryReset", {"force": 1}) == "invalid_argument"
     elapsed_ms = (time.monotonic() - started) * 1000.0
     grown = console.call("system.info")["uptime_ms"] - uptime
     assert grown >= elapsed_ms - 1000.0, "the board restarted"
@@ -98,10 +98,10 @@ def test_rejects_malformed_requests(console: Console, fresh: list[str]) -> None:
     assert console.request_raw("x" * 3000)["error"]["code"] == "bad_request"
     assert console.request_raw('{"id":null,"method":7}')["error"]["code"] == "bad_request"
     reply = console.request_raw('{"id":null,"method":"system.info","params":[1]}')
-    assert reply["error"]["code"] == "invalid_params"
+    assert reply["error"]["code"] == "invalid_argument"
     assert error_code(console, "no.such.method") == "unknown_method"
-    assert error_code(console, "system.time.set", {"utc": "soon"}) == "invalid_params"
-    assert error_code(console, "system.setup", {"password": "long enough password"}) == "invalid_params"
+    assert error_code(console, "system.time.set", {"utc": "soon"}) == "invalid_argument"
+    assert error_code(console, "system.setup", {"password": "long enough password"}) == "invalid_argument"
     assert console.call("system.info")["claimed"] is False
 
 
@@ -125,8 +125,8 @@ def test_string_ids_are_echoed(console: Console) -> None:
 
 def test_time_set_marks_clock_synced(console: Console, fresh: list[str]) -> None:
     assert console.call("system.info")["time_synced"] is False
-    assert error_code(console, "system.time.set", {"utc": MIN_UTC - 1}) == "invalid_params"
-    assert error_code(console, "system.time.set", {"utc": 1.5e9 + 0.5}) == "invalid_params"
+    assert error_code(console, "system.time.set", {"utc": MIN_UTC - 1}) == "invalid_argument"
+    assert error_code(console, "system.time.set", {"utc": 1.5e9 + 0.5}) == "invalid_argument"
     now = int(time.time())
     assert console.call("system.time.set", {"utc": now}) == {}
     info = console.call("system.info")
@@ -139,12 +139,12 @@ def test_setup_returns_otpauth_once(
 ) -> None:
     board = console.call("system.info")["board"]
     short = {**setup_params(secrets, board_settings), "password": "short"}
-    assert error_code(console, "system.setup", short) == "invalid_params"
+    assert error_code(console, "system.setup", short) == "invalid_argument"
     bad_ip = {
         "wifi": {**wifi_params(secrets, board_settings), "ip": "300.1.2.3"},
         "password": secrets["owner_password"],
     }
-    assert error_code(console, "system.setup", bad_ip) == "invalid_params"
+    assert error_code(console, "system.setup", bad_ip) == "invalid_argument"
     claim_secret(console, secrets, board_settings, board)
     assert error_code(console, "system.setup", setup_params(secrets, board_settings)) == "already_claimed"
     info = console.call("system.info")
@@ -155,19 +155,19 @@ def test_setup_returns_otpauth_once(
 def test_audit_lists_actions_without_secrets(
     console: Console, fresh: list[str], secrets: dict[str, Any], board_settings: dict[str, Any]
 ) -> None:
-    assert error_code(console, "system.time.set", {"utc": MIN_UTC - 1}) == "invalid_params"
+    assert error_code(console, "system.time.set", {"utc": MIN_UTC - 1}) == "invalid_argument"
     assert console.call("system.time.set", {"utc": int(time.time())}) == {}
     short = {**setup_params(secrets, board_settings), "password": "short"}
-    assert error_code(console, "system.setup", short) == "invalid_params"
+    assert error_code(console, "system.setup", short) == "invalid_argument"
     claim_secret(console, secrets, board_settings, console.call("system.info")["board"])
     assert error_code(console, "system.setup", setup_params(secrets, board_settings)) == "already_claimed"
     entries = audit_entries(console)
     actions = [(entry["method"], entry["result"]) for entry in reversed(entries)]
     assert actions == [
         ("system.factoryReset", "ok"),
-        ("system.time.set", "invalid_params"),
+        ("system.time.set", "invalid_argument"),
         ("system.time.set", "ok"),
-        ("system.setup", "invalid_params"),
+        ("system.setup", "invalid_argument"),
         ("system.setup", "ok"),
         ("system.setup", "already_claimed"),
     ]
@@ -209,9 +209,9 @@ def test_wifi_set_validates_and_reconnects(
     console: Console, online: dict[str, Any], secrets: dict[str, Any], board_settings: dict[str, Any]
 ) -> None:
     params = wifi_params(secrets, board_settings)
-    assert error_code(console, "system.wifi.set", {**params, "netmask": "255.0.255.0"}) == "invalid_params"
-    assert error_code(console, "system.wifi.set", {**params, "ssid": ""}) == "invalid_params"
-    assert error_code(console, "system.wifi.set", {**params, "password": "short"}) == "invalid_params"
+    assert error_code(console, "system.wifi.set", {**params, "netmask": "255.0.255.0"}) == "invalid_argument"
+    assert error_code(console, "system.wifi.set", {**params, "ssid": ""}) == "invalid_argument"
+    assert error_code(console, "system.wifi.set", {**params, "password": "short"}) == "invalid_argument"
     assert console.call("system.wifi.set", params) == {}
     info = console.wait_info(lambda state: state["wifi"]["connected"], 45.0, "wifi to reconnect")
     same_ip = info["wifi"]["ip"] == board_settings["static_ip"]
@@ -230,8 +230,8 @@ def test_audit_keeps_the_last_200_entries(console: Console, fresh: list[str]) ->
     first_page = console.call("audit.list", {"limit": 3})
     assert [entry["seq"] for entry in first_page["entries"]] == seqs[:3]
     assert first_page["next"] == seqs[2]
-    assert error_code(console, "audit.list", {"limit": 0}) == "invalid_params"
-    assert error_code(console, "audit.list", {"limit": 51}) == "invalid_params"
+    assert error_code(console, "audit.list", {"limit": 0}) == "invalid_argument"
+    assert error_code(console, "audit.list", {"limit": 51}) == "invalid_argument"
     nvs = console.call("system.info")["nvs"]
     assert nvs["available_entries"] >= NVS_HEADROOM_ENTRIES
 
