@@ -48,7 +48,7 @@ async function unlockShed(page) {
   const response = await page.request.post('/api/rpc', {
     data: { id: 1, method: 'lock.unlock', params: { lock: SHED } },
   });
-  expect((await response.json()).result.state).toBe('unlocked');
+  expect(typeof (await response.json()).result.job).toBe('string');
 }
 
 function auditActions(page) {

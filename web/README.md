@@ -26,7 +26,7 @@ python3 tools/mock_api.py --port 8765
 
 Open http://127.0.0.1:8765/ and sign in with password `owner-pass` and code `123456`. The mock rebuilds the page on every load, so edits in `web/` show on reload. It keeps everything in memory: two demo locks, Front door (every feature) and Shed (passcodes and auto-lock only), plus a factory-fresh lock to pair. Buttons on the board are pressed for you after 2 s.
 
-`tools/mock_api.py` is the reference for the parameters and results of every method in the spec's API table, and for the events the UI listens to: `lock.state`, `lock.event`, `enroll.progress`, `confirm.required`, `confirm.result`, `scan.result`, `audit.appended`, `harden.step` and `job.done`. `locks.pair` answers `{"job": id}`, and its outcome arrives later as `job.done`; the UI accepts that shape from any method.
+`tools/mock_api.py` is the reference for the parameters and results of every method in the spec's API table, and for the events the UI listens to: `lock.state`, `lock.event`, `enroll.progress`, `confirm.required`, `confirm.result`, `scan.result`, `audit.appended`, `harden.step` and `job.done`. The lock methods and the button-gated ones answer `{"job": id}`, as the board does, and their outcome arrives later as `job.done` on the sockets of the session that asked; the UI accepts that shape from any method.
 
 ## Test
 
