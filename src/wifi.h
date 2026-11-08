@@ -25,4 +25,6 @@ Status status();
 
 uint32_t address();
 
+bool running();
+
 }

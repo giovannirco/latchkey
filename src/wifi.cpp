@@ -170,6 +170,8 @@ uint32_t address() {
     return s_connected && esp_netif_get_ip_info(s_netif, &ip) == ESP_OK ? ntohl(ip.ip.addr) : 0;
 }
 
+bool running() { return s_running; }
+
 Status status() {
     Status result;
     {

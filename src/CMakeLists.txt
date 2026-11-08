@@ -21,12 +21,14 @@ idf_component_register(
         "methods_locks.cpp"
         "methods_passcodes.cpp"
         "methods_system.cpp"
+        "ota.cpp"
         "rpc.cpp"
         "store.cpp"
         "wifi.cpp"
         "ws.cpp"
     INCLUDE_DIRS "."
     PRIV_REQUIRES
+        app_update
         bt
         esp_app_format
         esp_driver_gpio
