@@ -123,7 +123,14 @@ Filled in by the hardware-in-the-loop tests (`tools/hil/`) as they run against r
 
 | Lock model | Lock firmware | Protocol (type.sub-version) | Feature bits | Verified commands | Date |
 |---|---|---|---|---|---|
-| | | | | | |
+| SN9325-SN139-T2-T16-INT_PV53 (keypad, fingerprint and card lock; Bluetooth name `A260BLE_…`) | 6.4.37.240425 (hardware 1.1) | 5.3 (device info reports 3.1) | passcode, ic, finger_print, auto_lock, passcode_with_delete_function, firmware_setting, modify_passcode_function, manual_lock, cyclic_password, magnetometer, config_gateway_unlock, audio_management, get_admin_code, hotel_lock, passage_mode, wireless_keyboard, tamper_alert, reset_button, privacy_lock, cyclic_ic_or_finger_print, telink_chip, cyclic_passcode_can_recovery, wireless_key_fob, accessory_battery | pairing from an ESP32-S3 (through the web UI), status and battery, device info, feature bits, unlock and lock with their events, two requests in order, time sync, keys surviving a board reboot, scan, a lock job over HTTPS; every reply passed the CRC check | 2026-11-08 |
+
+Observed on that lock:
+
+- A factory-fresh lock advertises only after a keypad touch, for roughly 10 to 15 s; pairing has to start inside that window.
+- Once paired, an untouched lock advertises in bursts: in one minute it was seen at 2 s and 9 s, then not for 29 s, then every 4 to 5 s. A command can wait up to about 30 s for the lock to become reachable.
+- Its Bluetooth address is public (address type 0).
+
 
 ## Credits
 
