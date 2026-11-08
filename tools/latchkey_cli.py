@@ -11,6 +11,7 @@ from __future__ import annotations
 import argparse
 import glob
 import json
+import re
 import sys
 import time
 from collections.abc import Callable
@@ -22,6 +23,7 @@ BAUDRATE = 115200
 READ_CHUNK = 4096
 WRITE_TIMEOUT_S = 5.0
 USB_MODEM_PREFIX = "/dev/cu.usbmodem"
+BOOT_BANNER = re.compile(r"# latchkey \S+ board=")
 
 EventHook = Callable[[dict[str, Any]], None]
 
@@ -148,15 +150,17 @@ class Console:
         raise ConsoleTimeout(f"board on {self.port} did not answer system.info within {timeout:.0f} s")
 
     def call_and_wait_restart(self, method: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
-        started = time.monotonic()
+        seen = len(self.lines)
         self.call(method, params, timeout=30.0)
-        deadline = started + 60.0
-        while time.monotonic() < deadline:
-            info = self.wait_ready(timeout=max(1.0, deadline - time.monotonic()))
-            if info["uptime"] < time.monotonic() - started:
-                return info
-            time.sleep(0.2)
-        raise ConsoleTimeout(f"{method} did not restart the board within 60 s")
+        deadline = time.monotonic() + 60.0
+        while not any(BOOT_BANNER.match(line) for line in self.lines[seen:]):
+            line = self._read_line(deadline)
+            if line is None:
+                raise ConsoleTimeout(f"{method} did not restart the board within 60 s")
+            message = self._classify(line)
+            if message is not None and "event" not in message and message.get("id") is not None:
+                self.unclaimed.append(message)
+        return self.wait_ready(timeout=max(1.0, deadline - time.monotonic()))
 
     def wait_info(self, predicate: Callable[[dict[str, Any]], bool], timeout: float, what: str) -> dict[str, Any]:
         deadline = time.monotonic() + timeout
