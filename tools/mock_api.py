@@ -16,9 +16,10 @@ The session is an HttpOnly, SameSite=Strict cookie set by auth.login. /api/rpc o
 application/json and refuses a foreign Origin. A method that needs the board's button emits
 confirm.required, then confirm.result after 2 s (pressed) unless a test asks for a timeout.
 As on the board, the lock methods (locks.scan, locks.pair, lock.status, lock.info, lock.features,
-lock.unlock, lock.lock, lock.time.sync, lock.factoryReset) and the button-gated auth.rotateTotp and
-system.factoryReset run as jobs: the reply is {"job": id} and the outcome arrives as a job.done event
-{"job", "result"} or {"job", "error"}, sent only to the sockets of the session that asked.
+lock.unlock, lock.lock, lock.time.sync, lock.factoryReset, lock.passcodes.*, lock.fingerprints.*,
+lock.cards.*, lock.adminPasscode.*) and the button-gated auth.rotateTotp and system.factoryReset run
+as jobs: the reply is {"job": id} and the outcome arrives as a job.done event {"job", "result"} or
+{"job", "error"}, sent only to the sockets of the session that asked.
 
 Test hooks used by tools/ui-tests/:
 
@@ -73,7 +74,7 @@ QUEUE_WAIT_S = 60
 MAX_BODY = 64 * 1024
 OTA_SLOT_BYTES = 0x1E0000
 WS_GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
-SECRET_PARAMS = {"password", "totp", "passphrase", "code", "current", "new", "backup"}
+SECRET_PARAMS = {"password", "totp", "passphrase", "code", "current", "new", "backup", "adminPasscode"}
 FRONT_DOOR = "00:00:5E:00:53:01"
 SHED = "00:00:5E:00:53:02"
 CERT_FINGERPRINT = ":".join(f"{byte:02X}" for byte in hashlib.sha256(b"latchkey mock certificate").digest())
@@ -91,10 +92,12 @@ FULL_FEATURES = [
     "passage_mode",
     "reset_button",
     "config_gateway_unlock",
+    "cyclic_ic_or_finger_print",
 ]
 BASIC_FEATURES = ["passcode", "auto_lock", "manual_lock"]
 PASSCODE_TYPES = ("permanent", "timed", "one_time", "cyclic")
 HARDEN_STEPS = ("admin_passcode", "passcodes", "reset_button", "time")
+ADMIN_PASSCODE_DIGITS = 7
 HHMM = re.compile(r"^([01]\d|2[0-3]):[0-5]\d$")
 LOG_APP_UNLOCK = 1
 LOG_PASSCODE_UNLOCK = 4
@@ -247,7 +250,7 @@ def validity_param(value: Any, *, required: bool) -> dict[str, int] | None:
 
 def cycle_param(value: Any) -> dict[str, Any]:
     if not isinstance(value, dict):
-        raise invalid("a cyclic passcode needs a cycle")
+        raise invalid("cycle must be an object with days, start and end")
     days = value.get("days")
     if (
         not isinstance(days, list)
@@ -381,7 +384,7 @@ def demo_nearby() -> list[dict]:
     ]
 
 
-def new_lock(mac: str, name: str) -> dict:
+def new_lock(mac: str, name: str, admin_passcode: str) -> dict:
     stamp = now()
     return {
         "id": mac,
@@ -404,7 +407,7 @@ def new_lock(mac: str, name: str) -> dict:
         "sound": {"enabled": True, "volume": 5},
         "resetButton": True,
         "remoteUnlock": False,
-        "adminPasscode": random_digits(7),
+        "adminPasscode": admin_passcode,
         "passcodes": [passcode("permanent", "", None, managed=False, code="123456")],
         "fingerprints": [],
         "cards": [],
@@ -834,6 +837,8 @@ class Mock:
         mac = text_param(params, "mac", max_len=17, required=True).upper()
         name = text_param(params, "name", max_len=32) or "New lock"
         ctx.target = mac
+        chosen = params.get("adminPasscode")
+        admin_passcode = random_digits(ADMIN_PASSCODE_DIGITS) if chosen in (None, "") else digits_param(chosen)
         with self.lock:
             device = next((item for item in self.nearby if item["mac"].upper() == mac), None)
         if device is None:
@@ -842,7 +847,7 @@ class Mock:
             raise RpcError("lock_error", "the lock is already paired to other keys; factory-reset it first")
         self.confirm("locks.pair")
         with self.radio(extra_s=1.0):
-            lock = new_lock(mac, name)
+            lock = new_lock(mac, name, admin_passcode)
             with self.lock:
                 self.locks[mac] = lock
                 self.nearby = [item for item in self.nearby if item["mac"].upper() != mac]
@@ -966,34 +971,32 @@ class Mock:
             raise invalid(f"no such entry {item_id}")
         return entry
 
-    @rpc("lock.passcodes.list", feature="passcode", audited=False)
+    @rpc("lock.passcodes.list", feature="passcode", audited=False, job=True)
     def lock_passcodes_list(self, ctx: Context, params: dict) -> dict:
         lock = self.get_lock(params)
         with self.radio():
             return {"passcodes": [public_passcode(entry) for entry in lock["passcodes"]]}
 
-    @rpc("lock.passcodes.add", feature="passcode")
+    @rpc("lock.passcodes.add", feature="passcode", job=True)
     def lock_passcodes_add(self, ctx: Context, params: dict) -> dict:
         lock = self.get_lock(params)
         kind = params.get("type")
         if kind not in PASSCODE_TYPES:
             raise invalid(f"type is one of {', '.join(PASSCODE_TYPES)}")
-        if kind == "cyclic" and "cyclic_password" not in lock["features"]:
-            raise RpcError("unsupported", "the lock does not report cyclic_password")
         supplied = params.get("code")
         code = random_digits(6) if supplied in (None, "") else digits_param(supplied)
         name = text_param(params, "name", max_len=24)
+        if kind == "cyclic":
+            raise RpcError("unsupported", "this board cannot add cyclic passcodes yet")
         validity = None if kind == "permanent" else validity_param(params.get("validity"), required=True)
         entry = passcode(kind, name, validity, code=code)
-        if kind == "cyclic":
-            entry["cycle"] = cycle_param(params.get("cycle"))
         if any(item["code"] == code for item in lock["passcodes"]):
             raise RpcError("lock_error", "that passcode is already on the lock")
         with self.radio():
             lock["passcodes"].append(entry)
         return {"passcode": {**public_passcode(entry), "code": code}}
 
-    @rpc("lock.passcodes.update", feature="modify_passcode_function")
+    @rpc("lock.passcodes.update", feature="modify_passcode_function", job=True)
     def lock_passcodes_update(self, ctx: Context, params: dict) -> dict:
         lock = self.get_lock(params)
         entry = self._find(lock, "passcodes", params.get("id"))
@@ -1002,6 +1005,8 @@ class Mock:
             changes["code"] = digits_param(params["code"])
             if any(item["code"] == changes["code"] and item is not entry for item in lock["passcodes"]):
                 raise RpcError("lock_error", "that passcode is already on the lock")
+            if changes["code"] != entry["code"]:
+                changes["id"] = new_id("pc")
         if "name" in params:
             changes["name"] = text_param(params, "name", max_len=24)
         if "validity" in params and entry["type"] != "permanent":
@@ -1010,7 +1015,7 @@ class Mock:
             entry.update(changes)
         return {"passcode": public_passcode(entry)}
 
-    @rpc("lock.passcodes.delete", feature="passcode")
+    @rpc("lock.passcodes.delete", feature="passcode", job=True)
     def lock_passcodes_delete(self, ctx: Context, params: dict) -> dict:
         lock = self.get_lock(params)
         entry = self._find(lock, "passcodes", params.get("id"))
@@ -1018,7 +1023,7 @@ class Mock:
             lock["passcodes"].remove(entry)
         return {}
 
-    @rpc("lock.passcodes.clear", feature="passcode")
+    @rpc("lock.passcodes.clear", feature="passcode", job=True)
     def lock_passcodes_clear(self, ctx: Context, params: dict) -> dict:
         lock = self.get_lock(params)
         with self.radio():
@@ -1058,8 +1063,15 @@ class Mock:
         lock = self.get_lock(params)
         entry = self._find(lock, collection, params.get("id"))
         validity = validity_param(params.get("validity"), required=False)
+        cycle = None if params.get("cycle") is None else cycle_param(params["cycle"])
+        if cycle is not None and "cyclic_ic_or_finger_print" not in lock["features"]:
+            raise RpcError("unsupported", "the lock does not report cyclic_ic_or_finger_print")
         with self.radio():
             entry["validity"] = validity
+            if cycle is None:
+                entry.pop("cycle", None)
+            else:
+                entry["cycle"] = cycle
         return dict(entry)
 
     def _delete(self, params: dict, collection: str) -> dict:
@@ -1075,43 +1087,43 @@ class Mock:
             lock[collection] = []
         return {}
 
-    @rpc("lock.fingerprints.list", feature="finger_print", audited=False)
+    @rpc("lock.fingerprints.list", feature="finger_print", audited=False, job=True)
     def lock_fingerprints_list(self, ctx: Context, params: dict) -> dict:
         return self._credentials(params, "fingerprints")
 
-    @rpc("lock.fingerprints.enroll", feature="finger_print")
+    @rpc("lock.fingerprints.enroll", feature="finger_print", job=True)
     def lock_fingerprints_enroll(self, ctx: Context, params: dict) -> dict:
         return self._enroll(params, "fingerprints", "fingerprint", 4)
 
-    @rpc("lock.fingerprints.setValidity", feature="finger_print")
+    @rpc("lock.fingerprints.setValidity", feature="finger_print", job=True)
     def lock_fingerprints_set_validity(self, ctx: Context, params: dict) -> dict:
         return {"fingerprint": self._set_validity(params, "fingerprints")}
 
-    @rpc("lock.fingerprints.delete", feature="finger_print")
+    @rpc("lock.fingerprints.delete", feature="finger_print", job=True)
     def lock_fingerprints_delete(self, ctx: Context, params: dict) -> dict:
         return self._delete(params, "fingerprints")
 
-    @rpc("lock.fingerprints.clear", feature="finger_print")
+    @rpc("lock.fingerprints.clear", feature="finger_print", job=True)
     def lock_fingerprints_clear(self, ctx: Context, params: dict) -> dict:
         return self._clear(params, "fingerprints")
 
-    @rpc("lock.cards.list", feature="ic", audited=False)
+    @rpc("lock.cards.list", feature="ic", audited=False, job=True)
     def lock_cards_list(self, ctx: Context, params: dict) -> dict:
         return self._credentials(params, "cards")
 
-    @rpc("lock.cards.enroll", feature="ic")
+    @rpc("lock.cards.enroll", feature="ic", job=True)
     def lock_cards_enroll(self, ctx: Context, params: dict) -> dict:
         return self._enroll(params, "cards", "card", 1)
 
-    @rpc("lock.cards.setValidity", feature="ic")
+    @rpc("lock.cards.setValidity", feature="ic", job=True)
     def lock_cards_set_validity(self, ctx: Context, params: dict) -> dict:
         return {"card": self._set_validity(params, "cards")}
 
-    @rpc("lock.cards.delete", feature="ic")
+    @rpc("lock.cards.delete", feature="ic", job=True)
     def lock_cards_delete(self, ctx: Context, params: dict) -> dict:
         return self._delete(params, "cards")
 
-    @rpc("lock.cards.clear", feature="ic")
+    @rpc("lock.cards.clear", feature="ic", job=True)
     def lock_cards_clear(self, ctx: Context, params: dict) -> dict:
         return self._clear(params, "cards")
 
@@ -1169,16 +1181,25 @@ class Mock:
             lock["remoteUnlock"] = enabled
         return {"enabled": enabled}
 
-    @rpc("lock.adminPasscode.set", feature="passcode")
+    @rpc("lock.adminPasscode.set", feature="passcode", job=True)
     def lock_admin_passcode_set(self, ctx: Context, params: dict) -> dict:
         lock = self.get_lock(params)
         supplied = params.get("code")
         generated = supplied in (None, "")
-        code = random_digits(8) if generated else digits_param(supplied)
+        code = random_digits(ADMIN_PASSCODE_DIGITS) if generated else digits_param(supplied)
         self.confirm("lock.adminPasscode.set")
         with self.radio():
             lock["adminPasscode"] = code
         return {"code": code} if generated else {}
+
+    @rpc("lock.adminPasscode.get", job=True)
+    def lock_admin_passcode_get(self, ctx: Context, params: dict) -> dict:
+        lock = self.get_lock(params)
+        self.confirm("lock.adminPasscode.get")
+        if "get_admin_code" not in lock["features"]:
+            return {"code": lock["adminPasscode"], "source": "board"}
+        with self.radio():
+            return {"code": lock["adminPasscode"], "source": "lock", "matchesBoard": True}
 
     def _harden_step(self, lock: dict, step: str) -> dict:
         if step == "admin_passcode":
