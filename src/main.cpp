@@ -10,6 +10,7 @@
 #include "sdkconfig.h"
 
 #include "audit.h"
+#include "auth.h"
 #include "ble_central.h"
 #include "board.h"
 #include "clock.h"
@@ -35,6 +36,7 @@ extern "C" void app_main() {
     }
     store::init();
     audit::init();
+    auth::init();
     board::init();
     ESP_ERROR_CHECK(esp_netif_init());
     ESP_ERROR_CHECK(esp_event_loop_create_default());
@@ -45,6 +47,7 @@ extern "C" void app_main() {
     ble::init();
     lock_manager::start();
     methods::registerSystem();
+    methods::registerAuth();
     methods::registerLocks();
     console::start();
 }

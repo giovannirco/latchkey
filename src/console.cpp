@@ -128,7 +128,7 @@ void serveRequests(void*) {
         kMaxRequest,
         [](std::string_view line) {
             const std::string request(line);
-            writeLine(rpc::dispatch(request.c_str(), rpc::Transport::Serial));
+            writeLine(rpc::dispatch(request.c_str(), rpc::Transport::Serial, {}).json);
         },
         []() { writeLine(rpc::errorLine("bad_request", "request line too long")); });
     uint8_t chunk[kReadChunk];

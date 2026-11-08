@@ -2,6 +2,7 @@
 idf_component_register(
     SRCS
         "audit.cpp"
+        "auth.cpp"
         "ble_central.cpp"
         "board.cpp"
         "clock.cpp"
@@ -9,6 +10,7 @@ idf_component_register(
         "events.cpp"
         "lock_manager.cpp"
         "main.cpp"
+        "methods_auth.cpp"
         "methods_locks.cpp"
         "methods_system.cpp"
         "rpc.cpp"

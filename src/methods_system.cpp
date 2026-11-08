@@ -17,10 +17,10 @@
 #include "freertos/task.h"
 #include "lwip/inet.h"
 #include "mbedtls/platform_util.h"
-#include "psa/crypto.h"
 #include "sdkconfig.h"
 
 #include "audit.h"
+#include "auth.h"
 #include "ble_central.h"
 #include "board.h"
 #include "clock.h"
@@ -39,9 +39,6 @@ namespace methods {
 namespace {
 
 constexpr const char* TAG = "system";
-constexpr uint32_t kPasswordIterations = 4400;
-constexpr size_t kMinPassword = 12;
-constexpr size_t kMaxPassword = 128;
 constexpr size_t kMaxSsid = 32;
 constexpr size_t kMinWifiPassword = 8;
 constexpr size_t kMaxWifiPassword = 63;
@@ -112,21 +109,6 @@ bool readWifi(const cJSON* object, store::cfg::Wifi& out) {
     }
     out = std::move(wifi);
     return true;
-}
-
-bool hashPassword(const std::string& password, store::auth::Owner& owner) {
-    psa_key_derivation_operation_t operation = PSA_KEY_DERIVATION_OPERATION_INIT;
-    const bool derived =
-        psa_key_derivation_setup(&operation, PSA_ALG_PBKDF2_HMAC(PSA_ALG_SHA_256)) == PSA_SUCCESS &&
-        psa_key_derivation_input_integer(&operation, PSA_KEY_DERIVATION_INPUT_COST, owner.iterations) == PSA_SUCCESS &&
-        psa_key_derivation_input_bytes(&operation, PSA_KEY_DERIVATION_INPUT_SALT, owner.salt.data(),
-                                       owner.salt.size()) == PSA_SUCCESS &&
-        psa_key_derivation_input_bytes(&operation, PSA_KEY_DERIVATION_INPUT_PASSWORD,
-                                       reinterpret_cast<const uint8_t*>(password.data()),
-                                       password.size()) == PSA_SUCCESS &&
-        psa_key_derivation_output_bytes(&operation, owner.hash.data(), owner.hash.size()) == PSA_SUCCESS;
-    psa_key_derivation_abort(&operation);
-    return derived;
 }
 
 void restartNow(void*) {
@@ -244,15 +226,15 @@ rpc::Reply setup(const cJSON* params, const rpc::Context&) {
         return rpc::fail("invalid_argument", kWifiParamsMessage);
     }
     std::string password;
-    if (!readString(params, "password", kMinPassword, kMaxPassword, password)) {
+    if (!readString(params, "password", auth::kMinPassword, auth::kMaxPassword, password)) {
         return rpc::fail("invalid_argument", "password must be 12 to 128 bytes");
     }
     store::auth::Owner owner;
-    owner.iterations = kPasswordIterations;
+    owner.iterations = auth::kPasswordIterations;
     esp_fill_random(owner.salt.data(), owner.salt.size());
     esp_fill_random(owner.totpSecret.data(), owner.totpSecret.size());
     const int64_t started = esp_timer_get_time();
-    const bool hashed = hashPassword(password, owner);
+    const bool hashed = auth::hashPassword(password, owner);
     mbedtls_platform_zeroize(password.data(), password.size());
     if (!hashed) {
         return rpc::fail("internal", "password hashing failed");

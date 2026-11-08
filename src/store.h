@@ -59,6 +59,17 @@ bool loadOwner(Owner& out);
 
 esp_err_t saveOwner(const Owner& owner);
 
+struct LoginState {
+    uint32_t failures = 0;
+    uint64_t lastStep = 0;
+};
+
+LoginState loadLoginState();
+
+esp_err_t saveFailures(uint32_t failures);
+
+esp_err_t saveLastStep(uint64_t step);
+
 esp_err_t erase();
 
 }

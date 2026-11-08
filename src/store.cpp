@@ -212,6 +212,39 @@ esp_err_t saveOwner(const Owner& owner) {
     return error == ESP_OK ? nvs_commit(h) : error;
 }
 
+LoginState loadLoginState() {
+    LoginState state;
+    Handle handle(kAuthNamespace, NVS_READONLY);
+    if (!handle.ok()) {
+        return state;
+    }
+    if (nvs_get_u32(handle.get(), "fails", &state.failures) != ESP_OK) {
+        state.failures = 0;
+    }
+    if (nvs_get_u64(handle.get(), "totp_step", &state.lastStep) != ESP_OK) {
+        state.lastStep = 0;
+    }
+    return state;
+}
+
+esp_err_t saveFailures(uint32_t failures) {
+    Handle handle(kAuthNamespace, NVS_READWRITE);
+    if (!handle.ok()) {
+        return handle.error();
+    }
+    const esp_err_t error = nvs_set_u32(handle.get(), "fails", failures);
+    return error == ESP_OK ? nvs_commit(handle.get()) : error;
+}
+
+esp_err_t saveLastStep(uint64_t step) {
+    Handle handle(kAuthNamespace, NVS_READWRITE);
+    if (!handle.ok()) {
+        return handle.error();
+    }
+    const esp_err_t error = nvs_set_u64(handle.get(), "totp_step", step);
+    return error == ESP_OK ? nvs_commit(handle.get()) : error;
+}
+
 esp_err_t erase() { return eraseNamespace(kAuthNamespace); }
 
 }
