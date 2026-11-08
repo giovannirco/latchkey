@@ -29,16 +29,22 @@ using EventSink = std::function<void(const LockEvent&)>;
 using EnrollCallback = std::function<void(const EnrollProgress&)>;
 using PersistCallback = std::function<void(const LockKeys&)>;
 
+struct PairResult {
+    bool timeCalibrated = false;
+    bool adminPasscodeConfirmed = false;
+};
+
 class Session {
 public:
     Session(Transport& transport, Clock& clock, Random& random);
 
     void setEventSink(EventSink sink);
 
-    Status pair(const LockVersion& version, LockKeys& out, PersistCallback persistEarly);
+    Status pair(const LockVersion& version, LockKeys& out, PersistCallback persistEarly, PairResult& result);
     Status attach(const LockKeys& keys);
     const LockKeys& keys() const;
     uint8_t lockErrorCode() const;
+    size_t droppedFrames() const;
 
     Status unlock(OperationResult& out);
     Status lock(OperationResult& out);
@@ -97,7 +103,8 @@ private:
     std::string randomDigits(size_t count);
 
     Status sendCommand(uint8_t command, const Bytes& payload);
-    Status awaitPlain(uint8_t command, uint32_t timeoutMs, Bytes& plain);
+    Status nextFrame(uint32_t timeoutMs, size_t& budget, DecodedFrame& frame);
+    Status awaitPlain(uint8_t command, uint32_t timeoutMs, bool acceptEmpty, Bytes& plain);
     Status awaitData(uint8_t command, uint32_t timeoutMs, Bytes& data);
     Status request(uint8_t command, const Bytes& payload, Bytes& data);
     Status optionalRead(uint8_t command, const Bytes& payload);
@@ -111,7 +118,7 @@ private:
     Status initialize();
     Status fetchAesKey();
     Status addAdmin();
-    Status finishPairing();
+    Status finishPairing(const std::function<void()>& persist, PairResult& result);
     Status initPasswords();
     Status controlLock(uint8_t command, OperationResult& out);
     Status enroll(bool fingerprint, const Validity& validity, const EnrollCallback& progress, uint64_t& id);
@@ -125,6 +132,7 @@ private:
     LockKeys keys_;
     bool attached_ = false;
     uint8_t lockErrorCode_ = 0;
+    size_t droppedFrames_ = 0;
 };
 
 }

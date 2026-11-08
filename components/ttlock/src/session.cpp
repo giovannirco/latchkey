@@ -156,6 +156,10 @@ uint8_t Session::lockErrorCode() const {
     return lockErrorCode_;
 }
 
+size_t Session::droppedFrames() const {
+    return droppedFrames_;
+}
+
 Status Session::attach(const LockKeys& keys) {
     attached_ = false;
     lockErrorCode_ = 0;
@@ -228,30 +232,45 @@ void Session::deliver(const Reply& reply) {
     }
 }
 
-Status Session::awaitPlain(uint8_t command, uint32_t timeoutMs, Bytes& plain) {
-    for (size_t frames = 0; frames < kMaxFramesPerReply; ++frames) {
+Status Session::nextFrame(uint32_t timeoutMs, size_t& budget, DecodedFrame& frame) {
+    while (budget > 0) {
+        --budget;
         Bytes raw;
         const Status received = transport_.receive(raw, timeoutMs);
         if (received != Status::Ok) {
             return received;
         }
+        if (decodeFrame(raw, keys_.aesKey, frame) == Status::Ok) {
+            return Status::Ok;
+        }
+        ++droppedFrames_;
+    }
+    return Status::Timeout;
+}
+
+Status Session::awaitPlain(uint8_t command, uint32_t timeoutMs, bool acceptEmpty, Bytes& plain) {
+    size_t budget = kMaxFramesPerReply;
+    while (true) {
         DecodedFrame frame;
-        const Status decoded = decodeFrame(raw, keys_.aesKey, frame);
-        if (decoded != Status::Ok) {
-            return decoded;
+        const Status received = nextFrame(timeoutMs, budget, frame);
+        if (received != Status::Ok) {
+            return received;
+        }
+        if (frame.payload.empty() && !acceptEmpty) {
+            ++droppedFrames_;
+            continue;
         }
         Reply reply;
-        if (!frame.payload.empty()) {
-            if (!parseReply(frame.payload, reply)) {
-                return Status::BadResponse;
+        const bool enveloped = parseReply(frame.payload, reply);
+        const bool logPush = enveloped && command == command::kSearchStatus && isLogPush(reply);
+        const bool answers = frame.payload.empty() || (frame.payload[0] == command && !logPush);
+        if (!answers) {
+            if (enveloped && frame.crcOk) {
+                deliver(reply);
+            } else {
+                ++droppedFrames_;
             }
-            const bool pushed = command == command::kSearchStatus && isLogPush(reply);
-            if (reply.command != command || pushed) {
-                if (frame.crcOk) {
-                    deliver(reply);
-                }
-                continue;
-            }
+            continue;
         }
         if (!frame.crcOk) {
             return Status::BadCrc;
@@ -259,12 +278,11 @@ Status Session::awaitPlain(uint8_t command, uint32_t timeoutMs, Bytes& plain) {
         plain = std::move(frame.payload);
         return Status::Ok;
     }
-    return Status::Timeout;
 }
 
 Status Session::awaitData(uint8_t command, uint32_t timeoutMs, Bytes& data) {
     Bytes plain;
-    const Status status = awaitPlain(command, timeoutMs, plain);
+    const Status status = awaitPlain(command, timeoutMs, false, plain);
     if (status != Status::Ok) {
         return status;
     }
@@ -322,7 +340,8 @@ Status Session::adminRequest(Feature feature, uint8_t command, const Bytes& payl
     return status == Status::Ok ? request(command, payload, data) : status;
 }
 
-Status Session::pair(const LockVersion& version, LockKeys& out, PersistCallback persistEarly) {
+Status Session::pair(const LockVersion& version, LockKeys& out, PersistCallback persistEarly, PairResult& result) {
+    result = PairResult{};
     if (!usesV3Frames(version)) {
         return Status::Unsupported;
     }
@@ -350,21 +369,22 @@ Status Session::pair(const LockVersion& version, LockKeys& out, PersistCallback 
         return status;
     }
     attached_ = true;
-    out = keys_;
-    if (persistEarly) {
-        persistEarly(keys_);
-    }
+    const std::function<void()> persist = [this, &out, &persistEarly]() {
+        out = keys_;
+        if (persistEarly) {
+            persistEarly(keys_);
+        }
+    };
+    persist();
     if (status != Status::Ok) {
         return Status::PairIncomplete;
     }
-    status = finishPairing();
+    status = finishPairing(persist, result);
     out = keys_;
     if (status != Status::Ok) {
         return Status::PairIncomplete;
     }
-    if (persistEarly) {
-        persistEarly(keys_);
-    }
+    persist();
     return Status::Ok;
 }
 
@@ -373,15 +393,11 @@ Status Session::initialize() {
     if (sent != Status::Ok) {
         return sent;
     }
-    Bytes raw;
-    const Status received = transport_.receive(raw, kCommandTimeoutMs);
+    size_t budget = kMaxFramesPerReply;
+    DecodedFrame frame;
+    const Status received = nextFrame(kCommandTimeoutMs, budget, frame);
     if (received != Status::Ok) {
         return received;
-    }
-    DecodedFrame frame;
-    const Status decoded = decodeFrame(raw, keys_.aesKey, frame);
-    if (decoded != Status::Ok) {
-        return decoded;
     }
     return frame.crcOk ? Status::Ok : Status::BadCrc;
 }
@@ -409,12 +425,14 @@ Status Session::addAdmin() {
     return isAddAdminAccepted(data) ? Status::Ok : Status::BadResponse;
 }
 
-Status Session::finishPairing() {
-    Status status = optionalRead(command::kTimeCalibrate, buildCalibrateTime(localNow()));
-    if (status != Status::Ok) {
+Status Session::finishPairing(const std::function<void()>& persist, PairResult& result) {
+    Bytes data;
+    Status status = request(command::kTimeCalibrate, buildCalibrateTime(localNow()), data);
+    if (status == Status::Ok) {
+        result.timeCalibrated = true;
+    } else if (status != Status::LockError && status != Status::Timeout) {
         return status;
     }
-    Bytes data;
     status = request(command::kSearchDeviceFeature, noPayload(), data);
     if (status != Status::Ok) {
         return status;
@@ -431,12 +449,20 @@ Status Session::finishPairing() {
             return status;
         }
     }
-    const std::string adminPasscode = randomDigits(kAdminPasscodeDigits);
-    status = request(command::kSetAdminKeyboardPassword, buildSetAdminPasscode(adminPasscode), data);
-    if (status != Status::Ok) {
+    const std::string previous = keys_.adminPasscode;
+    keys_.adminPasscode = randomDigits(kAdminPasscodeDigits);
+    persist();
+    status = request(command::kSetAdminKeyboardPassword, buildSetAdminPasscode(keys_.adminPasscode), data);
+    if (status == Status::LockError) {
+        keys_.adminPasscode = previous;
+        persist();
         return status;
     }
-    keys_.adminPasscode = adminPasscode;
+    if (status == Status::Ok) {
+        result.adminPasscodeConfirmed = true;
+    } else if (status != Status::Timeout) {
+        return status;
+    }
     status = initPasswords();
     if (status != Status::Ok) {
         return status;
@@ -960,7 +986,7 @@ Status Session::factoryReset() {
         return status;
     }
     Bytes plain;
-    status = awaitPlain(command::kResetLock, kCommandTimeoutMs, plain);
+    status = awaitPlain(command::kResetLock, kCommandTimeoutMs, true, plain);
     if (status != Status::Ok) {
         return status;
     }
@@ -980,29 +1006,25 @@ Status Session::factoryReset() {
 }
 
 Status Session::receiveEvent(uint32_t timeoutMs) {
-    Status status = requireKeys();
+    const Status status = requireKeys();
     if (status != Status::Ok) {
         return status;
     }
-    Bytes raw;
-    status = transport_.receive(raw, timeoutMs);
-    if (status != Status::Ok) {
-        return status;
+    size_t budget = kMaxFramesPerReply;
+    while (true) {
+        DecodedFrame frame;
+        const Status received = nextFrame(timeoutMs, budget, frame);
+        if (received != Status::Ok) {
+            return received;
+        }
+        Reply reply;
+        if (!frame.crcOk || !parseReply(frame.payload, reply)) {
+            ++droppedFrames_;
+            continue;
+        }
+        deliver(reply);
+        return Status::Ok;
     }
-    DecodedFrame frame;
-    status = decodeFrame(raw, keys_.aesKey, frame);
-    if (status != Status::Ok) {
-        return status;
-    }
-    if (!frame.crcOk) {
-        return Status::BadCrc;
-    }
-    Reply reply;
-    if (!parseReply(frame.payload, reply)) {
-        return Status::BadResponse;
-    }
-    deliver(reply);
-    return Status::Ok;
 }
 
 }
