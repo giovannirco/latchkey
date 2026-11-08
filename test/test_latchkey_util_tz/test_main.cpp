@@ -171,6 +171,17 @@ static void test_rule_fields_are_range_checked() {
     assertInvalid("EST5EDT,M3.2.0,M11.1.0,M12.1.0");
 }
 
+static void test_offsets_stay_below_24_hours() {
+    assertOffsets("XXX23:59", {{1768478400, -86340}});
+    assertOffsets("XXX-23:59", {{1768478400, 86340}});
+    assertInvalid("UTC24");
+    assertInvalid("UTC-24");
+    assertInvalid("UTC+24:00");
+    assertInvalid("CET-1CEST-24,M3.5.0,M10.5.0/3");
+    assertInvalid("XXX-23YYY,M3.5.0,M10.5.0");
+    parsed("XXX23YYY,M3.5.0,M10.5.0");
+}
+
 static void test_length_is_capped() {
     const std::string longest = "<" + std::string(latchkey_util::kMaxTimeZoneLength - 3, 'A') + ">0";
     TEST_ASSERT_EQUAL_size_t(latchkey_util::kMaxTimeZoneLength, longest.size());
@@ -206,6 +217,7 @@ int main() {
     RUN_TEST(test_garbage_is_invalid);
     RUN_TEST(test_daylight_needs_both_rules);
     RUN_TEST(test_rule_fields_are_range_checked);
+    RUN_TEST(test_offsets_stay_below_24_hours);
     RUN_TEST(test_length_is_capped);
     RUN_TEST(test_local_timestamps_carry_the_offset);
     return UNITY_END();

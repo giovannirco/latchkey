@@ -10,8 +10,9 @@ namespace {
 constexpr int32_t kSecondsPerMinute = 60;
 constexpr int32_t kSecondsPerHour = 3600;
 constexpr int64_t kSecondsPerDay = 86400;
-constexpr uint32_t kMaxOffsetHours = 24;
-constexpr uint32_t kMaxRuleHours = 167;
+constexpr int32_t kOffsetLimitSeconds = 24 * 3600;
+constexpr uint32_t kMaxOffsetSeconds = kOffsetLimitSeconds - 1;
+constexpr uint32_t kMaxRuleSeconds = 167 * 3600;
 constexpr int32_t kDefaultRuleTime = 2 * kSecondsPerHour;
 constexpr size_t kMinNameLength = 3;
 constexpr uint32_t kMaxJulianDay = 365;
@@ -78,7 +79,7 @@ bool parseName(Cursor& cursor) {
     return length >= kMinNameLength;
 }
 
-bool parseClock(Cursor& cursor, uint32_t maxHourDigits, uint32_t maxHours, bool wholeMinutes, int32_t& out) {
+bool parseClock(Cursor& cursor, uint32_t maxHourDigits, uint32_t maxSeconds, bool wholeMinutes, int32_t& out) {
     int32_t sign = 1;
     if (cursor.accept('-')) {
         sign = -1;
@@ -100,7 +101,7 @@ bool parseClock(Cursor& cursor, uint32_t maxHourDigits, uint32_t maxHours, bool 
         }
     }
     const uint32_t total = hours * kSecondsPerHour + minutes * kSecondsPerMinute + seconds;
-    if (total > maxHours * kSecondsPerHour || (wholeMinutes && seconds != 0)) {
+    if (total > maxSeconds || (wholeMinutes && seconds != 0)) {
         return false;
     }
     out = sign * static_cast<int32_t>(total);
@@ -137,7 +138,7 @@ bool parseRule(Cursor& cursor, TransitionRule& rule) {
         rule.day = static_cast<uint16_t>(value);
     }
     rule.timeSeconds = kDefaultRuleTime;
-    return !cursor.accept('/') || parseClock(cursor, 3, kMaxRuleHours, false, rule.timeSeconds);
+    return !cursor.accept('/') || parseClock(cursor, 3, kMaxRuleSeconds, false, rule.timeSeconds);
 }
 
 int64_t floorDiv(int64_t value, int64_t divisor) {
@@ -227,7 +228,7 @@ bool parseTimeZone(std::string_view text, TimeZone& out) {
     Cursor cursor(text);
     TimeZone zone;
     int32_t posixOffset = 0;
-    if (!parseName(cursor) || !parseClock(cursor, 2, kMaxOffsetHours, true, posixOffset)) {
+    if (!parseName(cursor) || !parseClock(cursor, 2, kMaxOffsetSeconds, true, posixOffset)) {
         return false;
     }
     zone.standardOffset = -posixOffset;
@@ -241,12 +242,13 @@ bool parseTimeZone(std::string_view text, TimeZone& out) {
     zone.hasDaylight = true;
     zone.daylightOffset = zone.standardOffset + kSecondsPerHour;
     if (cursor.current() != ',') {
-        if (!parseClock(cursor, 2, kMaxOffsetHours, true, posixOffset)) {
+        if (!parseClock(cursor, 2, kMaxOffsetSeconds, true, posixOffset)) {
             return false;
         }
         zone.daylightOffset = -posixOffset;
     }
-    const bool rules = cursor.accept(',') && parseRule(cursor, zone.start) && cursor.accept(',') &&
+    const bool daylightFits = zone.daylightOffset > -kOffsetLimitSeconds && zone.daylightOffset < kOffsetLimitSeconds;
+    const bool rules = daylightFits && cursor.accept(',') && parseRule(cursor, zone.start) && cursor.accept(',') &&
                        parseRule(cursor, zone.end) && cursor.done();
     if (!rules) {
         return false;
