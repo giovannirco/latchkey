@@ -12,6 +12,7 @@
 #include "latchkey_util/label_table.h"
 #include "latchkey_util/password_record.h"
 #include "latchkey_util/seed_table.h"
+#include "latchkey_util/syslog.h"
 
 namespace store {
 
@@ -45,6 +46,19 @@ esp_err_t saveWifi(const Wifi& wifi);
 bool loadTimezone(std::string& out);
 
 esp_err_t saveTimezone(const std::string& timezone);
+
+struct Syslog {
+    bool enabled = false;
+    std::string host;
+    uint16_t port = latchkey_util::kDefaultSyslogPort;
+    bool tcp = false;
+    std::string appName = latchkey_util::kDefaultSyslogAppName;
+    latchkey_util::LogLevel level = latchkey_util::LogLevel::Info;
+};
+
+esp_err_t loadSyslog(Syslog& out);
+
+esp_err_t saveSyslog(const Syslog& syslog);
 
 bool loadTlsIdentity(latchkey_util::TlsIdentity& out);
 

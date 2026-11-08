@@ -36,6 +36,7 @@
 #include "methods.h"
 #include "rpc.h"
 #include "store.h"
+#include "syslog_client.h"
 #include "wifi.h"
 
 namespace methods {
@@ -185,6 +186,7 @@ rpc::Reply info(const cJSON*, const rpc::Context&) {
     cJSON_AddNumberToObject(heap, "minFree", esp_get_minimum_free_heap_size());
     cJSON_AddNumberToObject(heap, "largestBlock", heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL));
     cJSON* stacks = cJSON_AddObjectToObject(result, "stackFree");
+    cJSON_AddNumberToObject(stacks, "syslog", syslog_client::stackFree());
     cJSON_AddNumberToObject(stacks, "lockWorker", lock_manager::workerStackFree());
     cJSON_AddNumberToObject(stacks, "nimbleHost", stackFree("nimble_host"));
     cJSON_AddNumberToObject(stacks, "console", stackFree("console"));
@@ -227,6 +229,7 @@ rpc::Reply info(const cJSON*, const rpc::Context&) {
     cJSON_AddNumberToObject(button, "gpio", board::buttonGpio());
     cJSON_AddBoolToObject(button, "pressed", board::buttonPressed());
     cJSON_AddNumberToObject(button, "presses", board::buttonPresses());
+    addLoggingInfo(result);
     return rpc::ok(result);
 }
 
