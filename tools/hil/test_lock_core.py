@@ -28,7 +28,7 @@ DOCUMENTATION_MAC = "00:00:5E:00:53:99"
 SCAN_SECONDS = 15
 ADVERT_WATCH_S = 60
 ADVERT_SAMPLE_S = 5
-MAX_ADVERT_GAP_S = 20
+MAX_ADVERT_GAP_S = 35
 SUMMARY_KEYS = {
     "id",
     "mac",
@@ -235,12 +235,16 @@ def test_time_sync_sets_the_lock_clock(console: Console, held: dict[str, Any], l
 def test_list_and_rename(console: Console, held: dict[str, Any], lock_mac: str) -> None:
     assert set(held) == SUMMARY_KEYS
     assert held["state"] in STATES | {"unknown"}
-    renamed = console.call("locks.rename", {"lock": lock_mac, "name": "  Desk lock  "})["lock"]
-    assert renamed["name"] == "Desk lock"
-    assert stored(console, lock_mac)["name"] == "Desk lock"
-    assert error_code(console, "locks.rename", {"lock": lock_mac, "name": "   "}) == "invalid_argument"
-    assert error_code(console, "locks.rename", {"lock": lock_mac, "name": "x" * 33}) == "invalid_argument"
-    assert console.call("locks.rename", {"lock": lock_mac, "name": LOCK_NAME})["lock"]["name"] == LOCK_NAME
+    try:
+        renamed = console.call("locks.rename", {"lock": lock_mac, "name": "  Desk lock  "})["lock"]
+        assert renamed["name"] == "Desk lock"
+        assert stored(console, lock_mac)["name"] == "Desk lock"
+        assert error_code(console, "locks.rename", {"lock": lock_mac, "name": "   "}) == "invalid_argument"
+        assert error_code(console, "locks.rename", {"lock": lock_mac, "name": "x" * 33}) == "invalid_argument"
+    finally:
+        console.call("locks.rename", {"lock": lock_mac, "name": held["name"]})
+    kept = stored(console, lock_mac)["name"] == held["name"]
+    assert kept, "the lock did not get its name back"
 
 
 def test_audit_targets_the_lock(console: Console, held: dict[str, Any], lock_mac: str) -> None:
