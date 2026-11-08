@@ -12,6 +12,7 @@
 
 #include "auth.h"
 #include "events.h"
+#include "http.h"
 #include "latchkey_util/web.h"
 
 namespace ws {
@@ -21,7 +22,6 @@ namespace {
 constexpr const char* TAG = "ws";
 constexpr size_t kMaxPending = 32;
 constexpr size_t kMaxClientFrame = 128;
-constexpr size_t kHeaderValue = 300;
 constexpr size_t kTokenBuffer = 65;
 
 struct Outgoing {
@@ -119,19 +119,6 @@ void enqueue(Outgoing out) {
     schedule(due);
 }
 
-bool header(httpd_req_t* req, const char* name, char (&value)[kHeaderValue]) {
-    return httpd_req_get_hdr_value_str(req, name, value, sizeof(value)) == ESP_OK;
-}
-
-bool originAllowed(httpd_req_t* req) {
-    if (httpd_req_get_hdr_value_len(req, "Origin") == 0) {
-        return true;
-    }
-    char origin[kHeaderValue];
-    char host[kHeaderValue];
-    return header(req, "Origin", origin) && header(req, "Host", host) && latchkey_util::sameOrigin(origin, host);
-}
-
 std::optional<uint32_t> sessionOf(httpd_req_t* req) {
     char token[kTokenBuffer] = {};
     size_t length = sizeof(token);
@@ -156,8 +143,8 @@ void attach(httpd_handle_t server, size_t maxSockets) {
 }
 
 esp_err_t admit(httpd_req_t* req) {
-    if (!originAllowed(req)) {
-        ESP_LOGW(TAG, "refused an event socket from another origin");
+    if (!http::fromBoardAddress(req)) {
+        ESP_LOGW(TAG, "refused an event socket for another address or origin");
         return ESP_FAIL;
     }
     const std::optional<uint32_t> session = sessionOf(req);

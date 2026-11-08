@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #pragma once
 
+#include <cstdint>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -12,7 +13,9 @@ inline constexpr const char* kClearedSessionCookie = "lk_session=; Path=/; Max-A
 
 bool isJsonContentType(std::string_view value);
 
-bool sameOrigin(std::string_view origin, std::string_view host);
+bool isOwnHost(std::string_view host, uint32_t address);
+
+bool isOwnOrigin(std::string_view origin, uint32_t address);
 
 std::optional<std::string> httpsRedirect(std::string_view host);
 

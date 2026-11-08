@@ -24,6 +24,7 @@
 #include "certs.h"
 #include "latchkey_util/web.h"
 #include "rpc.h"
+#include "wifi.h"
 #include "ws.h"
 
 extern const uint8_t kPageStart[] asm("_binary_index_html_gz_start");
@@ -146,15 +147,6 @@ esp_err_t servePage(httpd_req_t* req) {
     return httpd_resp_send(req, reinterpret_cast<const char*>(kPageStart), kPageEnd - kPageStart);
 }
 
-bool sameOriginOrNone(httpd_req_t* req) {
-    if (httpd_req_get_hdr_value_len(req, "Origin") == 0) {
-        return true;
-    }
-    char origin[kHeaderValue];
-    char host[kHeaderValue];
-    return header(req, "Origin", origin) && header(req, "Host", host) && latchkey_util::sameOrigin(origin, host);
-}
-
 bool readBody(httpd_req_t* req, std::string& body) {
     body.resize(req->content_len);
     size_t received = 0;
@@ -174,7 +166,7 @@ bool readBody(httpd_req_t* req, std::string& body) {
 
 esp_err_t acceptRpc(httpd_req_t* req) {
     noteServerTask();
-    if (!sameOriginOrNone(req)) {
+    if (!fromBoardAddress(req)) {
         return refuse(req, "403 Forbidden", "forbidden", "cross-origin request refused");
     }
     char type[kHeaderValue];
@@ -377,6 +369,19 @@ void start() {
         abort();
     }
     ESP_ERROR_CHECK(esp_event_handler_register(IP_EVENT, IP_EVENT_STA_GOT_IP, onGotIp, nullptr));
+}
+
+bool fromBoardAddress(httpd_req_t* req) {
+    const uint32_t own = wifi::address();
+    char host[kHeaderValue];
+    if (!header(req, "Host", host) || !latchkey_util::isOwnHost(host, own)) {
+        return false;
+    }
+    if (httpd_req_get_hdr_value_len(req, "Origin") == 0) {
+        return true;
+    }
+    char origin[kHeaderValue];
+    return header(req, "Origin", origin) && latchkey_util::isOwnOrigin(origin, own);
 }
 
 uint32_t serverStackFree() {

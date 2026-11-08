@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include <unity.h>
 
+#include <cstdint>
 #include <optional>
 #include <string>
 
@@ -27,27 +28,38 @@ static void test_other_content_types_are_refused() {
     TEST_ASSERT_FALSE(latchkey_util::isJsonContentType("multipart/form-data; boundary=application/json"));
 }
 
-static void test_the_own_origin_matches_the_host() {
-    TEST_ASSERT_TRUE(latchkey_util::sameOrigin("https://192.0.2.63", "192.0.2.63"));
-    TEST_ASSERT_TRUE(latchkey_util::sameOrigin("https://192.0.2.63:443", "192.0.2.63"));
-    TEST_ASSERT_TRUE(latchkey_util::sameOrigin("https://192.0.2.63", "192.0.2.63:443"));
-    TEST_ASSERT_TRUE(latchkey_util::sameOrigin("HTTPS://192.0.2.63", "192.0.2.63"));
-    TEST_ASSERT_TRUE(latchkey_util::sameOrigin("https://Latchkey.Example", "latchkey.example"));
-    TEST_ASSERT_TRUE(latchkey_util::sameOrigin("https://192.0.2.63:8443", "192.0.2.63:8443"));
+static constexpr uint32_t kBoard = 0xC000023F;
+
+static void test_the_board_address_is_its_own_host() {
+    TEST_ASSERT_TRUE(latchkey_util::isOwnHost("192.0.2.63", kBoard));
+    TEST_ASSERT_TRUE(latchkey_util::isOwnHost("192.0.2.63:443", kBoard));
 }
 
-static void test_other_origins_do_not_match() {
-    TEST_ASSERT_FALSE(latchkey_util::sameOrigin("http://192.0.2.63", "192.0.2.63"));
-    TEST_ASSERT_FALSE(latchkey_util::sameOrigin("https://192.0.2.64", "192.0.2.63"));
-    TEST_ASSERT_FALSE(latchkey_util::sameOrigin("https://192.0.2.63:8443", "192.0.2.63"));
-    TEST_ASSERT_FALSE(latchkey_util::sameOrigin("https://192.0.2.63", "192.0.2.63:8443"));
-    TEST_ASSERT_FALSE(latchkey_util::sameOrigin("https://192.0.2.63/", "192.0.2.63"));
-    TEST_ASSERT_FALSE(latchkey_util::sameOrigin("https://192.0.2.63.attacker.example", "192.0.2.63"));
-    TEST_ASSERT_FALSE(latchkey_util::sameOrigin("https://owner@192.0.2.63", "192.0.2.63"));
-    TEST_ASSERT_FALSE(latchkey_util::sameOrigin("null", "192.0.2.63"));
-    TEST_ASSERT_FALSE(latchkey_util::sameOrigin("", "192.0.2.63"));
-    TEST_ASSERT_FALSE(latchkey_util::sameOrigin("https://", ""));
-    TEST_ASSERT_FALSE(latchkey_util::sameOrigin("https://192.0.2.63", ""));
+static void test_other_hosts_are_not_the_board() {
+    const char* refused[] = {
+        "192.0.2.64", "192.0.2.63:8443", "192.0.2.63:", "192.000.2.63", "latchkey.example", "rebind.attacker.example",
+        "192.0.2.63.attacker.example", "", ":443", "[2001:db8::1]",
+    };
+    for (const char* host : refused) {
+        TEST_ASSERT_FALSE_MESSAGE(latchkey_util::isOwnHost(host, kBoard), host);
+    }
+    TEST_ASSERT_FALSE(latchkey_util::isOwnHost("0.0.0.0", 0));
+}
+
+static void test_the_board_address_is_its_own_origin() {
+    TEST_ASSERT_TRUE(latchkey_util::isOwnOrigin("https://192.0.2.63", kBoard));
+    TEST_ASSERT_TRUE(latchkey_util::isOwnOrigin("https://192.0.2.63:443", kBoard));
+    TEST_ASSERT_TRUE(latchkey_util::isOwnOrigin("HTTPS://192.0.2.63", kBoard));
+}
+
+static void test_other_origins_are_not_the_board() {
+    const char* refused[] = {
+        "http://192.0.2.63", "https://192.0.2.64", "https://192.0.2.63:8443", "https://192.0.2.63/",
+        "https://rebind.attacker.example", "https://owner@192.0.2.63", "null", "", "https://",
+    };
+    for (const char* origin : refused) {
+        TEST_ASSERT_FALSE_MESSAGE(latchkey_util::isOwnOrigin(origin, kBoard), origin);
+    }
 }
 
 static void assertRedirect(const char* host, const char* expected) {
@@ -86,8 +98,10 @@ int main() {
     UNITY_BEGIN();
     RUN_TEST(test_json_content_types_are_recognised);
     RUN_TEST(test_other_content_types_are_refused);
-    RUN_TEST(test_the_own_origin_matches_the_host);
-    RUN_TEST(test_other_origins_do_not_match);
+    RUN_TEST(test_the_board_address_is_its_own_host);
+    RUN_TEST(test_other_hosts_are_not_the_board);
+    RUN_TEST(test_the_board_address_is_its_own_origin);
+    RUN_TEST(test_other_origins_are_not_the_board);
     RUN_TEST(test_the_redirect_points_at_the_https_root);
     RUN_TEST(test_a_malformed_host_gets_no_redirect);
     RUN_TEST(test_the_session_cookie_is_strict_and_the_logout_cookie_clears_it);

@@ -3,6 +3,8 @@
 
 #include <cstddef>
 
+#include "latchkey_util/ipv4.h"
+
 namespace latchkey_util {
 
 namespace {
@@ -83,16 +85,16 @@ bool isJsonContentType(std::string_view value) {
     return equalsIgnoringCase(trim(trimmed.substr(0, trimmed.find(';'))), "application/json");
 }
 
-bool sameOrigin(std::string_view origin, std::string_view host) {
-    if (origin.size() < kHttps.size() || !equalsIgnoringCase(origin.substr(0, kHttps.size()), kHttps)) {
-        return false;
-    }
-    Authority theirs;
-    Authority ours;
-    if (!splitAuthority(origin.substr(kHttps.size()), theirs) || !splitAuthority(host, ours)) {
-        return false;
-    }
-    return equalsIgnoringCase(theirs.name, ours.name) && effectivePort(theirs.port) == effectivePort(ours.port);
+bool isOwnHost(std::string_view host, uint32_t address) {
+    Authority authority;
+    uint32_t named = 0;
+    return address != 0 && splitAuthority(host, authority) && effectivePort(authority.port) == kDefaultPort &&
+           parseIpv4(authority.name, named) && named == address;
+}
+
+bool isOwnOrigin(std::string_view origin, uint32_t address) {
+    return origin.size() > kHttps.size() && equalsIgnoringCase(origin.substr(0, kHttps.size()), kHttps) &&
+           isOwnHost(origin.substr(kHttps.size()), address);
 }
 
 std::optional<std::string> httpsRedirect(std::string_view host) {

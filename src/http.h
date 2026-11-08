@@ -3,9 +3,13 @@
 
 #include <cstdint>
 
+#include "esp_http_server.h"
+
 namespace http {
 
 void start();
+
+bool fromBoardAddress(httpd_req_t* req);
 
 uint32_t serverStackFree();
 
