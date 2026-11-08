@@ -10,7 +10,7 @@ Served like the firmware serves them:
 - GET /             the page bundled by tools/build_web.py (gzip), rebuilt on every request;
 - POST /api/rpc     {"id", "method", "params"} -> {"id", "result"} or {"id", "error": {"code", "message"}};
 - GET /api/events   WebSocket (RFC 6455, text frames) carrying {"event", "data"};
-- POST /api/ota     a firmware image as application/octet-stream.
+- POST /api/ota     a firmware image as application/octet-stream, installed after the board button.
 
 The session is an HttpOnly, SameSite=Strict cookie set by auth.login. /api/rpc only accepts
 application/json and refuses a foreign Origin. A method that needs the board's button emits
@@ -1472,6 +1472,11 @@ class Handler(BaseHTTPRequestHandler):
         if not image or image[0] != 0xE9:
             mock.append_audit("ota", Context(token=None), {}, "invalid_argument")
             return self._error(400, "invalid_argument", "not an ESP32 app image (missing the 0xE9 magic byte)")
+        try:
+            mock.confirm("ota")
+        except RpcError as err:
+            mock.append_audit("ota", Context(token=None), {}, err.code)
+            return self._error(403, err.code, err.message)
         mock.append_audit("ota", Context(token=None), {}, "ok")
         threading.Timer(0.5, mock.events.disconnect).start()
         return self._json(200, {"result": {"bytes": len(image), "rebooting": True}})

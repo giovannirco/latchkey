@@ -45,6 +45,7 @@ const ACTION_TEXT = {
   'keys.import': 'Import a key backup',
   'auth.rotateTotp': 'Replace the authenticator secret',
   'system.factoryReset': 'Factory-reset the board',
+  ota: 'Install new firmware',
 };
 
 const FEATURE_TEXT = {
@@ -2604,12 +2605,19 @@ async function viewSystem(view) {
     progress.hidden = false;
     progress.max = file.size;
     progress.value = 0;
+    const sent = () => {
+      otaStatus.textContent = 'Uploaded. Press the button on the board to install it.';
+    };
     try {
-      await pending(upload, () => sendFirmware(file, progress));
+      await pending(upload, () => sendFirmware(file, progress, sent));
       progress.value = progress.max;
       otaStatus.textContent = 'Upload complete. The board is restarting into the new firmware.';
+      toast('Firmware uploaded. The board is restarting', { detail: 'This page reconnects when it is back.' });
     } catch (failure) {
+      otaStatus.textContent = '';
       showError(otaError, failure);
+    } finally {
+      boardButton.settle('ota');
     }
   });
   ota.body.append(
@@ -2763,7 +2771,7 @@ async function viewSystem(view) {
   });
 }
 
-function sendFirmware(file, progress) {
+function sendFirmware(file, progress, onSent) {
   return new Promise((resolve, reject) => {
     const request = new XMLHttpRequest();
     request.open('POST', '/api/ota');
@@ -2775,6 +2783,7 @@ function sendFirmware(file, progress) {
         progress.value = event.loaded;
       }
     });
+    request.upload.addEventListener('load', onSent);
     request.addEventListener('load', () => {
       let body = null;
       try {
