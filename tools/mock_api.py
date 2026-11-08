@@ -26,10 +26,17 @@ Test hooks used by tools/ui-tests/:
 - POST /__mock/control  {"reset": true} restores the demo state; other keys: "confirm" ("auto" or
   "never"), "confirmDelayMs", "confirmTimeoutMs", "latencyMs", "jobReplyDelayMs", "timeSynced",
   "expireSessions", "dropSockets" (closes every event socket), "setLock" {"id", fields} (changes a
-  lock without an event), "failNext" {"method", "code", "message"}, "delay" {"method", "ms"} (holds
-  the next reply), "scanExtra" [devices], "emit" [{"event", "data"}];
+  lock without an event), "failNext" {"method", "code", "message"}, "warnNext" {"method", "warning"}
+  (adds a warning to the next result), "delay" {"method", "ms"} (holds the next reply), "scanExtra"
+  [devices], "emit" [{"event", "data"}];
 - GET /__mock/calls     every RPC since the last reset, with secret parameters replaced by "***";
 - GET /__mock/health    readiness probe.
+
+Results may carry a "warning" the UI must show, as on the board: a name the board could not store,
+a pairing whose offline-code seeds were lost, or an easy passcode (a run or one repeated digit). Like
+the board, the methods that would store more names answer "storage_full" once its storage is down to
+what it keeps for pairing and the audit log, and the lists answer "too_large" when it lacks the memory
+to render them; failNext produces both.
 
 All state is in memory. Addresses are documentation values (RFC 5737 IPv4, RFC 7042 MAC).
 """
@@ -98,6 +105,11 @@ BASIC_FEATURES = ["passcode", "auto_lock", "manual_lock"]
 PASSCODE_TYPES = ("permanent", "timed", "one_time", "cyclic")
 HARDEN_STEPS = ("admin_passcode", "passcodes", "reset_button", "time")
 ADMIN_PASSCODE_DIGITS = 7
+IN_USE = "that code is already in use on the lock"
+EASY_CODE_WARNING = (
+    "this code is easy to guess; use 7 to 9 digits that are not a run or one repeated digit, since the lock "
+    "opens whenever the code appears among the digits typed"
+)
 HHMM = re.compile(r"^([01]\d|2[0-3]):[0-5]\d$")
 LOG_APP_UNLOCK = 1
 LOG_PASSCODE_UNLOCK = 4
@@ -161,6 +173,11 @@ def rpc(
 
 def now() -> int:
     return int(time.time())
+
+
+def is_easy_code(code: str) -> bool:
+    steps = {int(b) - int(a) for a, b in zip(code, code[1:])}
+    return len(steps) == 1 and steps <= {-1, 0, 1}
 
 
 def random_digits(count: int) -> str:
@@ -476,6 +493,7 @@ class Mock:
             self.failures = 0
             self.blocked_until = 0.0
             self.fail_next: dict[str, RpcError] = {}
+            self.warn_next: dict[str, str] = {}
             self.delay_next: dict[str, float] = {}
             self.calls: list[dict] = []
             self.audit: list[dict] = []
@@ -616,7 +634,7 @@ class Mock:
                     raise RpcError("unsupported", f"the lock does not report {method.feature}")
             if method.job:
                 return self._start_job(name, method, ctx, params)
-            result = method.handler(self, ctx, params)
+            result = self._warned(name, method.handler(self, ctx, params))
         except RpcError as err:
             if method.audited and generation == self.generation:
                 self.append_audit(name, ctx, params, err.code)
@@ -625,13 +643,20 @@ class Mock:
             self.append_audit(name, ctx, params, "ok")
         return result
 
+    def _warned(self, name: str, result: dict[str, Any]) -> dict[str, Any]:
+        with self.lock:
+            warning = self.warn_next.pop(name, None)
+        if warning:
+            result = {**result, "warning": f"{result['warning']}; {warning}" if result.get("warning") else warning}
+        return result
+
     def _start_job(self, name: str, method: Method, ctx: Context, params: dict) -> dict[str, Any]:
         job = new_id("job")
         generation = self.generation
 
         def run() -> None:
             try:
-                result = method.handler(self, ctx, params)
+                result = self._warned(name, method.handler(self, ctx, params))
             except RpcError as err:
                 if generation == self.generation:
                     if method.audited:
@@ -665,6 +690,8 @@ class Mock:
                 self.delay_next[body["delay"]["method"]] = int(body["delay"]["ms"]) / 1000
             if "timeSynced" in body:
                 config.time_synced = bool(body["timeSynced"])
+            if "warnNext" in body:
+                self.warn_next[body["warnNext"]["method"]] = body["warnNext"]["warning"]
             if "failNext" in body:
                 failure = body["failNext"]
                 self.fail_next[failure["method"]] = RpcError(failure["code"], failure.get("message", failure["code"]))
@@ -691,6 +718,8 @@ class Mock:
             "uptime": int(time.time() - self.started),
             "heap": {"free": 151552, "minFree": 98304},
             "time": {"utc": now() if synced else 0, "synced": synced},
+            "timezone": "UTC0",
+            "localTime": time.strftime("%Y-%m-%dT%H:%M:%S+00:00", time.gmtime()) if synced else None,
             "wifi": dict(self.wifi),
             "certFingerprint": CERT_FINGERPRINT,
         }
@@ -990,11 +1019,14 @@ class Mock:
             raise RpcError("unsupported", "this board cannot add cyclic passcodes yet")
         validity = None if kind == "permanent" else validity_param(params.get("validity"), required=True)
         entry = passcode(kind, name, validity, code=code)
-        if any(item["code"] == code for item in lock["passcodes"]):
-            raise RpcError("lock_error", "that passcode is already on the lock")
+        if code == lock["adminPasscode"] or any(item["code"] == code for item in lock["passcodes"]):
+            raise RpcError("lock_error", IN_USE)
         with self.radio():
             lock["passcodes"].append(entry)
-        return {"passcode": {**public_passcode(entry), "code": code}}
+        result: dict[str, Any] = {"passcode": {**public_passcode(entry), "code": code}}
+        if is_easy_code(code):
+            result["warning"] = EASY_CODE_WARNING
+        return result
 
     @rpc("lock.passcodes.update", feature="modify_passcode_function", job=True)
     def lock_passcodes_update(self, ctx: Context, params: dict) -> dict:
@@ -1003,8 +1035,9 @@ class Mock:
         changes: dict[str, Any] = {}
         if params.get("code") not in (None, ""):
             changes["code"] = digits_param(params["code"])
-            if any(item["code"] == changes["code"] and item is not entry for item in lock["passcodes"]):
-                raise RpcError("lock_error", "that passcode is already on the lock")
+            taken = any(item["code"] == changes["code"] and item is not entry for item in lock["passcodes"])
+            if taken or changes["code"] == lock["adminPasscode"]:
+                raise RpcError("lock_error", IN_USE)
             if changes["code"] != entry["code"]:
                 changes["id"] = new_id("pc")
         if "name" in params:
@@ -1013,7 +1046,10 @@ class Mock:
             changes["validity"] = validity_param(params["validity"], required=True)
         with self.radio():
             entry.update(changes)
-        return {"passcode": public_passcode(entry)}
+        result: dict[str, Any] = {"passcode": public_passcode(entry)}
+        if "code" in changes and is_easy_code(changes["code"]):
+            result["warning"] = EASY_CODE_WARNING
+        return result
 
     @rpc("lock.passcodes.delete", feature="passcode", job=True)
     def lock_passcodes_delete(self, ctx: Context, params: dict) -> dict:
@@ -1188,9 +1224,13 @@ class Mock:
         generated = supplied in (None, "")
         code = random_digits(ADMIN_PASSCODE_DIGITS) if generated else digits_param(supplied)
         self.confirm("lock.adminPasscode.set")
+        if any(item["code"] == code for item in lock["passcodes"]):
+            raise RpcError("lock_error", IN_USE)
         with self.radio():
             lock["adminPasscode"] = code
-        return {"code": code} if generated else {}
+        if generated:
+            return {"code": code}
+        return {"warning": EASY_CODE_WARNING} if is_easy_code(code) else {}
 
     @rpc("lock.adminPasscode.get", job=True)
     def lock_admin_passcode_get(self, ctx: Context, params: dict) -> dict:
