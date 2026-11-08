@@ -54,7 +54,7 @@ static void test_the_board_address_is_its_own_origin() {
 
 static void test_other_origins_are_not_the_board() {
     const char* refused[] = {
-        "http://192.0.2.63", "https://192.0.2.64", "https://192.0.2.63:8443", "https://192.0.2.63/",
+        "http://192.0.2.63", "httpx://192.0.2.63", "https://192.0.2.64", "https://192.0.2.63:8443", "https://192.0.2.63/",
         "https://rebind.attacker.example", "https://owner@192.0.2.63", "null", "", "https://",
     };
     for (const char* origin : refused) {
