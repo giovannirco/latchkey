@@ -12,9 +12,13 @@ namespace jobs {
 
 using Work = std::function<rpc::Reply(bool expired)>;
 
+using Task = std::function<void(bool expired)>;
+
 void start();
 
 std::optional<std::string> submit(std::optional<uint32_t> session, Work work);
+
+bool post(Task task);
 
 bool idle();
 

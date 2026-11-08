@@ -29,9 +29,7 @@ constexpr size_t kCapacity = 4;
 constexpr TickType_t kIdleWait = pdMS_TO_TICKS(1000);
 
 struct Job {
-    std::string id;
-    std::optional<uint32_t> session;
-    Work work;
+    Task run;
 };
 
 std::mutex s_mutex;
@@ -42,11 +40,11 @@ bool s_running = false;
 
 uint32_t nowMs() { return static_cast<uint32_t>(esp_timer_get_time() / 1000); }
 
-std::string doneLine(const Job& job, rpc::Reply reply) {
+std::string doneLine(const std::string& id, rpc::Reply reply) {
     cJSON* event = cJSON_CreateObject();
     cJSON_AddStringToObject(event, "event", "job.done");
     cJSON* data = cJSON_AddObjectToObject(event, "data");
-    cJSON_AddStringToObject(data, "job", job.id.c_str());
+    cJSON_AddStringToObject(data, "job", id.c_str());
     rpc::addOutcome(data, std::move(reply));
     char* text = cJSON_PrintUnformatted(event);
     cJSON_Delete(event);
@@ -60,13 +58,18 @@ std::string doneLine(const Job& job, rpc::Reply reply) {
 }
 
 void finish(Job* job, bool expired) {
-    std::string line = doneLine(*job, job->work(expired));
-    if (line.empty()) {
-        ESP_LOGE(TAG, "out of memory rendering the outcome of %s", job->id.c_str());
-    } else {
-        ws::deliver(job->session, std::move(line));
-    }
+    job->run(expired);
     delete job;
+}
+
+bool enqueue(Task run) {
+    Job* job = new (std::nothrow) Job{std::move(run)};
+    if (job == nullptr || !s_queue.push(job, nowMs())) {
+        delete job;
+        return false;
+    }
+    xTaskNotifyGive(s_task);
+    return true;
 }
 
 void worker(void*) {
@@ -106,13 +109,20 @@ std::optional<std::string> submit(std::optional<uint32_t> session, Work work) {
     std::lock_guard<std::mutex> lock(s_mutex);
     char id[16];
     std::snprintf(id, sizeof(id), "job-%08x", static_cast<unsigned>(s_nextId++));
-    Job* job = new (std::nothrow) Job{id, session, std::move(work)};
-    if (job == nullptr || !s_queue.push(job, nowMs())) {
-        delete job;
-        return std::nullopt;
-    }
-    xTaskNotifyGive(s_task);
-    return std::string(id);
+    const bool queued = enqueue([id = std::string(id), session, work = std::move(work)](bool expired) {
+        std::string line = doneLine(id, work(expired));
+        if (line.empty()) {
+            ESP_LOGE(TAG, "out of memory rendering the outcome of %s", id.c_str());
+        } else {
+            ws::deliver(session, std::move(line));
+        }
+    });
+    return queued ? std::optional<std::string>(id) : std::nullopt;
+}
+
+bool post(Task task) {
+    std::lock_guard<std::mutex> lock(s_mutex);
+    return enqueue(std::move(task));
 }
 
 bool idle() {
