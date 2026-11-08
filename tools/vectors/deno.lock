@@ -1,0 +1,16 @@
+{
+  "version": "5",
+  "specifiers": {
+    "npm:moment@2.29.1": "2.29.1"
+  },
+  "npm": {
+    "moment@2.29.1": {
+      "integrity": "sha512-kHmoybcPV8Sqy59DwNDY3Jefr64lK/by/da0ViFcuA4DH0vQg5Q6Ze5VimxkfQNSC+Mls/Kx53s7TjP1RhFEDQ=="
+    }
+  },
+  "workspace": {
+    "dependencies": [
+      "npm:moment@2.29.1"
+    ]
+  }
+}

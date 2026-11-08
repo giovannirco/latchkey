@@ -12,3 +12,5 @@ idf_component_register(
 target_compile_options(${COMPONENT_LIB} PRIVATE
     "$<$<COMPILE_LANGUAGE:CXX>:-std=gnu++20;-fno-exceptions;-fno-rtti>"
 )
+
+target_compile_definitions(${COMPONENT_LIB} PRIVATE CBC=1 ECB=0 CTR=0)

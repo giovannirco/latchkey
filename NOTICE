@@ -11,7 +11,45 @@ Protocol references
 - kind3r/ttlock-sdk-js, https://github.com/kind3r/ttlock-sdk-js
   License: GPL-3.0. Primary reference for the TTLock Bluetooth LE protocol.
   Code ported from it to C++ keeps its GPL-3.0 terms and credits it in the
-  ported file.
+  ported file: in components/ttlock, the frame codec, the advertisement
+  parser, the command builders and parsers, and the session flows.
+  tools/vectors/kind3r_vectors.ts runs its command classes (commit 8c84cda)
+  to generate test vectors.
 
 - roquerodrigo/ttlock-ble, https://github.com/roquerodrigo/ttlock-ble
-  License: MIT. Second reference, used to cross-check commands and frames.
+  Copyright (c) 2026 Rodrigo Roque. License: MIT. Second reference, used
+  to cross-check commands and frames and, through
+  tools/vectors/gen_vectors.py, to generate test vectors. Some parts of
+  components/ttlock follow its code, and each such file says so: the CRC
+  table quirk, the dormant advertisement bit, the passcode and card
+  listing layouts, the feature words, the operation-log record types, the
+  push events, and matching replies on the echoed opcode. Those parts are
+  used under its MIT license:
+
+    Permission is hereby granted, free of charge, to any person obtaining
+    a copy of this software and associated documentation files (the
+    "Software"), to deal in the Software without restriction, including
+    without limitation the rights to use, copy, modify, merge, publish,
+    distribute, sublicense, and/or sell copies of the Software, and to
+    permit persons to whom the Software is furnished to do so, subject to
+    the following conditions:
+
+    The above copyright notice and this permission notice shall be
+    included in all copies or substantial portions of the Software.
+
+    THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+    EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+    MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.
+    IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
+    CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT,
+    TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
+    SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+Third-party code
+
+- kokke/tiny-AES-c, https://github.com/kokke/tiny-AES-c
+  License: public domain (The Unlicense), see
+  components/ttlock/src/third_party/aes/unlicense.txt. aes.c, aes.h and
+  aes.hpp are vendored unmodified from commit
+  23856752fbd139da0b8ca6e471a13d5bcc99a08d and built for AES-128 with CBC
+  only (CBC=1, ECB=0, CTR=0).

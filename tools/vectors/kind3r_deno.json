@@ -1,0 +1,15 @@
+{
+  "imports": {
+    "moment": "npm:moment@2.29.1",
+    "crypto": "node:crypto"
+  },
+  "unstable": ["sloppy-imports"],
+  "fmt": {
+    "lineWidth": 120
+  },
+  "lint": {
+    "rules": {
+      "exclude": ["no-explicit-any"]
+    }
+  }
+}
