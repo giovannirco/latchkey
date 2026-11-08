@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
 #include <string>
 
@@ -18,6 +19,13 @@ struct LockKeys {
     uint32_t lockFlagPos = 0;
     uint64_t features = 0;
     std::string adminPasscode;
+};
+
+inline constexpr size_t kCodeSecretCount = 10;
+
+struct CodeSecret {
+    uint16_t code = 0;
+    uint64_t secret = 0;
 };
 
 struct DeviceInfo {

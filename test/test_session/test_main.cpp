@@ -376,7 +376,72 @@ static void test_pair_calibrates_the_lock_to_local_wall_time() {
     assertPayload(Bytes{25, 11, 7, 11, 0, 0}, rig.lock.requests()[3]);
 }
 
-static void assertInitPasswordsYear(int64_t utc, int32_t offset, uint8_t year) {
+static ttlock::CodeSecret seedInFrame(const Bytes& payload, size_t index) {
+    const uint8_t* combo = payload.data() + 1 + index * 6;
+    ttlock::CodeSecret seed;
+    seed.code = static_cast<uint16_t>(combo[0] << 4 | combo[1] >> 4);
+    seed.secret = static_cast<uint64_t>(combo[1] & 0x0F) << 32 | static_cast<uint64_t>(combo[2]) << 24 |
+                  static_cast<uint64_t>(combo[3]) << 16 | static_cast<uint64_t>(combo[4]) << 8 | combo[5];
+    return seed;
+}
+
+static void assertSeedsAreTheOnesSent(const ttlock::PairResult& result, const fake::Request& request) {
+    TEST_ASSERT_EQUAL_HEX8(cmd::kInitPasswords, request.command);
+    TEST_ASSERT_EQUAL_UINT(1 + ttlock::kCodeSecretCount * 6, request.payload.size());
+    TEST_ASSERT_EQUAL_UINT8(result.passcodeSeedYear % 100, request.payload[0]);
+    for (size_t i = 0; i < ttlock::kCodeSecretCount; ++i) {
+        const ttlock::CodeSecret sent = seedInFrame(request.payload, i);
+        TEST_ASSERT_EQUAL_UINT16(sent.code, result.passcodeSeeds[i].code);
+        TEST_ASSERT_EQUAL_UINT64(sent.secret, result.passcodeSeeds[i].secret);
+    }
+}
+
+static void test_pair_returns_the_offline_passcode_seeds_it_sent() {
+    Rig rig;
+    load(rig.lock, pairingSteps(kAllOptionalReads));
+    ttlock::LockKeys keys;
+    Persisted persisted;
+    assertStatus(Status::Ok, pair(rig, keys, persisted));
+    TEST_ASSERT_EQUAL_UINT16(2025, persisted.result.passcodeSeedYear);
+    TEST_ASSERT_TRUE(persisted.result.passcodeSeedsConfirmed);
+    assertSeedsAreTheOnesSent(persisted.result, rig.lock.requests()[indexOf(rig.lock, cmd::kInitPasswords)]);
+    size_t nonZero = 0;
+    for (const ttlock::CodeSecret& seed : persisted.result.passcodeSeeds) {
+        TEST_ASSERT_TRUE(seed.code < 1071);
+        TEST_ASSERT_TRUE(seed.secret < 10000000000ULL);
+        nonZero += seed.secret != 0 ? 1 : 0;
+    }
+    TEST_ASSERT_EQUAL_UINT(ttlock::kCodeSecretCount, nonZero);
+}
+
+static void test_refused_seeds_are_returned_unconfirmed() {
+    Rig rig;
+    std::vector<PairStep> steps = pairingSteps(bits({Feature::Passcode}));
+    stepFor(steps, cmd::kInitPasswords).replies = {failure(kLockKey, cmd::kInitPasswords, 0x04)};
+    load(rig.lock, std::move(steps));
+    ttlock::LockKeys keys;
+    Persisted persisted;
+    assertStatus(Status::PairIncomplete, pair(rig, keys, persisted));
+    TEST_ASSERT_FALSE(persisted.result.passcodeSeedsConfirmed);
+    TEST_ASSERT_EQUAL_UINT16(2025, persisted.result.passcodeSeedYear);
+    assertSeedsAreTheOnesSent(persisted.result, rig.lock.requests().back());
+
+    Rig early;
+    std::vector<PairStep> before = pairingSteps(bits({Feature::Passcode}));
+    stepFor(before, cmd::kSearchDeviceFeature).replies = {failure(kLockKey, cmd::kSearchDeviceFeature, 0x04)};
+    load(early.lock, std::move(before));
+    ttlock::LockKeys earlyKeys;
+    Persisted earlyPersisted;
+    assertStatus(Status::PairIncomplete, pair(early, earlyKeys, earlyPersisted));
+    TEST_ASSERT_FALSE(earlyPersisted.result.passcodeSeedsConfirmed);
+    TEST_ASSERT_EQUAL_UINT16(0, earlyPersisted.result.passcodeSeedYear);
+    for (const ttlock::CodeSecret& seed : earlyPersisted.result.passcodeSeeds) {
+        TEST_ASSERT_EQUAL_UINT16(0, seed.code);
+        TEST_ASSERT_EQUAL_UINT64(0, seed.secret);
+    }
+}
+
+static void assertInitPasswordsYear(int64_t utc, int32_t offset, uint16_t year) {
     Rig rig;
     rig.clock.utc = utc;
     rig.clock.offset = offset;
@@ -387,7 +452,9 @@ static void assertInitPasswordsYear(int64_t utc, int32_t offset, uint8_t year) {
     const fake::Request& request = rig.lock.requests()[6];
     TEST_ASSERT_EQUAL_HEX8(cmd::kInitPasswords, request.command);
     TEST_ASSERT_EQUAL_UINT(1 + 10 * 6, request.payload.size());
-    TEST_ASSERT_EQUAL_UINT8(year, request.payload[0]);
+    TEST_ASSERT_EQUAL_UINT8(year % 100, request.payload[0]);
+    TEST_ASSERT_EQUAL_UINT16(year, persisted.result.passcodeSeedYear);
+    assertSeedsAreTheOnesSent(persisted.result, request);
     for (size_t i = 0; i < 10; ++i) {
         const uint8_t* combo = request.payload.data() + 1 + i * 6;
         const unsigned code = static_cast<unsigned>(combo[0]) << 4 | combo[1] >> 4;
@@ -399,10 +466,10 @@ static void assertInitPasswordsYear(int64_t utc, int32_t offset, uint8_t year) {
 }
 
 static void test_init_passwords_uses_the_local_year_except_on_new_years_day() {
-    assertInitPasswordsYear(1762524000, -3 * 3600, 25);
-    assertInitPasswordsYear(1767236400, -3 * 3600, 25);
-    assertInitPasswordsYear(1767236400, 0, 25);
-    assertInitPasswordsYear(1767322800, -3 * 3600, 26);
+    assertInitPasswordsYear(1762524000, -3 * 3600, 2025);
+    assertInitPasswordsYear(1767236400, -3 * 3600, 2025);
+    assertInitPasswordsYear(1767236400, 0, 2025);
+    assertInitPasswordsYear(1767322800, -3 * 3600, 2026);
 }
 
 static void test_link_drop_after_add_admin_is_pair_incomplete_with_keys_persisted() {
@@ -1896,6 +1963,8 @@ int main() {
     RUN_TEST(test_random_draws_reject_the_biased_tail);
     RUN_TEST(test_pair_calibrates_the_lock_to_local_wall_time);
     RUN_TEST(test_init_passwords_uses_the_local_year_except_on_new_years_day);
+    RUN_TEST(test_pair_returns_the_offline_passcode_seeds_it_sent);
+    RUN_TEST(test_refused_seeds_are_returned_unconfirmed);
     RUN_TEST(test_link_drop_after_add_admin_is_pair_incomplete_with_keys_persisted);
     RUN_TEST(test_add_admin_without_a_reply_persists_and_is_pair_incomplete);
     RUN_TEST(test_add_admin_without_the_sciener_echo_is_pair_incomplete);

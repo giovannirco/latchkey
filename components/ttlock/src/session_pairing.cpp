@@ -195,7 +195,7 @@ Status Session::finishPairing(const std::string& chosenPasscode, const std::func
     } else if (status != Status::Timeout) {
         return status;
     }
-    status = initPasswords();
+    status = initPasswords(result);
     if (status != Status::Ok) {
         return status;
     }
@@ -208,7 +208,7 @@ Status Session::finishPairing(const std::string& chosenPasscode, const std::func
     return request(command::kOperateFinished, noPayload(), data);
 }
 
-Status Session::initPasswords() {
+Status Session::initPasswords(PairResult& result) {
     const LockTime now = localNow();
     const bool newYearsDay = now.month == 1 && now.day == 1;
     const uint16_t year = newYearsDay ? static_cast<uint16_t>(now.year - 1) : now.year;
@@ -219,8 +219,13 @@ Status Session::initPasswords() {
             seed.secret = seed.secret * kDigitBound + uniformBelow(kDigitBound);
         }
     }
+    result.passcodeSeedYear = year;
+    result.passcodeSeeds = seeds;
     Bytes data;
-    return request(command::kInitPasswords, buildInitPasswords(static_cast<uint8_t>(year % 100), seeds), data);
+    const Status status =
+        request(command::kInitPasswords, buildInitPasswords(static_cast<uint8_t>(year % 100), seeds), data);
+    result.passcodeSeedsConfirmed = status == Status::Ok;
+    return status;
 }
 
 }

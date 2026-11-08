@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #pragma once
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <functional>
@@ -32,6 +33,9 @@ using PersistCallback = std::function<void(const LockKeys&)>;
 struct PairResult {
     bool timeCalibrated = false;
     bool adminPasscodeConfirmed = false;
+    bool passcodeSeedsConfirmed = false;
+    uint16_t passcodeSeedYear = 0;
+    std::array<CodeSecret, kCodeSecretCount> passcodeSeeds{};
 };
 
 struct PairOptions {
@@ -136,7 +140,7 @@ private:
     Status fetchAesKey();
     Status addAdmin();
     Status finishPairing(const std::string& chosenPasscode, const std::function<void()>& persist, PairResult& result);
-    Status initPasswords();
+    Status initPasswords(PairResult& result);
     Status controlLock(uint8_t command, OperationResult& out);
     Status enroll(bool fingerprint, const Validity& validity, const EnrollCallback& progress, uint64_t& id);
     Status switchGet(Feature feature, uint32_t item, bool& enabled);
