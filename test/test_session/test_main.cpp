@@ -1365,7 +1365,6 @@ static void test_admin_passcode_get_logs_in_and_reads_get_admin_code() {
     TEST_ASSERT_EQUAL_STRING(k3a::kAdminCodeTrailedKind3r, code.c_str());
     assertCommands({cmd::kCheckAdmin, cmd::kCheckRandom, cmd::kGetAdminCode}, rig.lock);
     TEST_ASSERT_EQUAL_UINT(k3::kGetAdminCodePayloadSize, rig.lock.requests()[2].payload.size());
-    TEST_ASSERT_EQUAL_STRING("3141592", rig.session.keys().adminPasscode.c_str());
 
     Rig none;
     attach(none);
@@ -1375,6 +1374,7 @@ static void test_admin_passcode_get_logs_in_and_reads_get_admin_code() {
     code = "unchanged";
     assertStatus(Status::Ok, none.session.adminPasscodeGet(code));
     TEST_ASSERT_TRUE(code.empty());
+    TEST_ASSERT_EQUAL_STRING(pairedKeys().adminPasscode.c_str(), none.session.keys().adminPasscode.c_str());
 }
 
 static void test_admin_passcode_get_failures() {
