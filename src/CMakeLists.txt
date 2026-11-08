@@ -2,17 +2,21 @@
 idf_component_register(
     SRCS
         "audit.cpp"
+        "ble_central.cpp"
         "board.cpp"
         "clock.cpp"
         "console.cpp"
         "events.cpp"
+        "lock_manager.cpp"
         "main.cpp"
+        "methods_locks.cpp"
         "methods_system.cpp"
         "rpc.cpp"
         "store.cpp"
         "wifi.cpp"
     INCLUDE_DIRS "."
     PRIV_REQUIRES
+        bt
         esp_app_format
         esp_driver_gpio
         esp_driver_uart
@@ -25,5 +29,6 @@ idf_component_register(
         lwip
         mbedtls
         nvs_flash
+        ttlock
         vfs
 )

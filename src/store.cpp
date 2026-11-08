@@ -14,6 +14,8 @@ namespace {
 constexpr const char* kCfgNamespace = "cfg";
 constexpr const char* kAuthNamespace = "auth";
 constexpr const char* kAuditNamespace = "audit";
+constexpr const char* kLocksNamespace = "locks";
+constexpr size_t kLockKeySize = 13;
 
 class Handle {
 public:
@@ -70,6 +72,21 @@ esp_err_t eraseNamespace(const char* name) {
 
 void slotKey(uint32_t seq, char (&key)[8]) {
     std::snprintf(key, sizeof(key), "e%03u", static_cast<unsigned>(seq % audit::kCapacity));
+}
+
+bool lockKey(const char* mac, char (&key)[kLockKeySize]) {
+    size_t length = 0;
+    for (const char* c = mac; *c != '\0'; ++c) {
+        if (*c == ':') {
+            continue;
+        }
+        if (length + 1 >= sizeof(key)) {
+            return false;
+        }
+        key[length++] = *c;
+    }
+    key[length] = '\0';
+    return length == sizeof(key) - 1;
 }
 
 }
@@ -182,6 +199,108 @@ esp_err_t saveOwner(const Owner& owner) {
 }
 
 esp_err_t erase() { return eraseNamespace(kAuthNamespace); }
+
+}
+
+namespace locks {
+
+namespace {
+
+template <size_t N>
+void terminate(char (&field)[N]) {
+    field[N - 1] = '\0';
+}
+
+void terminateStrings(Record& record) {
+    terminate(record.mac);
+    terminate(record.name);
+    terminate(record.adminPasscode);
+    terminate(record.model);
+    terminate(record.hardware);
+    terminate(record.firmware);
+    terminate(record.manufactureDate);
+}
+
+}
+
+esp_err_t list(std::vector<Record>& out) {
+    Handle handle(kLocksNamespace, NVS_READONLY);
+    if (handle.error() == ESP_ERR_NVS_NOT_FOUND) {
+        out.clear();
+        return ESP_OK;
+    }
+    if (!handle.ok()) {
+        return handle.error();
+    }
+    std::vector<Record> records;
+    nvs_iterator_t entry = nullptr;
+    esp_err_t error = nvs_entry_find_in_handle(handle.get(), NVS_TYPE_BLOB, &entry);
+    while (error == ESP_OK) {
+        nvs_entry_info_t info{};
+        nvs_entry_info(entry, &info);
+        Record record;
+        size_t length = sizeof(record);
+        if (nvs_get_blob(handle.get(), info.key, &record, &length) == ESP_OK && length == sizeof(record) &&
+            record.version == kRecordVersion) {
+            terminateStrings(record);
+            records.push_back(record);
+        }
+        error = nvs_entry_next(&entry);
+    }
+    nvs_release_iterator(entry);
+    if (error != ESP_ERR_NVS_NOT_FOUND) {
+        return error;
+    }
+    out = std::move(records);
+    return ESP_OK;
+}
+
+esp_err_t count(size_t& out) {
+    size_t entries = 0;
+    nvs_iterator_t entry = nullptr;
+    esp_err_t error = nvs_entry_find(NVS_DEFAULT_PART_NAME, kLocksNamespace, NVS_TYPE_ANY, &entry);
+    while (error == ESP_OK) {
+        ++entries;
+        error = nvs_entry_next(&entry);
+    }
+    nvs_release_iterator(entry);
+    if (error != ESP_ERR_NVS_NOT_FOUND) {
+        return error;
+    }
+    out = entries;
+    return ESP_OK;
+}
+
+esp_err_t save(const Record& record) {
+    char key[kLockKeySize];
+    if (!lockKey(record.mac, key)) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    Handle handle(kLocksNamespace, NVS_READWRITE);
+    if (!handle.ok()) {
+        return handle.error();
+    }
+    const esp_err_t error = nvs_set_blob(handle.get(), key, &record, sizeof(record));
+    return error == ESP_OK ? nvs_commit(handle.get()) : error;
+}
+
+esp_err_t erase(const char* mac) {
+    char key[kLockKeySize];
+    if (!lockKey(mac, key)) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    Handle handle(kLocksNamespace, NVS_READWRITE);
+    if (!handle.ok()) {
+        return handle.error();
+    }
+    const esp_err_t error = nvs_erase_key(handle.get(), key);
+    if (error != ESP_OK && error != ESP_ERR_NVS_NOT_FOUND) {
+        return error;
+    }
+    return nvs_commit(handle.get());
+}
+
+esp_err_t eraseAll() { return eraseNamespace(kLocksNamespace); }
 
 }
 

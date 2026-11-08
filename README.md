@@ -89,12 +89,24 @@ sh tools/ui-tests/run.sh                                            # web UI: bu
 
 The console speaks JSON lines: send one request per line, `{"id": 1, "method": "system.info", "params": {}}`, and read one line per reply, `{"id": 1, "result": {...}}` or `{"id": 1, "error": {"code": "...", "message": "..."}}`. Events arrive as `{"event": "...", "data": {...}}` lines. Every log line of the application starts with `#`, the first one being `# latchkey <fw-version> board=<board> chip=<chip> idf=<idf-version>`; the ROM and bootloader lines before it are plain text, and the CLI skips every line that is not a JSON object. Requests over the console count as physical presence: they need no session and no button press. `system.setup` (claim the board: Wi-Fi with a static IP and the owner password; returns the TOTP `otpauth://` URI once) and `system.time.set` are accepted only there. The owner password is stored as PBKDF2-HMAC-SHA256 with a random 16-byte salt. The iteration count is calibrated to about 1 s on the classic ESP32 at 160 MHz (4400 iterations, about 0.6 s on the ESP32-S3) and stored with the hash, so a later firmware can raise it without breaking an existing claim. Requests nested deeper than 8 arrays or objects are refused before parsing.
 
+## Locks
+
+The board is a Bluetooth LE central for TTLock locks (service `0x1910`, protocol 3). Lock methods take `{"lock": "<MAC>"}`, the address `locks.list` reports as `id`:
+
+- `locks.scan {"seconds": 1-30}` answers `{"seconds"}` at once and streams one `scan.result {mac, name, rssi, paired, lock?}` event per lock it hears.
+- `locks.pair {"mac", "name"?, "wait"?}` waits up to `wait` seconds (default 30, at most 600) for that lock to advertise, then pairs it. A factory-fresh lock advertises for about 15 s after a touch on its keypad. The keys are stored in the NVS `locks` namespace the moment the lock accepts the board as its admin, and again when pairing ends.
+- `locks.list`, `locks.rename {"lock", "name"}` and `locks.forget` (drops the keys on the board only) need no Bluetooth.
+- `lock.status`, `lock.info`, `lock.features`, `lock.unlock`, `lock.lock`, `lock.time.sync` and `lock.factoryReset` connect to the lock. Unlock and lock emit `lock.state` and `lock.event`, and keep the link for 25 s for the events the lock pushes.
+
+One worker runs every lock job in the order they arrive; a job that waits more than 60 s fails with `busy`. Between jobs the board tracks its stored locks from their adverts and emits `lock.state` when the state or the battery changes. `locks.pair` and `lock.factoryReset` will need the board's button from the web; over serial they run at once. `system.factoryReset` also erases the lock keys, and refuses with `locks_paired` while any lock is stored unless it gets `{"force": true}`. `system.log.set {"tag", "level"}` (serial only) sets a log tag's level: `{"tag": "ble", "level": "debug"}` logs the length and CRC check of every frame, never its content.
+
 ```sh
 uv run -q --no-project --python 3.14 --with pyserial==3.5 python -I tools/latchkey_cli.py --port <port> system.info
-uv run -q --no-project --python 3.14 --with pytest==9.1.1 --with pyserial==3.5 pytest tools/hil -k system --port <port>
+uv run -q --no-project --python 3.14 --with pytest==9.1.1 --with pyserial==3.5 pytest tools/hil/test_system.py --port <port>
+uv run -q --no-project --python 3.14 --with pytest==9.1.1 --with pyserial==3.5 pytest tools/hil/test_lock_core.py -s --port <port> --touch-file <path>
 ```
 
-`tools/latchkey_cli.py` reads params as a JSON argument or from stdin with `-`. The hardware-in-the-loop suite in `tools/hil/` factory-resets the board it runs on and reads the Wi-Fi settings, the owner password and each board's static IP from the gitignored `secrets.local.json` (shape in `secrets.example.json`).
+`tools/latchkey_cli.py` reads params as a JSON argument or from stdin with `-`. The hardware-in-the-loop suites in `tools/hil/` read the Wi-Fi settings, the owner password, each board's static IP and the lock's address (`lock_mac`) from the gitignored `secrets.local.json` (shape in `secrets.example.json`). `test_system.py` factory-resets the board it runs on, and skips those tests on a board that holds lock keys. `test_lock_core.py` pairs the lock only on an ESP32-S3 that holds no keys for it, writing the UTC time into the `--touch-file` while someone must touch the keypad, and keeps the lock paired; on any other board it only scans. It factory-resets the lock only with `--allow-lock-reset`.
 
 `sdkconfig.<env>` is generated and not tracked. After editing `sdkconfig.defaults` or `sdkconfig.defaults.<target>`, delete `sdkconfig.<env>` and `.pio/build/<env>`. After adding source files to a component or dependencies to `src/idf_component.yml`, delete `.pio/build/<env>`: PlatformIO does not re-run the CMake configure for those changes.
 

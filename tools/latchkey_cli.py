@@ -23,6 +23,8 @@ READ_CHUNK = 4096
 WRITE_TIMEOUT_S = 5.0
 USB_MODEM_PREFIX = "/dev/cu.usbmodem"
 
+EventHook = Callable[[dict[str, Any]], None]
+
 
 class LatchkeyError(Exception):
     def __init__(self, method: str, code: str, message: str) -> None:
@@ -46,6 +48,9 @@ class Console:
         self.next_id = 1
         self.events: list[dict[str, Any]] = []
         self.lines: list[str] = []
+        self.reply_ids: list[Any] = []
+        self.methods: dict[int, str] = {}
+        self.unclaimed: list[dict[str, Any]] = []
 
     def __enter__(self) -> Self:
         return self.open()
@@ -87,17 +92,31 @@ class Console:
                 if not self._reopen(deadline):
                     raise ConsoleTimeout(f"{self.port} did not come back within 15 s") from None
 
-    def request(self, method: str, params: dict[str, Any] | None = None, timeout: float = 10.0) -> dict[str, Any]:
+    def start(self, method: str, params: dict[str, Any] | None = None) -> int:
         request_id = self.next_id
         self.next_id += 1
         payload: dict[str, Any] = {"id": request_id, "method": method}
         if params is not None:
             payload["params"] = params
+        self.methods[request_id] = method
         self.send_line(json.dumps(payload, separators=(",", ":")))
-        reply = self._wait_reply(lambda message: message.get("id") == request_id, timeout)
+        return request_id
+
+    def finish(self, request_id: int, timeout: float = 10.0, on_event: EventHook | None = None) -> dict[str, Any]:
+        reply = self._wait_reply(lambda message: message.get("id") == request_id, timeout, on_event)
         if reply is None:
+            method = self.methods.get(request_id, "request")
             raise ConsoleTimeout(f"no reply to {method} (id {request_id}) within {timeout:.0f} s")
         return reply
+
+    def request(
+        self,
+        method: str,
+        params: dict[str, Any] | None = None,
+        timeout: float = 10.0,
+        on_event: EventHook | None = None,
+    ) -> dict[str, Any]:
+        return self.finish(self.start(method, params), timeout, on_event)
 
     def request_raw(self, text: str, reply_id: int | str | None = None, timeout: float = 10.0) -> dict[str, Any]:
         self.send_line(text)
@@ -106,8 +125,14 @@ class Console:
             raise ConsoleTimeout(f"no reply to a raw line within {timeout:.0f} s")
         return reply
 
-    def call(self, method: str, params: dict[str, Any] | None = None, timeout: float = 10.0) -> Any:
-        reply = self.request(method, params, timeout)
+    def call(
+        self,
+        method: str,
+        params: dict[str, Any] | None = None,
+        timeout: float = 10.0,
+        on_event: EventHook | None = None,
+    ) -> Any:
+        reply = self.request(method, params, timeout, on_event)
         if "error" in reply:
             error = reply["error"]
             raise LatchkeyError(method, error.get("code", ""), error.get("message", ""))
@@ -143,17 +168,42 @@ class Console:
                 raise ConsoleTimeout(f"timed out after {timeout:.0f} s waiting for {what}")
             time.sleep(1.0)
 
-    def _wait_reply(self, matches: Callable[[dict[str, Any]], bool], timeout: float) -> dict[str, Any] | None:
+    def wait_event(self, matches: Callable[[dict[str, Any]], bool], timeout: float) -> dict[str, Any] | None:
         deadline = time.monotonic() + timeout
         while True:
             line = self._read_line(deadline)
             if line is None:
                 return None
             message = self._classify(line)
-            if message is None or "event" in message:
+            if message is None:
+                continue
+            if "event" not in message:
+                self.unclaimed.append(message)
+            elif matches(message):
+                return message
+
+    def _wait_reply(
+        self, matches: Callable[[dict[str, Any]], bool], timeout: float, on_event: EventHook | None = None
+    ) -> dict[str, Any] | None:
+        for index, message in enumerate(self.unclaimed):
+            if matches(message):
+                return self.unclaimed.pop(index)
+        deadline = time.monotonic() + timeout
+        while True:
+            line = self._read_line(deadline)
+            if line is None:
+                return None
+            message = self._classify(line)
+            if message is None:
+                continue
+            if "event" in message:
+                if on_event is not None:
+                    on_event(message)
                 continue
             if matches(message):
                 return message
+            if message.get("id") is not None:
+                self.unclaimed.append(message)
 
     def _classify(self, line: str) -> dict[str, Any] | None:
         self.lines.append(line)
@@ -169,6 +219,8 @@ class Console:
             return None
         if "event" in message:
             self.events.append(message)
+        elif "id" in message:
+            self.reply_ids.append(message["id"])
         return message
 
     def _read_line(self, deadline: float) -> str | None:

@@ -84,9 +84,16 @@ def audit_entries(console: Console) -> list[dict[str, Any]]:
             return entries
 
 
+def held_locks(console: Console) -> list[dict[str, Any]]:
+    reply = console.request("locks.list")
+    return reply.get("result", {}).get("locks", [])
+
+
 @pytest.fixture
 def fresh(console: Console) -> list[str]:
     console.wait_ready()
+    if held_locks(console):
+        pytest.skip("the board holds lock keys, which a factory reset would erase")
     console.lines.clear()
     console.events.clear()
     console.call_and_wait_restart("system.factoryReset")
@@ -112,12 +119,31 @@ def test_info_reports_identity(console: Console, fresh: list[str]) -> None:
     assert re.fullmatch(r"\d+\.\d+\.\d+", info["idf"])
     assert info["heap"]["free"] > 50_000
     assert 0 < info["heap"]["min_free"] <= info["heap"]["free"]
+    assert 0 < info["heap"]["largest_block"] <= info["heap"]["free"]
     assert info["uptime_ms"] > 0
     assert info["claimed"] is False
     assert info["wifi"] == {"configured": False, "connected": False, "ssid": None, "ip": None, "rssi": None}
     assert info["button"]["gpio"] == button
     assert info["time_synced"] is False
     assert info["utc"] is None
+
+
+def test_bluetooth_comes_up_idle(console: Console, fresh: list[str]) -> None:
+    info = console.wait_info(lambda state: state["ble"]["ready"], 15.0, "the Bluetooth host to sync")
+    assert info["ble"]["connected"] is False
+    assert info["ble"]["scanning"] is False
+    assert info["ble"]["bad_crc"] == 0
+    assert console.call("locks.list") == {"locks": []}
+
+
+def test_factory_reset_takes_force_as_a_boolean(console: Console, fresh: list[str]) -> None:
+    started = time.monotonic()
+    uptime = console.call("system.info")["uptime_ms"]
+    assert error_code(console, "system.factoryReset", {"force": "yes"}) == "invalid_params"
+    assert error_code(console, "system.factoryReset", {"force": 1}) == "invalid_params"
+    elapsed_ms = (time.monotonic() - started) * 1000.0
+    grown = console.call("system.info")["uptime_ms"] - uptime
+    assert grown >= elapsed_ms - 1000.0, "the board restarted"
 
 
 def is_json_object(line: str) -> bool:

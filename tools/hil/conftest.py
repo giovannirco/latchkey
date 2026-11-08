@@ -33,6 +33,18 @@ def hide(value: Any) -> Any:
 def pytest_addoption(parser: pytest.Parser) -> None:
     parser.addoption("--port", action="store", default=None, help="serial port of the board under test")
     parser.addoption("--console-log", action="store", default=None, help="file that receives every console line")
+    parser.addoption(
+        "--touch-file",
+        action="store",
+        default=None,
+        help="file the pairing test writes (UTC time) while someone must touch the lock's keypad",
+    )
+    parser.addoption(
+        "--allow-lock-reset",
+        action="store_true",
+        default=False,
+        help="let the lock suite factory-reset the paired lock",
+    )
 
 
 @pytest.fixture(scope="session")
@@ -60,3 +72,22 @@ def console(request: pytest.FixtureRequest) -> Iterator[Console]:
 def board_settings(console: Console, secrets: dict[str, Any]) -> dict[str, Any]:
     chip = console.wait_ready()["chip"]
     return secrets["boards"][chip]
+
+
+@pytest.fixture(scope="session")
+def lock_mac(secrets: dict[str, Any]) -> str:
+    mac = secrets.get("lock_mac")
+    if not mac:
+        pytest.fail(f"{SECRETS.name} has no lock_mac")
+    return Private(mac.upper())
+
+
+@pytest.fixture(scope="session")
+def touch_file(request: pytest.FixtureRequest) -> Path | None:
+    path = request.config.getoption("--touch-file")
+    return Path(path) if path else None
+
+
+@pytest.fixture(scope="session")
+def allow_lock_reset(request: pytest.FixtureRequest) -> bool:
+    return bool(request.config.getoption("--allow-lock-reset"))
