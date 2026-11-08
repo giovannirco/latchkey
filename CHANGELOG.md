@@ -7,7 +7,11 @@ Notable changes to Latchkey, in the format of [Keep a Changelog](https://keepach
 
 ### Added
 
-- Home Assistant over MQTT, off until configured with `mqtt.set` (`mqtt.get` never returns the password): plain MQTT over TCP with a retained availability topic and last will, retained discovery configs for each stored lock (lock, battery, last event, Bluetooth link, unlock alert), state, battery and last event after each lock event, a status read after boot and every 6 hours, `LOCK` and `UNLOCK` through the web job queue, audited with the source `mqtt`, retained commands ignored, the configs of a forgotten lock removed, and reconnects that wait from 1 s up to 2 min. `system.info.stackFree` reports `mqtt` and `mqttClient`.
+- Home Assistant over MQTT, off until configured with `mqtt.set`: plain MQTT over TCP with a retained availability topic and last will, retained discovery configs for each stored lock (lock, battery, last event, Bluetooth link, unlock alert), state, battery and last event after each lock event, a status read after boot and every 6 hours (one lock at a time, only while no web job waits), `LOCK` and `UNLOCK` on each held lock's own `set` topic through the web job queue (one queued command per lock), every command that runs audited with the source `mqtt` and refusals counted into at most one entry a minute per kind, retained commands ignored, the entities of a forgotten lock, a stale lock, an old prefix or broker, and of a factory-reset board removed, and reconnects that wait from 1 s up to 2 min. `mqtt.get` never returns the password and reports `connected` and `problem`; a new host, port or username clears the stored password unless a new one is given. `system.info.stackFree` reports `mqtt` and `mqttClient`.
+
+### Fixed
+
+- `audit.list` renders its page one entry at a time and replies no longer keep their JSON tree while the text is copied: a page of 50 entries, as the web UI's Audit page asks for, took about 34 KB of heap on the classic ESP32 at its peak.
 
 ## [0.1.0] - 2026-11-08
 
