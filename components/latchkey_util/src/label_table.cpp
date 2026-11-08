@@ -4,6 +4,8 @@
 #include <algorithm>
 #include <utility>
 
+#include "big_endian.h"
+
 namespace latchkey_util {
 
 namespace {
@@ -18,20 +20,6 @@ bool saysSomething(const Label& label) { return label.managed || !label.name.emp
 
 bool isStorable(const Label& label) {
     return label.name.size() <= kMaxLabelNameBytes && (!label.cycle.has_value() || isWeeklyWindow(*label.cycle));
-}
-
-void appendBe(std::vector<uint8_t>& out, uint64_t value, size_t width) {
-    for (size_t i = width; i > 0; --i) {
-        out.push_back(static_cast<uint8_t>(value >> (8 * (i - 1))));
-    }
-}
-
-uint64_t readBe(const uint8_t* data, size_t width) {
-    uint64_t value = 0;
-    for (size_t i = 0; i < width; ++i) {
-        value = value << 8 | data[i];
-    }
-    return value;
 }
 
 class Reader {
@@ -70,7 +58,7 @@ bool readLabel(Reader& reader, Label& out) {
         return false;
     }
     Label label;
-    label.id = readBe(head, kIdSize);
+    label.id = big_endian::read(head, kIdSize);
     label.managed = (flags & kManaged) != 0;
     label.name.assign(reinterpret_cast<const char*>(name), nameSize);
     if ((flags & kCycled) != 0) {
@@ -78,8 +66,8 @@ bool readLabel(Reader& reader, Label& out) {
         if (!reader.take(kCycleSize, cycle)) {
             return false;
         }
-        label.cycle = WeeklyWindow{cycle[0], static_cast<uint16_t>(readBe(cycle + 1, 2)),
-                                   static_cast<uint16_t>(readBe(cycle + 3, 2))};
+        label.cycle = WeeklyWindow{cycle[0], static_cast<uint16_t>(big_endian::read(cycle + 1, 2)),
+                                   static_cast<uint16_t>(big_endian::read(cycle + 3, 2))};
     }
     if (!saysSomething(label) || !isStorable(label)) {
         return false;
@@ -142,14 +130,14 @@ const std::vector<Label>& LabelTable::entries() const { return labels_; }
 std::vector<uint8_t> LabelTable::encode() const {
     std::vector<uint8_t> out{kVersion, static_cast<uint8_t>(labels_.size())};
     for (const Label& label : labels_) {
-        appendBe(out, label.id, kIdSize);
+        big_endian::append(out, label.id, kIdSize);
         out.push_back(static_cast<uint8_t>((label.managed ? kManaged : 0) | (label.cycle.has_value() ? kCycled : 0)));
         out.push_back(static_cast<uint8_t>(label.name.size()));
         out.insert(out.end(), label.name.begin(), label.name.end());
         if (label.cycle.has_value()) {
             out.push_back(label.cycle->days);
-            appendBe(out, label.cycle->startMinute, 2);
-            appendBe(out, label.cycle->endMinute, 2);
+            big_endian::append(out, label.cycle->startMinute, 2);
+            big_endian::append(out, label.cycle->endMinute, 2);
         }
     }
     return out;
