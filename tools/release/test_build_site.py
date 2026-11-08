@@ -41,6 +41,7 @@ class BuildSiteTest(unittest.TestCase):
         self.docs.mkdir()
         (self.docs / "index.html").write_text(INDEX)
         (self.docs / "protocol.md").write_text("# Protocol\n")
+        (self.docs / "hardware.md").write_text("# Hardware\n")
         self.dist = self.root / "dist"
         self.dist.mkdir()
         for env in ("esp32", "esp32s3"):
@@ -58,11 +59,31 @@ class BuildSiteTest(unittest.TestCase):
             code = build_site.main(argv)
         return code, out.getvalue() + err.getvalue()
 
-    def test_docs_go_to_the_site_root(self):
+    def test_listed_docs_go_to_the_site_root(self):
         code, output = self.run_main()
         self.assertEqual(code, 0, output)
         self.assertEqual((self.site / "protocol.md").read_text(), "# Protocol\n")
+        self.assertEqual((self.site / "hardware.md").read_text(), "# Hardware\n")
         self.assertTrue((self.site / "index.html").is_file())
+
+    def test_unlisted_files_under_docs_are_not_published(self):
+        (self.docs / "notes.md").write_text("draft\n")
+        (self.docs / "superpowers" / "plans").mkdir(parents=True)
+        (self.docs / "superpowers" / "plans" / "plan.md").write_text("private plan\n")
+        code, output = self.run_main()
+        self.assertEqual(code, 0, output)
+        published = sorted(str(path.relative_to(self.site)) for path in self.site.rglob("*") if path.is_file())
+        self.assertEqual(
+            [name for name in published if not name.startswith("firmware/")],
+            ["hardware.md", "index.html", "protocol.md"],
+        )
+
+    def test_missing_listed_doc_fails(self):
+        (self.docs / "hardware.md").unlink()
+        code, output = self.run_main()
+        self.assertEqual(code, 1)
+        self.assertIn("hardware.md", output)
+        self.assertFalse(self.site.exists())
 
     def test_release_files_go_under_firmware_version(self):
         self.assertEqual(self.run_main()[0], 0)

@@ -1,14 +1,16 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""Assemble the GitHub Pages site: docs/ plus one release's images and manifests, same-origin.
+"""Assemble the GitHub Pages site: the flasher page, its notes and one release, same-origin.
 
     python3 tools/release/build_site.py --version 0.1.0 --dist dist --out site [--docs docs]
 
-docs/ is copied to the site root and every image, manifest and SHA256SUMS from --dist goes under
-firmware/<version>/, next to each other, so ESP Web Tools fetches them from the page's own origin.
-index.html must contain `<meta name="latchkey-version" content="">` once; the site's copy names
-the version, which the page turns into the manifest paths. The build fails when --out exists or
-a manifest names an image that is not in --dist.
+Only the files in SITE_DOCS leave docs/: index.html, which needs nothing else from the site (its
+style and script are inline, ESP Web Tools comes from unpkg), and the two notes it refers to.
+Every image, manifest and SHA256SUMS from --dist goes under firmware/<version>/, next to each
+other, so ESP Web Tools fetches them from the page's own origin. index.html must contain
+`<meta name="latchkey-version" content="">` once; the site's copy names the version, which the
+page turns into the manifest paths. The build fails when --out exists, a listed file is missing
+from docs/ or a manifest names an image that is not in --dist.
 """
 
 from __future__ import annotations
@@ -22,6 +24,7 @@ from pathlib import Path
 
 VERSION = re.compile(r"[0-9]+\.[0-9]+\.[0-9]+")
 VERSION_MARKER = '<meta name="latchkey-version" content="">'
+SITE_DOCS = ("index.html", "protocol.md", "hardware.md")
 RELEASE_FILES = ("*.bin", "manifest-*.json", "SHA256SUMS")
 DEFAULT_DOCS = Path(__file__).resolve().parents[2] / "docs"
 
@@ -48,17 +51,22 @@ def build(version: str, docs: Path, dist: Path, out: Path) -> None:
         raise SiteError(f"version {version} is not MAJOR.MINOR.PATCH")
     if out.exists():
         raise SiteError(f"{out} already exists; the site is built from scratch")
+    missing = [name for name in SITE_DOCS if not (docs / name).is_file()]
+    if missing:
+        raise SiteError(f"{docs} is missing {', '.join(missing)}")
     index = (docs / "index.html").read_text(encoding="utf-8")
     if index.count(VERSION_MARKER) != 1:
         raise SiteError(f"docs/index.html must contain {VERSION_MARKER} exactly once")
     files = release_files(dist)
-    shutil.copytree(docs, out)
+    out.mkdir(parents=True)
+    for name in SITE_DOCS:
+        shutil.copy2(docs / name, out / name)
     (out / "index.html").write_text(index.replace(VERSION_MARKER, f'<meta name="latchkey-version" content="{version}">'), encoding="utf-8")
     firmware = out / "firmware" / version
     firmware.mkdir(parents=True)
     for path in files:
         shutil.copy2(path, firmware / path.name)
-    print(f"{out}: docs and {len(files)} release files under firmware/{version}/")
+    print(f"{out}: {', '.join(SITE_DOCS)} and {len(files)} release files under firmware/{version}/")
 
 
 def main(argv: list[str] | None = None) -> int:
