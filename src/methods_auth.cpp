@@ -253,8 +253,8 @@ rpc::Reply changePassword(const cJSON* params, const rpc::Context& context) {
     return rpc::fail("internal", "cannot store the new password");
 }
 
-rpc::Reply rotateTotp(const cJSON*, const rpc::Context&) {
-    auth::Rotation rotation = auth::rotateTotp();
+rpc::Reply rotateTotp(const cJSON*, const rpc::Context& context) {
+    auth::Rotation rotation = auth::rotateTotp(context.session);
     if (rotation.verdict == auth::Verdict::Unclaimed) {
         return notClaimed();
     }

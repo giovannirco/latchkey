@@ -324,7 +324,7 @@ Change changePassword(std::string_view current, std::string_view next, std::opti
     return change;
 }
 
-Rotation rotateTotp() {
+Rotation rotateTotp(std::optional<uint32_t> keep) {
     std::lock_guard<std::mutex> lock(s_loginMutex);
     Rotation rotation;
     if (!store::auth::claimed()) {
@@ -347,6 +347,7 @@ Rotation rotateTotp() {
     if (error != ESP_OK) {
         ESP_LOGE(TAG, "cannot reset the last accepted code step: %s", esp_err_to_name(error));
     }
+    endSessions(keep);
     rotation.verdict = Verdict::Ok;
     return rotation;
 }

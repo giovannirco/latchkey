@@ -74,6 +74,6 @@ void endSessions(std::optional<uint32_t> keep);
 
 Change changePassword(std::string_view current, std::string_view next, std::optional<uint32_t> keep);
 
-Rotation rotateTotp();
+Rotation rotateTotp(std::optional<uint32_t> keep);
 
 }
