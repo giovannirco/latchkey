@@ -79,6 +79,7 @@ public:
     Status passcodeClear();
     Status setAdminPasscode(const std::string& code);
     Status adminPasscodeGet(std::string& out);
+    Status adminPasscodeGetRaw(Bytes& out);
 
     Status fingerprintList(std::vector<Credential>& out);
     Status fingerprintEnroll(const Validity& validity, const EnrollCallback& progress, uint64_t& id);

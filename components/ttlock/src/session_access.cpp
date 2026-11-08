@@ -4,6 +4,7 @@
 #include "ttlock/session.h"
 
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "session_internal.h"
@@ -148,11 +149,21 @@ Status Session::setAdminPasscode(const std::string& code) {
 
 Status Session::adminPasscodeGet(std::string& out) {
     Bytes data;
-    const Status status = adminRequest(Feature::GetAdminCode, command::kGetAdminCode, noPayload(), data);
+    const Status status = adminPasscodeGetRaw(data);
     if (status != Status::Ok) {
         return status;
     }
     return parseAdminCode(data, out) ? Status::Ok : Status::BadResponse;
+}
+
+Status Session::adminPasscodeGetRaw(Bytes& out) {
+    Bytes data;
+    const Status status = adminRequest(Feature::GetAdminCode, command::kGetAdminCode, noPayload(), data);
+    if (status != Status::Ok) {
+        return status;
+    }
+    out = std::move(data);
+    return Status::Ok;
 }
 
 Status Session::fingerprintList(std::vector<Credential>& out) {
