@@ -1,0 +1,304 @@
+<!-- SPDX-License-Identifier: GPL-3.0-or-later -->
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<meta name="referrer" content="no-referrer">
+<meta name="description" content="Install Latchkey, owner-only firmware for TTLock smart locks, on an ESP32 board from the browser.">
+<meta name="latchkey-version" content="">
+<title>Install Latchkey</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%231d5fd1' stroke-width='2.4' stroke-linecap='round'%3E%3Ccircle cx='7.5' cy='15.5' r='4.5'/%3E%3Cpath d='M10.7 12.3 20 3M15.5 7.5l3 3'/%3E%3C/svg%3E">
+<style>
+:root {
+  color-scheme: light dark;
+  --bg: #f3f4f6;
+  --surface: #ffffff;
+  --surface-2: #eceff3;
+  --text: #14171c;
+  --muted: #59616e;
+  --border: #d7dbe1;
+  --accent: #1d5fd1;
+  --accent-text: #ffffff;
+  --warn: #935600;
+  --warn-soft: #fbeed9;
+  --danger: #bf242b;
+  --danger-soft: #fce6e6;
+  --focus: #1d5fd1;
+  --radius: 12px;
+  --font: system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+  --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #0d1015;
+    --surface: #161a21;
+    --surface-2: #1f252e;
+    --text: #e5e8ed;
+    --muted: #9ca6b4;
+    --border: #2c333e;
+    --accent: #6aa4ff;
+    --accent-text: #08111f;
+    --warn: #f0a845;
+    --warn-soft: #2d2110;
+    --danger: #ff7b7b;
+    --danger-soft: #36161a;
+    --focus: #8fbaff;
+  }
+}
+
+*, *::before, *::after { box-sizing: border-box; }
+
+[hidden] { display: none !important; }
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font: 16px/1.55 var(--font);
+}
+
+main {
+  max-width: 46rem;
+  margin: 0 auto;
+  padding: 2.5rem 1rem 3rem;
+}
+
+h1 { font-size: 2rem; margin: 0 0 0.25rem; letter-spacing: -0.01em; }
+h2 { font-size: 1.15rem; margin: 0 0 0.75rem; }
+p { margin: 0 0 0.75rem; }
+a { color: var(--accent); }
+:focus-visible { outline: 3px solid var(--focus); outline-offset: 2px; }
+
+.lead { font-size: 1.1rem; }
+.muted { color: var(--muted); }
+
+section {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 1.25rem 1.25rem 0.75rem;
+  margin: 1rem 0;
+}
+
+section.danger { background: var(--danger-soft); border-color: var(--danger); }
+section.danger h2 { color: var(--danger); }
+
+ul { margin: 0 0 0.75rem; padding-left: 1.25rem; }
+li { margin: 0.25rem 0; }
+
+code, pre { font-family: var(--mono); font-size: 0.9em; }
+code { background: var(--surface-2); border-radius: 4px; padding: 0.05em 0.3em; }
+pre {
+  background: var(--surface-2);
+  border-radius: 8px;
+  padding: 0.75rem;
+  margin: 0 0 0.75rem;
+  overflow-x: auto;
+  white-space: pre;
+}
+pre code { background: none; padding: 0; }
+
+fieldset { border: 0; margin: 0 0 0.75rem; padding: 0; }
+
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+.board {
+  display: flex;
+  gap: 0.75rem;
+  align-items: flex-start;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 0.75rem;
+  margin-bottom: 0.5rem;
+  cursor: pointer;
+}
+.board:has(input:checked) { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); }
+.board input { margin-top: 0.3rem; }
+.board span { display: block; }
+.board strong { display: block; }
+
+.install-button {
+  font: inherit;
+  font-weight: 600;
+  color: var(--accent-text);
+  background: var(--accent);
+  border: 0;
+  border-radius: 999px;
+  padding: 0.65rem 1.5rem;
+  cursor: pointer;
+}
+
+.notice {
+  background: var(--warn-soft);
+  border-left: 4px solid var(--warn);
+  border-radius: 6px;
+  padding: 0.6rem 0.8rem;
+}
+
+footer { color: var(--muted); font-size: 0.9rem; margin-top: 1.5rem; }
+</style>
+<script type="importmap">
+{
+  "integrity": {
+    "https://unpkg.com/esp-web-tools@10.4.0/dist/web/esp32-DNPRK0Ay.js": "sha384-1mT/sUZ9QQrZft8TM1YK7RfyIUggyewqL0w7GrOvQ0aHk1JPIsMsmZeUKcWGWX3G",
+    "https://unpkg.com/esp-web-tools@10.4.0/dist/web/esp32c2-CQ3ns5Nm.js": "sha384-AcOQBXWICST0TTlwGYbYA8cElKuXwrwW0L10NSF0YBe1PkndGs5RhsuDzTR/OZhi",
+    "https://unpkg.com/esp-web-tools@10.4.0/dist/web/esp32c3-2tchr35W.js": "sha384-JF+4Kgy21HYqVI0DI+S5SAUyxRrWHKN/yvQ2TzxFzvi3V4IzoyW0WXPscyrzIjwE",
+    "https://unpkg.com/esp-web-tools@10.4.0/dist/web/esp32c5-CeCSizBL.js": "sha384-LWYGviHcz1q8xMq+rBhgcOPSu9V6bB8VO5BMCIeTNIsIUtdzs2FCsTip6Tk37b1f",
+    "https://unpkg.com/esp-web-tools@10.4.0/dist/web/esp32c6-DolpfL0e.js": "sha384-IGupIjC1Vbm+EvBSu+rNvcYGQxssjhOw2APdj4cIGAdevBe86rTUYaO21v8RNywO",
+    "https://unpkg.com/esp-web-tools@10.4.0/dist/web/esp32c61-C8HktcOt.js": "sha384-ufZuP5/DSChHLVHLQ7MYes8HllWFxgbwL5y4C5gi9OXhaYHvdF6KEMOpv+iY/JeE",
+    "https://unpkg.com/esp-web-tools@10.4.0/dist/web/esp32h2-L0n5WuSo.js": "sha384-RU6vJZEaAJLviiv0938vlTobFJZHLEXoIG++VEHufT8z4evp3AeasaMzTemz2DMr",
+    "https://unpkg.com/esp-web-tools@10.4.0/dist/web/esp32p4-MR0ikcda.js": "sha384-xBu/wvVzwGAyBFMKgxeER3FJpFRbEy9ibHOmTdVa/k2B4khQPRq3pfmGZQYRCGpX",
+    "https://unpkg.com/esp-web-tools@10.4.0/dist/web/esp32s2-w9SUkb7o.js": "sha384-NNkQOYG+wsZHOXo+Yam3d6ks8/Bai0cN9MKjMU6U1PaxHjdOJC5ZqhDZcnQ2nL/N",
+    "https://unpkg.com/esp-web-tools@10.4.0/dist/web/esp32s3-DQt_R3ZE.js": "sha384-IcqNvrgnrdlIMX/N8Fb2+T/TGyZHbVAqp8iyoP9cH/E+VSlV6h3Uug3ykbyr1We6",
+    "https://unpkg.com/esp-web-tools@10.4.0/dist/web/index-Dt9w-IG1.js": "sha384-qDnmUz4Vrcy5l9ZV4nrPjsyYSeFTtX4OJNYJEEeZixp894cbdDwh+jeO/d//X/6I",
+    "https://unpkg.com/esp-web-tools@10.4.0/dist/web/install-button.js": "sha384-9XfyvAabgkISlB/Xb3OpshGKpZx0TOt5Mmu78SeiNU3so/p4o2s9m66vy6Utdnom",
+    "https://unpkg.com/esp-web-tools@10.4.0/dist/web/install-dialog-im156JnI.js": "sha384-wMJi9BXikLp2SPdWr7OYNwSRpoiEgrPRT3APdi1KY6iYiMRoYO8vD5vBrBScG5j+",
+    "https://unpkg.com/esp-web-tools@10.4.0/dist/web/stub_flasher_32-BLbsWvxO.js": "sha384-NwVOvN4wk0BwWgOx1vGDv+MQEVpiXoaexYjJg/MDYH4rXwzOFpTiPC4Ga+GHl1Z+",
+    "https://unpkg.com/esp-web-tools@10.4.0/dist/web/stub_flasher_32c2-wLQhZItC.js": "sha384-kWdvhLR37pGIIpanPvPbGanK2DxuRVrb0Dx4tOYWcL2SpD3OGuC04mKxDgKLF9nT",
+    "https://unpkg.com/esp-web-tools@10.4.0/dist/web/stub_flasher_32c3-DmSvHQKL.js": "sha384-CXQHSBDY3+uIPzPcDoj56lAdidofn2R9+kcq6RkXjgVSM/6ZizTnZY4/AJ0tUODp",
+    "https://unpkg.com/esp-web-tools@10.4.0/dist/web/stub_flasher_32c5-D1WK4DyB.js": "sha384-3RLmDq3JDolM+Vvwua7Kb5r99y3mw9ptmdAuGKoiXuiQWuSLfAqTtSDO0zryPZm2",
+    "https://unpkg.com/esp-web-tools@10.4.0/dist/web/stub_flasher_32c6-ZuxjUVr4.js": "sha384-195M9duTV1A72oX1BdPqPyF0KufvSvbkTOXlVLYg0eZSdx6DCcGwL38RSMxvsU3j",
+    "https://unpkg.com/esp-web-tools@10.4.0/dist/web/stub_flasher_32c61-DeKkw9vN.js": "sha384-ocwIY7vRGNYbB3pDHtXRXo9e1wPmTmJKEkN+xGCwIDSxrAcMxnqTeyzcfqYmC99I",
+    "https://unpkg.com/esp-web-tools@10.4.0/dist/web/stub_flasher_32h2-CZ4EIL3w.js": "sha384-Whdgv4c66UKEmSqtqwBnxgw56V2kaJd4NQ8gpghwzEuXDotvVxaDzcKQNyacCgNZ",
+    "https://unpkg.com/esp-web-tools@10.4.0/dist/web/stub_flasher_32p4-CpHBYEwI.js": "sha384-Ugb2U81Kg2CAS1mQ6avdnzyJ0c7ux8Qmyivx2E7RXmu1bFVZxk8JUENABFAX/YYU",
+    "https://unpkg.com/esp-web-tools@10.4.0/dist/web/stub_flasher_32p4rc1-DyGqUAeZ.js": "sha384-obLWbHzQko//5KcdaalAr28oxQcTdbFPIxFr56WrxPPhkCJiDF6mlwnYCtiYHNtz",
+    "https://unpkg.com/esp-web-tools@10.4.0/dist/web/stub_flasher_32s2-CrsP1231.js": "sha384-QKrtaJgMb+aG+s5+Kp6hO/mnIOYkYniXOuViJGg5flhCGHb4EEaeASBikr5hnhLp",
+    "https://unpkg.com/esp-web-tools@10.4.0/dist/web/stub_flasher_32s3-CiJyd6Fk.js": "sha384-RW8irjkoLiZ6a4u+YbIjMSDqrFlM01oByNK52WD4te9CvRiEh9+631+aOtT9w8uh",
+    "https://unpkg.com/esp-web-tools@10.4.0/dist/web/stub_flasher_8266-CQFcqJ_a.js": "sha384-xPe4ucyto336SN2lbHdv4M0V1RV8+oLpWoYiht75/O/r6N8sOYvIPbGne54oKxla",
+    "https://unpkg.com/esp-web-tools@10.4.0/dist/web/styles-sT2V1cOw.js": "sha384-77x+BOw+Zw9kRRNMOF4W5I/luoc5EGHclPXlMwdlEpdWjh2qItAMrOMlzLJzVO9y"
+  }
+}
+</script>
+<script type="module" src="https://unpkg.com/esp-web-tools@10.4.0/dist/web/install-button.js" integrity="sha384-9XfyvAabgkISlB/Xb3OpshGKpZx0TOt5Mmu78SeiNU3so/p4o2s9m66vy6Utdnom" crossorigin="anonymous"></script>
+<script type="module">
+const version = document.querySelector('meta[name="latchkey-version"]').content;
+const button = document.querySelector('esp-web-install-button');
+const downloads = {
+  factory: document.getElementById('download-factory'),
+  ota: document.getElementById('download-ota'),
+  sums: document.getElementById('download-sums'),
+  release: document.getElementById('download-release'),
+};
+
+function showBoard() {
+  const board = document.querySelector('input[name="board"]:checked').value;
+  const base = `firmware/${version}/`;
+  const factory = `latchkey-${version}-${board}-factory.bin`;
+  const ota = `latchkey-${version}-${board}-ota.bin`;
+  button.setAttribute('manifest', `${base}manifest-${board}.json`);
+  downloads.factory.href = base + factory;
+  downloads.factory.textContent = factory;
+  downloads.ota.href = base + ota;
+  downloads.ota.textContent = ota;
+}
+
+if (/^[0-9]+\.[0-9]+\.[0-9]+$/.test(version)) {
+  document.getElementById('release-version').textContent = version;
+  downloads.sums.href = `firmware/${version}/SHA256SUMS`;
+  downloads.release.href = `https://github.com/giovannirco/latchkey/releases/tag/v${version}`;
+  for (const input of document.querySelectorAll('input[name="board"]')) {
+    input.addEventListener('change', showBoard);
+  }
+  showBoard();
+  document.getElementById('release-none').hidden = true;
+  document.getElementById('release').hidden = false;
+}
+</script>
+</head>
+<body>
+<main>
+  <header>
+    <h1>Latchkey</h1>
+    <p class="lead">Firmware for ESP32 boards that pairs, manages and hardens a TTLock Bluetooth LE smart lock with no cloud and no phone, behind an owner-only web UI.</p>
+    <p class="muted">Early development: the protocol core, the USB serial console and claiming the board work today; pairing from the board, the web UI on the board, HTTPS, TOTP login, button confirmation, hardening and key backup are being built. See the <a href="https://github.com/giovannirco/latchkey">source and status on GitHub</a>.</p>
+  </header>
+
+  <section class="danger" aria-labelledby="erase-title">
+    <h2 id="erase-title">Flashing erases the board</h2>
+    <p>The factory image rewrites the flash from address 0: bootloader, partition table and every setting stored on the board, including the owner claim, the Wi-Fi settings, the audit log and the keys of any lock paired with it. Whatever was on the board before is gone, whether or not you also choose to erase it in the installer.</p>
+    <p>If this board manages a lock, that lock can no longer be managed from it. A lock whose reset button is still enabled can be returned to factory state with that button and paired again; after hardening has disabled the button, only an encrypted key backup restored on a board gets the lock back.</p>
+  </section>
+
+  <section aria-labelledby="board-title">
+    <h2 id="board-title">1. Pick the board</h2>
+    <fieldset>
+      <legend class="visually-hidden">Board</legend>
+      <label class="board">
+        <input type="radio" name="board" value="esp32" checked>
+        <span><strong>Classic ESP32</strong> ESP32 DevKit or any ESP32 board with 4 MB of flash. The board button is GPIO0 (BOOT).</span>
+      </label>
+      <label class="board">
+        <input type="radio" name="board" value="esp32s3">
+        <span><strong>ESP32-S3</strong> AtomS3-class boards with 8 MB of flash and the native USB port. The board button is GPIO41.</span>
+      </label>
+    </fieldset>
+    <p class="muted">An M5 ATOM is a classic ESP32, but its button is on GPIO39: the classic image reads GPIO0, so the ATOM needs a build with <code>LATCHKEY_BUTTON_GPIO=39</code>. See <a href="https://github.com/giovannirco/latchkey/blob/main/docs/hardware.md">the hardware notes</a>.</p>
+  </section>
+
+  <section aria-labelledby="install-title">
+    <h2 id="install-title">2. Install</h2>
+    <p id="release-none" class="notice">No release has been published on this site yet. Build and flash from source as the <a href="https://github.com/giovannirco/latchkey#build-test-flash">README</a> explains.</p>
+    <div id="release" hidden>
+      <p>Connect the board over USB, then install version <strong id="release-version"></strong>. This needs Chrome or Edge on a desktop computer: the installer talks to the board through Web Serial.</p>
+      <p>
+        <esp-web-install-button>
+          <button slot="activate" type="button" class="install-button">Install on the board</button>
+          <span slot="unsupported" class="notice">This browser cannot open serial ports. Use Chrome or Edge on a desktop computer, or flash with esptool.</span>
+          <span slot="not-allowed" class="notice">The installer only works on an HTTPS page.</span>
+        </esp-web-install-button>
+      </p>
+      <p>Files for this board: <a id="download-factory" href="#"></a> (flash at 0x0), <a id="download-ota" href="#"></a> (update over the air), <a id="download-sums" href="#">SHA256SUMS</a>, <a id="download-release" href="#">release notes</a>.</p>
+      <p>Prefer the command line? Download the factory image and SHA256SUMS, check one against the other (<code>shasum -a 256</code> instead of <code>sha256sum</code> on macOS), then write the image at 0x0 with esptool 5 (<code>--chip esp32s3</code> for the S3 image):</p>
+<pre><code>sha256sum --check --ignore-missing SHA256SUMS
+esptool --chip esp32 --port &lt;port&gt; write-flash 0x0 latchkey-&lt;version&gt;-esp32-factory.bin</code></pre>
+    </div>
+  </section>
+
+  <section aria-labelledby="claim-title">
+    <h2 id="claim-title">3. Claim it over USB</h2>
+    <p>A fresh board has no owner. Claiming happens only over the USB serial console, which counts as physical presence: send <code>system.setup</code> with <code>tools/latchkey_cli.py</code> from a checkout of the repository. The Wi-Fi settings need a static IPv4 address; the owner password is 12 to 128 bytes.</p>
+<pre><code>git clone https://github.com/giovannirco/latchkey.git
+cd latchkey
+uv run -q --no-project --python 3.14 --with pyserial==3.5 \
+  python -I tools/latchkey_cli.py --port &lt;port&gt; system.info
+uv run -q --no-project --python 3.14 --with pyserial==3.5 \
+  python -I tools/latchkey_cli.py --port &lt;port&gt; system.setup - &lt; setup.json</code></pre>
+    <p><code>setup.json</code>, which keeps the passwords out of your shell history:</p>
+<pre><code>{
+  "wifi": {
+    "ssid": "your-network",
+    "password": "your-wifi-password",
+    "ip": "192.0.2.50",
+    "gateway": "192.0.2.1",
+    "netmask": "255.255.255.0",
+    "dns": "192.0.2.1"
+  },
+  "password": "a long owner password"
+}</code></pre>
+    <p>The reply carries an <code>otpauth://</code> URI, once: add it to an authenticator app for the TOTP codes of the web login, then delete <code>setup.json</code>. The port is <code>/dev/cu.usbserial-*</code> or <code>/dev/cu.usbmodem*</code> on macOS, <code>/dev/ttyUSB*</code> or <code>/dev/ttyACM*</code> on Linux and <code>COM*</code> on Windows.</p>
+  </section>
+
+  <section aria-labelledby="unsupported-title">
+    <h2 id="unsupported-title">Not supported</h2>
+    <ul>
+      <li>ESP8266 boards: they have no Bluetooth radio, and TTLock locks only talk Bluetooth LE.</li>
+      <li>Other ESP32 chips (C3, C6, H2 and so on): there is no build for them yet.</li>
+    </ul>
+  </section>
+
+  <footer>
+    <p>Latchkey is free software under the GPL-3.0-or-later. The TTLock protocol work builds on <a href="https://github.com/kind3r/ttlock-sdk-js">kind3r/ttlock-sdk-js</a> and <a href="https://github.com/roquerodrigo/ttlock-ble">roquerodrigo/ttlock-ble</a>. The installer is <a href="https://github.com/esphome/esp-web-tools">ESP Web Tools</a> 10.4.0 (Apache-2.0), loaded from unpkg with every module pinned by its SHA-384 hash. <a href="https://github.com/giovannirco/latchkey/blob/main/SECURITY.md">Security model</a>.</p>
+  </footer>
+</main>
+</body>
+</html>
