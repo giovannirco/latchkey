@@ -75,3 +75,19 @@ test('an unlock alert shows a notice that stays until it is dismissed', async ({
   await mock(request, { emit: [{ event: 'lock.alert', data: { lock: FRONT_DOOR, method: 'forced', time, seq: 42 } }] });
   await expect(page.locator('#toasts .toast-alarm')).toContainText('Front door was forced open');
 });
+
+test('the log shows the newest entries and reads on until it has every new one', async ({ page, request }) => {
+  const now = Math.floor(Date.now() / 1000);
+  const entry = (seq) => ({ seq, time: now - 3600 + seq, type: seq % 2 ? 4 : 26, battery: 80 });
+  await mock(request, { setLock: { id: FRONT_DOOR, log: Array.from({ length: 30 }, (_, i) => entry(i + 1)) } });
+  await login(page);
+  await openLock(page, 'Front door', 'Log');
+  const rows = page.getByRole('table', { name: 'Operation log' }).locator('tbody tr');
+  await expect(rows).toHaveCount(16);
+  await mock(request, { setLock: { id: FRONT_DOOR, log: Array.from({ length: 50 }, (_, i) => entry(i + 1)) } });
+  await page.getByRole('button', { name: 'Fetch new entries' }).click();
+  await expect(toast(page, '20 new entries')).toBeVisible();
+  await expect(rows).toHaveCount(36);
+  const fetched = (await calls(request)).filter((call) => call.method === 'lock.log.fetch').map((call) => call.params);
+  expect(fetched).toEqual([{ lock: FRONT_DOOR }, { lock: FRONT_DOOR, since: 30 }, { lock: FRONT_DOOR, since: 46 }]);
+});
