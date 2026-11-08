@@ -23,6 +23,9 @@ constexpr uint32_t kDefaultPairWaitSeconds = 30;
 constexpr uint32_t kMaxPairWaitSeconds = 600;
 constexpr const char* kDefaultLockName = "New lock";
 constexpr const char* kMacMessage = "must be a Bluetooth address like AA:BB:CC:DD:EE:FF";
+constexpr const char* kNameMessage = "name must be 1 to 32 characters (at most 99 bytes)";
+
+static_assert(kMaxNameCodePoints == 32 && kMaxNameBytes == 99, "kNameMessage states these limits");
 
 using LockCall = rpc::Reply (*)(const std::string& mac);
 
@@ -117,7 +120,7 @@ rpc::Reply pair(const cJSON* params, const rpc::Context&) {
     }
     std::string name;
     if (!readOptionalName(member(params, "name"), name)) {
-        return withTarget(invalid("name must be 1 to 32 characters"), mac);
+        return withTarget(invalid(kNameMessage), mac);
     }
     uint32_t wait = 0;
     if (!readSeconds(member(params, "wait"), kDefaultPairWaitSeconds, kMaxPairWaitSeconds, wait)) {
@@ -133,7 +136,7 @@ rpc::Reply rename(const cJSON* params, const rpc::Context&) {
     }
     std::string name;
     if (!readName(member(params, "name"), name)) {
-        return withTarget(invalid("name must be 1 to 32 characters"), mac);
+        return withTarget(invalid(kNameMessage), mac);
     }
     return withTarget(lock_manager::rename(mac, name), mac);
 }

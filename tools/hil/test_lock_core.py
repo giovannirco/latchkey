@@ -43,6 +43,7 @@ SUMMARY_KEYS = {
     "backedUp",
     "pairComplete",
 }
+NAME_MESSAGE = "name must be 1 to 32 characters (at most 99 bytes)"
 INFO_KEYS = {"mac", "model", "hardware", "firmware", "manufactureDate", "protocol"}
 STATES = {"locked", "unlocked"}
 FEATURE_NAMES = {
@@ -151,6 +152,9 @@ def test_lock_params_are_checked(console: Console, board: dict[str, Any]) -> Non
     assert error_code(console, "lock.features", {"lock": DOCUMENTATION_MAC}) == "not_paired"
     assert error_code(console, "locks.forget", {"lock": DOCUMENTATION_MAC}) == "not_paired"
     assert error_code(console, "locks.rename", {"lock": DOCUMENTATION_MAC, "name": "x"}) == "not_paired"
+    for name in ("", "x" * 33, "\U0001f512" * 25):
+        reply = console.request("locks.rename", {"lock": DOCUMENTATION_MAC, "name": name}, timeout=LOCK_TIMEOUT_S)
+        assert reply["error"] == {"code": "invalid_argument", "message": NAME_MESSAGE}
     assert error_code(console, "locks.pair", {"name": "x"}) == "invalid_argument"
     assert error_code(console, "locks.pair", {"mac": DOCUMENTATION_MAC, "wait": 0}) == "invalid_argument"
     assert error_code(console, "locks.scan", {"seconds": 31}) == "invalid_argument"
