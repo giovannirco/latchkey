@@ -68,7 +68,7 @@ def test_malformed_logins_are_refused_without_counting(console: Console, owner: 
         {"password": password, "totp": code},
         {"password": password, "totp": code, "dryRun": False},
         {"password": password, "totp": code, "dryRun": "yes"},
-        {"password": password, "totp": code[:5], "dryRun": True},
+        {"password": password, "totp": Private(code[:5]), "dryRun": True},
         {"password": password, "totp": int(code), "dryRun": True},
         {"totp": code, "dryRun": True},
         {"password": "", "totp": code, "dryRun": True},
@@ -134,6 +134,28 @@ def test_rotating_the_totp_secret_retires_the_old_one(console: Console, owner: b
     different = rotated != owner
     assert different, "auth.rotateTotp kept the old secret"
     assert outcome(login(console, password, totp_code(owner, now))) == "unauthorized"
+    assert outcome(login(console, password, totp_code(rotated, now))) == {"ok": True}
+
+
+def test_wrong_current_passwords_count_toward_the_wait(console: Console, owner: bytes, secrets: dict[str, Any]) -> None:
+    now = set_clock(console)
+    password = secrets["owner_password"]
+    wrong = {"current": WRONG_PASSWORD, "new": OTHER_PASSWORD}
+    for _ in range(FREE_FAILURES + 1):
+        assert error_code(console, "auth.changePassword", wrong) == "invalid_argument"
+    assert outcome(login(console, password, totp_code(owner, now))) == "rate_limited"
+    right = {"current": password, "new": OTHER_PASSWORD}
+    assert error_code(console, "auth.changePassword", right) == "rate_limited"
+
+
+def test_rotation_lets_the_new_secret_in_within_the_same_step(
+    console: Console, owner: bytes, secrets: dict[str, Any]
+) -> None:
+    now = set_clock(console)
+    password = secrets["owner_password"]
+    assert outcome(login(console, password, totp_code(owner, now))) == {"ok": True}
+    result = console.call("auth.rotateTotp", timeout=LOGIN_TIMEOUT_S)
+    rotated = otpauth_secret(result["otpauth"], console.call("system.info")["board"])
     assert outcome(login(console, password, totp_code(rotated, now))) == {"ok": True}
 
 
