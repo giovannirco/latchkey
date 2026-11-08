@@ -107,7 +107,7 @@ Feature bits come from `SEARCHE_DEVICE_FEATURE`: after one leading byte, one or 
 | `0x58` | `FUNCTION_LOCK` | lock | none |
 | `0x59` | `SHOW_PASSWORD` | whether the keypad screen shows the passcode, read and set | `password_display_or_hide` (9) |
 | `0x62` | `AUDIO_MANAGE` | sound on or off, volume 1 to 5 | `audio_management` (15) |
-| `0x65` | `GET_ADMIN_CODE` | read during pairing | `get_admin_code` (18) |
+| `0x65` | `GET_ADMIN_CODE` | read during pairing, and after the admin login to show the keypad admin passcode | `get_admin_code` (18) |
 | `0x66` | `CONFIGURE_PASSAGE_MODE` | passage mode periods: list, add, delete, clear | `passage_mode` (22) |
 | `0x68` | `SWITCH` | reset button (item `0x02`), tamper alert (`0x01`), privacy lock (`0x04`), read and set | `reset_button` (29), `tamper_alert` (28), `privacy_lock` (30), per item |
 | `0x70` | `CYCLIC_CMD` | weekly time windows of IC cards and fingerprints | `cyclic_ic_or_finger_print` (34), plus `ic` (1) or `finger_print` (2) |
@@ -123,13 +123,16 @@ Filled in by the hardware-in-the-loop tests (`tools/hil/`) as they run against r
 
 | Lock model | Lock firmware | Protocol (type.sub-version) | Feature bits | Verified commands | Date |
 |---|---|---|---|---|---|
-| SN9325-SN139-T2-T16-INT_PV53 (keypad, fingerprint and card lock; Bluetooth name `A260BLE_…`) | 6.4.37.240425 (hardware 1.1) | 5.3 (device info reports 3.1) | passcode, ic, finger_print, auto_lock, passcode_with_delete_function, firmware_setting, modify_passcode_function, manual_lock, cyclic_password, magnetometer, config_gateway_unlock, audio_management, get_admin_code, hotel_lock, passage_mode, wireless_keyboard, tamper_alert, reset_button, privacy_lock, cyclic_ic_or_finger_print, telink_chip, cyclic_passcode_can_recovery, wireless_key_fob, accessory_battery | pairing from an ESP32-S3 (through the web UI), status and battery, device info, feature bits, unlock and lock with their events, two requests in order, time sync, keys surviving a board reboot, scan, a lock job over HTTPS; every reply passed the CRC check | 2026-11-08 |
+| SN9325-SN139-T2-T16-INT_PV53 (keypad, fingerprint and card lock; Bluetooth name `A260BLE_…`) | 6.4.37.240425 (hardware 1.1) | 5.3 (device info reports 3.1) | passcode, ic, finger_print, auto_lock, passcode_with_delete_function, firmware_setting, modify_passcode_function, manual_lock, cyclic_password, magnetometer, config_gateway_unlock, audio_management, get_admin_code, hotel_lock, passage_mode, wireless_keyboard, tamper_alert, reset_button, privacy_lock, cyclic_ic_or_finger_print, telink_chip, cyclic_passcode_can_recovery, wireless_key_fob, accessory_battery | pairing from an ESP32-S3 (through the web UI), status and battery, device info, feature bits, unlock and lock with their events, two requests in order, time sync, keys surviving a board reboot, scan, a lock job over HTTPS; passcode list, add, modify (code and window) and delete for permanent, timed and one-time passcodes; reading the admin passcode (`0x65`) and writing it (`0x53`, with the code it holds); the start of a fingerprint and a card enrolment, and their lists; every reply passed the CRC check | 2026-11-08 |
 
 Observed on that lock:
 
 - A factory-fresh lock advertises only after a keypad touch, for roughly 10 to 15 s; pairing has to start inside that window.
 - Once paired, an untouched lock advertises in bursts: in one minute it was seen at 2 s and 9 s, then not for 29 s, then every 4 to 5 s. A command can wait up to about 30 s for the lock to become reachable.
 - Its Bluetooth address is public (address type 0).
+- Right after pairing its passcode list (`0x07`) was empty: the keypad admin passcode is not listed, and there is no factory passcode such as 123456. A passcode added with `0x03` is listed at once with the window the board sent, for timed and one-time passcodes alike, and a modify that changes the code lists the new code.
+- `GET_ADMIN_CODE` after the admin login answers `[battery][length][ASCII digits]`, nine bytes for a seven-digit code with nothing after it, and the digits are the code the board set at pairing with `SET_ADMIN_KEYBOARD_PWD`. Setting the code it already holds is accepted.
+- A fingerprint enrolment without a finger enters add mode (status `0x02`), then the lock ends it by itself with a failure reply carrying `0xe4`, 8 to 15 s after the request. A card enrolment without a card enters add mode and then sends nothing; the board stops waiting after 10 s. In both cases the next command was answered within a few seconds, without an `in_setting` refusal.
 
 
 ## Credits
