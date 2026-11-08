@@ -108,6 +108,49 @@ private:
     uint32_t next_ = 1;
 };
 
+class LogJoiner {
+public:
+    static constexpr size_t kCapacity = 256;
+
+    template <typename Emit>
+    void feed(uintptr_t writer, std::string_view piece, Emit emit) {
+        const bool ends = !piece.empty() && piece.back() == '\n';
+        if (length_ > 0 && writer != writer_) {
+            if (ends) {
+                emitLine(piece.substr(0, kCapacity), emit);
+                return;
+            }
+            emitLine(std::string_view(buffer_, length_), emit);
+            length_ = 0;
+        }
+        if (length_ == 0 && ends) {
+            emitLine(piece.substr(0, kCapacity), emit);
+            return;
+        }
+        add(writer, piece);
+        if (ends) {
+            emitLine(std::string_view(buffer_, length_), emit);
+            length_ = 0;
+        }
+    }
+
+private:
+    template <typename Emit>
+    static void emitLine(std::string_view line, Emit emit) {
+        if (!isBlank(line)) {
+            emit(line);
+        }
+    }
+
+    static bool isBlank(std::string_view line);
+
+    void add(uintptr_t writer, std::string_view piece);
+
+    char buffer_[kCapacity] = {};
+    size_t length_ = 0;
+    uintptr_t writer_ = 0;
+};
+
 struct LogTimes {
     uint64_t uptimeMs = 0;
     std::optional<int64_t> utcMs;

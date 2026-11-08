@@ -290,6 +290,22 @@ size_t LogRing::count() const { return count_; }
 
 size_t LogRing::usedBytes() const { return used_; }
 
+bool LogJoiner::isBlank(std::string_view line) {
+    for (char c : line) {
+        if (c != '\n' && c != '\r' && c != ' ') {
+            return false;
+        }
+    }
+    return true;
+}
+
+void LogJoiner::add(uintptr_t writer, std::string_view piece) {
+    writer_ = writer;
+    const size_t take = std::min(piece.size(), kCapacity - length_);
+    std::memcpy(buffer_ + length_, piece.data(), take);
+    length_ += take;
+}
+
 LogTimes logTimes(uint32_t entryUpMs, uint64_t nowUpMs, std::optional<int64_t> nowUtcMs) {
     const uint32_t age = static_cast<uint32_t>(nowUpMs) - entryUpMs;
     LogTimes times;

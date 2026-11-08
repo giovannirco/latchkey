@@ -319,8 +319,83 @@ static void test_an_entry_renders_as_one_json_object() {
         out.c_str());
 }
 
+struct Joined {
+    std::vector<std::string> lines;
+    latchkey_util::LogJoiner joiner;
+
+    void feed(uintptr_t writer, std::string_view piece) {
+        joiner.feed(writer, piece, [this](std::string_view line) { lines.emplace_back(line); });
+    }
+};
+
+static void test_a_whole_line_passes_at_once() {
+    Joined joined;
+    joined.feed(1, "I (5) wifi: connected\n");
+    TEST_ASSERT_EQUAL_UINT32(1, joined.lines.size());
+    TEST_ASSERT_EQUAL_STRING("I (5) wifi: connected\n", joined.lines[0].c_str());
+}
+
+static void test_pieces_of_one_writer_become_one_line() {
+    Joined joined;
+    joined.feed(7, "I (551) wifi:");
+    joined.feed(7, "mode : sta (00:00:5e:00:53:01)");
+    TEST_ASSERT_EQUAL_UINT32(0, joined.lines.size());
+    joined.feed(7, "\n");
+    TEST_ASSERT_EQUAL_UINT32(1, joined.lines.size());
+    TEST_ASSERT_EQUAL_STRING("I (551) wifi:mode : sta (00:00:5e:00:53:01)\n", joined.lines[0].c_str());
+    const LogLine parsed = latchkey_util::parseLogLine(joined.lines[0]);
+    TEST_ASSERT_EQUAL_STRING("wifi", std::string(parsed.tag).c_str());
+    TEST_ASSERT_EQUAL_STRING("mode : sta (00:00:5e:00:53:01)", std::string(parsed.message).c_str());
+}
+
+static void test_empty_lines_are_dropped() {
+    Joined joined;
+    joined.feed(1, "\n");
+    joined.feed(1, "\r\n");
+    joined.feed(1, "");
+    TEST_ASSERT_EQUAL_UINT32(0, joined.lines.size());
+}
+
+static void test_another_writer_keeps_its_own_lines() {
+    Joined joined;
+    joined.feed(1, "I (1) wifi:");
+    joined.feed(2, "W (2) http: busy\n");
+    TEST_ASSERT_EQUAL_UINT32(1, joined.lines.size());
+    TEST_ASSERT_EQUAL_STRING("W (2) http: busy\n", joined.lines[0].c_str());
+    joined.feed(1, "flush txq\n");
+    TEST_ASSERT_EQUAL_UINT32(2, joined.lines.size());
+    TEST_ASSERT_EQUAL_STRING("I (1) wifi:flush txq\n", joined.lines[1].c_str());
+}
+
+static void test_a_new_piece_from_another_writer_closes_the_open_line() {
+    Joined joined;
+    joined.feed(1, "I (1) wifi:");
+    joined.feed(2, "I (2) a:");
+    TEST_ASSERT_EQUAL_UINT32(1, joined.lines.size());
+    TEST_ASSERT_EQUAL_STRING("I (1) wifi:", joined.lines[0].c_str());
+    joined.feed(2, " b\n");
+    TEST_ASSERT_EQUAL_UINT32(2, joined.lines.size());
+    TEST_ASSERT_EQUAL_STRING("I (2) a: b\n", joined.lines[1].c_str());
+}
+
+static void test_an_overlong_line_is_cut() {
+    Joined joined;
+    const std::string piece(200, 'x');
+    joined.feed(1, piece);
+    joined.feed(1, piece);
+    joined.feed(1, "\n");
+    TEST_ASSERT_EQUAL_UINT32(1, joined.lines.size());
+    TEST_ASSERT_EQUAL_UINT32(latchkey_util::LogJoiner::kCapacity, joined.lines[0].size());
+}
+
 int main() {
     UNITY_BEGIN();
+    RUN_TEST(test_a_whole_line_passes_at_once);
+    RUN_TEST(test_pieces_of_one_writer_become_one_line);
+    RUN_TEST(test_empty_lines_are_dropped);
+    RUN_TEST(test_another_writer_keeps_its_own_lines);
+    RUN_TEST(test_a_new_piece_from_another_writer_closes_the_open_line);
+    RUN_TEST(test_an_overlong_line_is_cut);
     RUN_TEST(test_a_prefixed_line_gives_level_tag_and_message);
     RUN_TEST(test_every_level_letter_is_read);
     RUN_TEST(test_an_unprefixed_line_is_info_without_a_tag);
