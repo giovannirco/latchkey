@@ -133,6 +133,8 @@ Observed on that lock:
 - Right after pairing its passcode list (`0x07`) was empty: the keypad admin passcode is not listed, and there is no factory passcode such as 123456. A passcode added with `0x03` is listed at once with the window the board sent, for timed and one-time passcodes alike, and a modify that changes the code lists the new code.
 - `GET_ADMIN_CODE` after the admin login answers `[battery][length][ASCII digits]`, nine bytes for a seven-digit code with nothing after it, and the digits are the code the board set at pairing with `SET_ADMIN_KEYBOARD_PWD`. Setting the code it already holds is accepted.
 - A fingerprint enrolment without a finger enters add mode (status `0x02`), then the lock ends it by itself with a failure reply carrying `0xe4`, 8 to 15 s after the request. A card enrolment without a card enters add mode and then sends nothing; the board stops waiting after 10 s. In both cases the next command was answered within a few seconds, without an `in_setting` refusal.
+- By hand at the lock, with the board's web UI: a nine-digit admin passcode set with `SET_ADMIN_KEYBOARD_PWD` opens the lock from the keypad, and `GET_ADMIN_CODE` read it back as the board's copy; a chosen six-digit passcode and a random one added with `0x03` open it; a fingerprint enrolment (four scans) and an IC card enrolment with a real finger and card completed, and both open the lock.
+- Anti-peeping: the lock opens when a valid code appears anywhere inside a longer string of digits typed on the keypad, so someone watching cannot tell the code from the digits entered, and a short code is found by chance more easily. Prefer 7 to 9 digits that are not a run or one repeated digit; the board warns about those, without refusing them.
 
 
 ## Credits
