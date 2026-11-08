@@ -18,7 +18,7 @@ Notable changes to Latchkey, in the format of [Keep a Changelog](https://keepach
 
 - HTTPS on the board: a self-signed EC P-256 certificate made on the board the first time it has an address, valid from 2024-01-01 with no expiry date (fingerprint in `system.info.certFingerprint`, renewed by a factory reset), the web UI and `POST /api/rpc` on port 443, a redirect on port 80, the page's Content-Security-Policy and the other security headers on every response, JSON error bodies, the `lk_session` cookie, and refusals for a `Host` or `Origin` other than the board's own address, a body that is not JSON, and requests over 8 KiB or 256 JSON values.
 - Live events over a WebSocket at `/api/events`, opened only with a valid session cookie and closed when the session ends.
-- From the web, lock methods and button-gated methods answer `{"job": id}` and end with `job.done` to the session that asked; button-gated ones check their parameters first, then wait up to 30 s for a press of the board's button (`confirm.required`, `confirm.result`, `confirm_timeout`), which replaces their refusal with `forbidden`. A job of a session that has ended runs nothing and ends `unauthorized`.
+- From the web, lock methods and button-gated methods answer `{"job": id}` and end with `job.done` to the session that asked; button-gated ones check their parameters first, then wait up to 30 s for a press of the board's button (`confirm.required`, `confirm.result`, `confirm_timeout`), which replaces their refusal with `forbidden`. A job of a session that has ended runs nothing and ends `unauthorized`. After the press, a web `locks.pair` without `wait` waits 120 s for the lock to advertise (30 s over USB), time to walk from the board to the lock.
 
 ### Changed
 

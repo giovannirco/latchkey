@@ -111,7 +111,7 @@ The first time the board has an address it starts HTTPS on port 443 and, on port
 The board is a Bluetooth LE central for TTLock locks (service `0x1910`, protocol 3). Lock methods take `{"lock": "<MAC>"}`, the address `locks.list` reports as `id`:
 
 - `locks.scan {"seconds": 1-30}` answers `{"seconds"}` at once and streams one `scan.result {mac, name, rssi, paired, lock?}` event per lock it hears.
-- `locks.pair {"mac", "name"?, "wait"?}` waits up to `wait` seconds (default 30, at most 600) for that lock to advertise, then pairs it. A factory-fresh lock advertises for about 15 s after a touch on its keypad. The keys are stored in the NVS `locks` namespace the moment the lock accepts the board as its admin, and again when pairing ends.
+- `locks.pair {"mac", "name"?, "wait"?}` waits up to `wait` seconds (at most 600) for that lock to advertise, then pairs it. Without `wait` it waits 30 s over USB and 120 s from the web, where the wait starts after the press on the board's button and leaves time to walk to the lock. A factory-fresh lock advertises for about 15 s after a touch on its keypad. The keys are stored in the NVS `locks` namespace the moment the lock accepts the board as its admin, and again when pairing ends.
 - `locks.list`, `locks.rename {"lock", "name"}` and `locks.forget` (drops the keys on the board only) need no Bluetooth.
 - `lock.status`, `lock.info`, `lock.features`, `lock.unlock`, `lock.lock`, `lock.time.sync` and `lock.factoryReset` connect to the lock. Unlock and lock emit `lock.state` and `lock.event`, and keep the link for 25 s for the events the lock pushes.
 

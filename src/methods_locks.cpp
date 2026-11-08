@@ -6,6 +6,7 @@
 
 #include "latchkey_util/ble_adv.h"
 #include "latchkey_util/label.h"
+#include "latchkey_util/pair_wait.h"
 #include "lock_manager.h"
 #include "methods.h"
 #include "rpc.h"
@@ -19,8 +20,6 @@ constexpr size_t kMaxNameCodePoints = 32;
 constexpr size_t kMaxNameBytes = sizeof(store::locks::Record::name) - 1;
 constexpr uint32_t kDefaultScanSeconds = 10;
 constexpr uint32_t kMaxScanSeconds = 30;
-constexpr uint32_t kDefaultPairWaitSeconds = 30;
-constexpr uint32_t kMaxPairWaitSeconds = 600;
 constexpr const char* kDefaultLockName = "New lock";
 constexpr const char* kMacMessage = "must be a Bluetooth address like AA:BB:CC:DD:EE:FF";
 constexpr const char* kNameMessage = "name must be 1 to 32 characters (at most 99 bytes)";
@@ -119,27 +118,30 @@ struct PairRequest {
     uint32_t wait = 0;
 };
 
-rpc::Reply readPair(const cJSON* params, PairRequest& out) {
+static_assert(latchkey_util::kMaxPairWaitSeconds == 600, "readPair's wait message states this limit");
+
+rpc::Reply readPair(const cJSON* params, const rpc::Context& context, PairRequest& out) {
     if (!readMac(params, "mac", out.mac)) {
         return invalid(std::string("mac ") + kMacMessage);
     }
     if (!readOptionalName(member(params, "name"), out.name)) {
         return withTarget(invalid(kNameMessage), out.mac);
     }
-    if (!readSeconds(member(params, "wait"), kDefaultPairWaitSeconds, kMaxPairWaitSeconds, out.wait)) {
+    const uint32_t fallback = latchkey_util::defaultPairWaitSeconds(context.origin == rpc::Transport::Serial);
+    if (!readSeconds(member(params, "wait"), fallback, latchkey_util::kMaxPairWaitSeconds, out.wait)) {
         return withTarget(invalid("wait must be a whole number of seconds from 1 to 600"), out.mac);
     }
     return withTarget(rpc::ok(), out.mac);
 }
 
-rpc::Reply checkPair(const cJSON* params, const rpc::Context&) {
+rpc::Reply checkPair(const cJSON* params, const rpc::Context& context) {
     PairRequest request;
-    return readPair(params, request);
+    return readPair(params, context, request);
 }
 
-rpc::Reply pair(const cJSON* params, const rpc::Context&) {
+rpc::Reply pair(const cJSON* params, const rpc::Context& context) {
     PairRequest request;
-    rpc::Reply problem = readPair(params, request);
+    rpc::Reply problem = readPair(params, context, request);
     if (!problem.error.empty()) {
         return problem;
     }
