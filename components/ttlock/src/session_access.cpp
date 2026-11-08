@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Ported from kind3r/ttlock-sdk-js (GPL-3.0) src/device/TTLock.ts and src/device/TTLockApi.ts: the passcode,
-// fingerprint and IC card flows.
+// fingerprint and IC card flows. The weekly-cycle limits follow src/api/ValidityInfo.ts isValidCycle.
 #include "ttlock/session.h"
 
 #include <string>
@@ -16,6 +16,9 @@ constexpr size_t kMinPasscodeDigits = 4;
 constexpr size_t kMaxPasscodeDigits = 9;
 constexpr uint16_t kFirstYear = 2000;
 constexpr uint16_t kLastYear = 2099;
+constexpr uint8_t kFirstWeekDay = 1;
+constexpr uint8_t kLastWeekDay = 7;
+constexpr uint16_t kMinutesPerDay = 24 * 60;
 
 bool isDigits(const std::string& code, size_t minimum, size_t maximum) {
     if (code.size() < minimum || code.size() > maximum) {
@@ -72,6 +75,11 @@ Status checkWritablePasscode(const Passcode& passcode) {
         return Status::InvalidArgument;
     }
     return passcode.type == PasscodeType::Cyclic ? Status::Unsupported : Status::Ok;
+}
+
+bool isValidCycle(const WeeklyCycle& cycle) {
+    return cycle.weekDay >= kFirstWeekDay && cycle.weekDay <= kLastWeekDay &&
+           cycle.startMinuteOfDay <= kMinutesPerDay && cycle.endMinuteOfDay <= kMinutesPerDay;
 }
 
 }
@@ -289,6 +297,53 @@ Status Session::enroll(bool fingerprint, const Validity& validity, const EnrollC
         status = awaitData(command, kEnrollStepTimeoutMs, data);
     }
     return status;
+}
+
+Status Session::requireCyclic(Feature credential) const {
+    const Status status = requireFeature(credential);
+    return status == Status::Ok ? requireFeature(Feature::CyclicIcOrFingerPrint) : status;
+}
+
+Status Session::cardAddCycle(uint64_t number, const WeeklyCycle& cycle) {
+    const Status status = requireCyclic(Feature::Ic);
+    if (status != Status::Ok) {
+        return status;
+    }
+    if (!isValidCycle(cycle)) {
+        return Status::InvalidArgument;
+    }
+    Bytes data;
+    return adminRequest(Feature::CyclicIcOrFingerPrint, command::kCyclic, buildCardCycleAdd(number, cycle), data);
+}
+
+Status Session::cardClearCycles(uint64_t number) {
+    const Status status = requireCyclic(Feature::Ic);
+    if (status != Status::Ok) {
+        return status;
+    }
+    Bytes data;
+    return adminRequest(Feature::CyclicIcOrFingerPrint, command::kCyclic, buildCardCycleClear(number), data);
+}
+
+Status Session::fingerprintAddCycle(uint64_t id, const WeeklyCycle& cycle) {
+    const Status status = requireCyclic(Feature::FingerPrint);
+    if (status != Status::Ok) {
+        return status;
+    }
+    if (!isValidCycle(cycle)) {
+        return Status::InvalidArgument;
+    }
+    Bytes data;
+    return adminRequest(Feature::CyclicIcOrFingerPrint, command::kCyclic, buildFingerprintCycleAdd(id, cycle), data);
+}
+
+Status Session::fingerprintClearCycles(uint64_t id) {
+    const Status status = requireCyclic(Feature::FingerPrint);
+    if (status != Status::Ok) {
+        return status;
+    }
+    Bytes data;
+    return adminRequest(Feature::CyclicIcOrFingerPrint, command::kCyclic, buildFingerprintCycleClear(id), data);
 }
 
 }

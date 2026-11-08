@@ -42,6 +42,7 @@ inline constexpr uint8_t kAudioManage = 0x62;
 inline constexpr uint8_t kGetAdminCode = 0x65;
 inline constexpr uint8_t kConfigurePassageMode = 0x66;
 inline constexpr uint8_t kSwitch = 0x68;
+inline constexpr uint8_t kCyclic = 0x70;
 inline constexpr uint8_t kReadDeviceInfo = 0x90;
 
 }
@@ -146,6 +147,11 @@ struct EnrollReply {
 bool parseFingerprintEnrollReply(const Bytes& data, EnrollReply& out);
 bool parseCardEnrollReply(const Bytes& data, EnrollReply& out);
 
+Bytes buildCardCycleAdd(uint64_t number, const WeeklyCycle& cycle);
+Bytes buildCardCycleClear(uint64_t number);
+Bytes buildFingerprintCycleAdd(uint64_t id, const WeeklyCycle& cycle);
+Bytes buildFingerprintCycleClear(uint64_t id);
+
 Bytes buildAutoLockQuery();
 Bytes buildAutoLockSet(uint16_t seconds);
 bool parseAutoLock(const Bytes& data, AutoLockSetting& out);
@@ -177,6 +183,8 @@ Bytes buildRemoteUnlockSet(bool enabled);
 bool parseRemoteUnlock(const Bytes& data, bool& out);
 
 Bytes buildScreenPasscodeQuery();
+Bytes buildScreenPasscodeSet(bool visible);
+bool parseScreenPasscode(const Bytes& data, bool& visible);
 
 Bytes buildOperateLogRequest(uint16_t sequence);
 

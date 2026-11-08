@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Ported from kind3r/ttlock-sdk-js (GPL-3.0) src/device/TTLock.ts and src/device/TTLockApi.ts: the time
-// calibration, auto-lock, passage mode, sound and remote unlock flows.
+// calibration, auto-lock, passage mode, sound, remote unlock and screen passcode flows.
 #include "ttlock/session.h"
 
 #include <vector>
@@ -155,6 +155,22 @@ Status Session::resetButtonSet(bool enabled) {
     return switchSet(Feature::ResetButton, kSwitchResetButton, enabled);
 }
 
+Status Session::privacyLockGet(bool& enabled) {
+    return switchGet(Feature::PrivacyLock, kSwitchPrivacyLock, enabled);
+}
+
+Status Session::privacyLockSet(bool enabled) {
+    return switchSet(Feature::PrivacyLock, kSwitchPrivacyLock, enabled);
+}
+
+Status Session::tamperAlertGet(bool& enabled) {
+    return switchGet(Feature::TamperAlert, kSwitchTamperAlert, enabled);
+}
+
+Status Session::tamperAlertSet(bool enabled) {
+    return switchSet(Feature::TamperAlert, kSwitchTamperAlert, enabled);
+}
+
 Status Session::remoteUnlockGet(bool& enabled) {
     Bytes data;
     const Status status =
@@ -169,6 +185,21 @@ Status Session::remoteUnlockSet(bool enabled) {
     Bytes data;
     return adminRequest(Feature::ConfigGatewayUnlock, command::kControlRemoteUnlock, buildRemoteUnlockSet(enabled),
                         data);
+}
+
+Status Session::screenPasscodeGet(bool& visible) {
+    Bytes data;
+    const Status status =
+        adminRequest(Feature::PasswordDisplayOrHide, command::kShowPassword, buildScreenPasscodeQuery(), data);
+    if (status != Status::Ok) {
+        return status;
+    }
+    return parseScreenPasscode(data, visible) ? Status::Ok : Status::BadResponse;
+}
+
+Status Session::screenPasscodeSet(bool visible) {
+    Bytes data;
+    return adminRequest(Feature::PasswordDisplayOrHide, command::kShowPassword, buildScreenPasscodeSet(visible), data);
 }
 
 }

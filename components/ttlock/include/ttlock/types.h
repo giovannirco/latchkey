@@ -114,6 +114,12 @@ struct Credential {
     Validity validity;
 };
 
+struct WeeklyCycle {
+    uint8_t weekDay = 1;
+    uint16_t startMinuteOfDay = 0;
+    uint16_t endMinuteOfDay = 0;
+};
+
 struct LogEntry {
     uint16_t recordNumber = 0;
     uint8_t type = 0;

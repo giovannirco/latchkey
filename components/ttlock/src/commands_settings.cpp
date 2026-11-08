@@ -19,6 +19,7 @@ constexpr uint8_t kVolumeTrailer = 0;
 constexpr uint8_t kLowestVolume = 1;
 constexpr uint8_t kHighestVolume = 5;
 constexpr uint8_t kRemoteUnlockOpen = 1;
+constexpr uint8_t kScreenPasscodeVisible = 1;
 constexpr uint8_t kPassageEnd = 0xFF;
 constexpr size_t kPassageHeaderSize = 3;
 constexpr size_t kPassageEntrySize = 7;
@@ -152,6 +153,18 @@ bool parseRemoteUnlock(const Bytes& data, bool& out) {
 
 Bytes buildScreenPasscodeQuery() {
     return Bytes{kQuery};
+}
+
+Bytes buildScreenPasscodeSet(bool visible) {
+    return Bytes{kModify, static_cast<uint8_t>(visible ? 1 : 0)};
+}
+
+bool parseScreenPasscode(const Bytes& data, bool& visible) {
+    if (data.size() < 2 || data[0] != kQuery) {
+        return false;
+    }
+    visible = data[1] == kScreenPasscodeVisible;
+    return true;
 }
 
 }

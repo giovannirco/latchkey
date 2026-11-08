@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Ported from kind3r/ttlock-sdk-js (GPL-3.0) src/api/Commands: ManageKeyboardPassword, GetKeyboardPasswords,
-// ManageIC and ManageFR. Passcode ADD, the passcode trailer lengths and the 8-byte card listing follow
+// ManageIC, ManageFR and CyclicDate. Passcode ADD, the passcode trailer lengths and the 8-byte card listing follow
 // roquerodrigo/ttlock-ble (MIT), which confirmed them on hardware.
 #include <utility>
 
@@ -30,6 +30,14 @@ constexpr size_t kShortCardRecordSize = kShortCardIdSize + 2 * wire::kDateSize;
 constexpr size_t kLongCardPageSize = kPageHeaderSize + kLongCardIdSize + 2 * wire::kDateSize;
 constexpr size_t kEnrollHeaderSize = 3;
 constexpr uint32_t kCardPadding = 0xFFFFFFFF;
+constexpr uint8_t kCycleAdd = 2;
+constexpr uint8_t kCycleClear = 4;
+constexpr uint8_t kCycleFingerprint = 1;
+constexpr uint8_t kCycleCard = 2;
+constexpr uint8_t kWeeklyCycle = 1;
+constexpr uint8_t kNoMonth = 0;
+constexpr size_t kCycleZeroTail = 4;
+constexpr uint16_t kMinutesPerHour = 60;
 
 void appendCode(Bytes& out, const std::string& code) {
     out.push_back(static_cast<uint8_t>(code.size()));
@@ -99,6 +107,28 @@ bool parseEnrollHeader(const Bytes& data, EnrollReply& out) {
     out.status = static_cast<EnrollStatus>(status);
     out.id = 0;
     return true;
+}
+
+Bytes cycleFrame(uint8_t operation, uint8_t user, uint64_t id, size_t idSize) {
+    Bytes out{operation, user, static_cast<uint8_t>(idSize)};
+    wire::appendBe(out, id, idSize);
+    return out;
+}
+
+void appendHourMinute(Bytes& out, uint16_t minuteOfDay) {
+    out.push_back(static_cast<uint8_t>(minuteOfDay / kMinutesPerHour));
+    out.push_back(static_cast<uint8_t>(minuteOfDay % kMinutesPerHour));
+}
+
+Bytes cycleAdd(uint8_t user, uint64_t id, size_t idSize, const WeeklyCycle& cycle) {
+    Bytes out = cycleFrame(kCycleAdd, user, id, idSize);
+    out.push_back(kWeeklyCycle);
+    out.push_back(cycle.weekDay);
+    out.push_back(kNoMonth);
+    appendHourMinute(out, cycle.startMinuteOfDay);
+    appendHourMinute(out, cycle.endMinuteOfDay);
+    out.insert(out.end(), kCycleZeroTail, uint8_t{0});
+    return out;
 }
 
 }
@@ -295,6 +325,22 @@ bool parseCardEnrollReply(const Bytes& data, EnrollReply& out) {
     }
     out = reply;
     return true;
+}
+
+Bytes buildCardCycleAdd(uint64_t number, const WeeklyCycle& cycle) {
+    return cycleAdd(kCycleCard, number, cardIdSize(number), cycle);
+}
+
+Bytes buildCardCycleClear(uint64_t number) {
+    return cycleFrame(kCycleClear, kCycleCard, number, cardIdSize(number));
+}
+
+Bytes buildFingerprintCycleAdd(uint64_t id, const WeeklyCycle& cycle) {
+    return cycleAdd(kCycleFingerprint, id, kFingerprintIdSize, cycle);
+}
+
+Bytes buildFingerprintCycleClear(uint64_t id) {
+    return cycleFrame(kCycleClear, kCycleFingerprint, id, kFingerprintIdSize);
 }
 
 }
