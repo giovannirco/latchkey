@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
+const CHAINED_TIMEOUT_MS = 240000;
 const LOCK_TIMEOUT_MS = 100000;
 const BUTTON_TIMEOUT_MS = 45000;
 const SHORT_TIMEOUT_MS = 15000;
@@ -307,7 +308,10 @@ function apiError(error) {
   return new ApiError(code || 'http', message, extra);
 }
 
+const CHAINED_METHODS = new Set(['locks.pair', 'lock.harden', 'lock.factoryReset']);
+
 function timeoutFor(method) {
+  if (CHAINED_METHODS.has(method)) return CHAINED_TIMEOUT_MS;
   if (method.startsWith('lock.') || method.startsWith('locks.')) return LOCK_TIMEOUT_MS;
   if (method in ACTION_TEXT) return BUTTON_TIMEOUT_MS;
   return SHORT_TIMEOUT_MS;

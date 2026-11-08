@@ -600,10 +600,10 @@ class Mock:
                 return self._start_job(name, method, ctx, params)
             result = method.handler(self, ctx, params)
         except RpcError as err:
-            if method.audited:
+            if method.audited and generation == self.generation:
                 self.append_audit(name, ctx, params, err.code)
             raise
-        if method.audited:
+        if method.audited and generation == self.generation:
             self.append_audit(name, ctx, params, "ok")
         return result
 
