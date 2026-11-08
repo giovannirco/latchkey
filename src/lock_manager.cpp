@@ -912,9 +912,7 @@ void keepWatch(const std::string& mac, const WatchView& view, bool answered, boo
         return;
     }
     lock->live.ledger = view.ledger;
-    if (answered) {
-        saveWatch(*lock, view.state);
-    }
+    saveWatch(*lock, view.state);
     lock->live.schedule.attempted(monotonicMs(), answered);
     if (more) {
         lock->live.schedule.more();
