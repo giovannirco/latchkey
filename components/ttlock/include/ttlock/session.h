@@ -34,6 +34,10 @@ struct PairResult {
     bool adminPasscodeConfirmed = false;
 };
 
+struct PairOptions {
+    std::string adminPasscode;
+};
+
 class Session {
 public:
     Session(Transport& transport, Clock& clock, Random& random);
@@ -41,6 +45,8 @@ public:
     void setEventSink(EventSink sink);
 
     Status pair(const LockVersion& version, LockKeys& out, PersistCallback persistEarly, PairResult& result);
+    Status pair(const LockVersion& version, const PairOptions& options, LockKeys& out, PersistCallback persistEarly,
+                PairResult& result);
     Status attach(const LockKeys& keys);
     const LockKeys& keys() const;
     uint8_t lockErrorCode() const;
@@ -129,7 +135,7 @@ private:
     Status initialize();
     Status fetchAesKey();
     Status addAdmin();
-    Status finishPairing(const std::function<void()>& persist, PairResult& result);
+    Status finishPairing(const std::string& chosenPasscode, const std::function<void()>& persist, PairResult& result);
     Status initPasswords();
     Status controlLock(uint8_t command, OperationResult& out);
     Status enroll(bool fingerprint, const Validity& validity, const EnrollCallback& progress, uint64_t& id);

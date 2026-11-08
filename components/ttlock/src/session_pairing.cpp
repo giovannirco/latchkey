@@ -64,9 +64,17 @@ std::string Session::randomDigits(size_t count) {
 }
 
 Status Session::pair(const LockVersion& version, LockKeys& out, PersistCallback persistEarly, PairResult& result) {
+    return pair(version, PairOptions{}, out, std::move(persistEarly), result);
+}
+
+Status Session::pair(const LockVersion& version, const PairOptions& options, LockKeys& out,
+                     PersistCallback persistEarly, PairResult& result) {
     result = PairResult{};
     if (!usesV3Frames(version)) {
         return Status::Unsupported;
+    }
+    if (!options.adminPasscode.empty() && !isPasscode(options.adminPasscode)) {
+        return Status::InvalidArgument;
     }
     if (!timeUsable()) {
         return Status::TimeUnsynced;
@@ -102,7 +110,7 @@ Status Session::pair(const LockVersion& version, LockKeys& out, PersistCallback 
     if (status != Status::Ok) {
         return Status::PairIncomplete;
     }
-    status = finishPairing(persist, result);
+    status = finishPairing(options.adminPasscode, persist, result);
     out = keys_;
     if (status != Status::Ok) {
         return Status::PairIncomplete;
@@ -148,7 +156,8 @@ Status Session::addAdmin() {
     return isAddAdminAccepted(data) ? Status::Ok : Status::BadResponse;
 }
 
-Status Session::finishPairing(const std::function<void()>& persist, PairResult& result) {
+Status Session::finishPairing(const std::string& chosenPasscode, const std::function<void()>& persist,
+                              PairResult& result) {
     Bytes data;
     Status status = request(command::kTimeCalibrate, buildCalibrateTime(localNow()), data);
     if (status == Status::Ok) {
@@ -173,7 +182,7 @@ Status Session::finishPairing(const std::function<void()>& persist, PairResult& 
         }
     }
     const std::string previous = keys_.adminPasscode;
-    keys_.adminPasscode = randomDigits(kAdminPasscodeDigits);
+    keys_.adminPasscode = chosenPasscode.empty() ? randomDigits(kAdminPasscodeDigits) : chosenPasscode;
     persist();
     status = request(command::kSetAdminKeyboardPassword, buildSetAdminPasscode(keys_.adminPasscode), data);
     if (status == Status::LockError) {

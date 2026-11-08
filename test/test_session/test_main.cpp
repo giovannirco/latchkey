@@ -201,15 +201,23 @@ struct Persisted {
     ttlock::PairResult result;
 };
 
+static ttlock::PersistCallback recorder(Rig& rig, Persisted& persisted) {
+    return [&persisted, &rig](const ttlock::LockKeys& keys) {
+        persisted.calls.push_back(keys);
+        persisted.requestsSeen.push_back(rig.lock.requests().size());
+    };
+}
+
 static Status pair(Rig& rig, ttlock::LockKeys& out, Persisted& persisted) {
     out.mac = kMac;
-    return rig.session.pair(
-        fake::kRequestVersion, out,
-        [&persisted, &rig](const ttlock::LockKeys& keys) {
-            persisted.calls.push_back(keys);
-            persisted.requestsSeen.push_back(rig.lock.requests().size());
-        },
-        persisted.result);
+    return rig.session.pair(fake::kRequestVersion, out, recorder(rig, persisted), persisted.result);
+}
+
+static Status pairWith(Rig& rig, const std::string& adminPasscode, ttlock::LockKeys& out, Persisted& persisted) {
+    out.mac = kMac;
+    ttlock::PairOptions options;
+    options.adminPasscode = adminPasscode;
+    return rig.session.pair(fake::kRequestVersion, options, out, recorder(rig, persisted), persisted.result);
 }
 
 static size_t indexOf(const FakeLock& lock, uint8_t command) {
@@ -621,6 +629,44 @@ static void test_a_silent_admin_passcode_keeps_the_tentative_code() {
     TEST_ASSERT_EQUAL_STRING(keys.adminPasscode.c_str(), persisted.calls.back().adminPasscode.c_str());
     assertCommands({0x45, 0x19, 0x56, 0x43, 0x01, 0x53, 0x31, 0x57}, rig.lock);
     TEST_ASSERT_TRUE(rig.lock.scriptDone());
+}
+
+static void test_pair_sends_the_admin_passcode_the_owner_chose() {
+    Rig rig;
+    load(rig.lock, pairingSteps(bits({Feature::Passcode})));
+    ttlock::LockKeys keys;
+    Persisted persisted;
+    assertStatus(Status::Ok, pairWith(rig, k3::kSetAdminPasscodeCode, keys, persisted));
+    const size_t sent = indexOf(rig.lock, cmd::kSetAdminKeyboardPassword);
+    assertPayload(Bytes(std::begin(k3::kSetAdminPasscode), std::end(k3::kSetAdminPasscode)), rig.lock.requests()[sent]);
+    TEST_ASSERT_EQUAL_STRING(k3::kSetAdminPasscodeCode, keys.adminPasscode.c_str());
+    TEST_ASSERT_EQUAL_STRING(k3::kSetAdminPasscodeCode, rig.session.keys().adminPasscode.c_str());
+    TEST_ASSERT_EQUAL_UINT(sent, persisted.requestsSeen[1]);
+    TEST_ASSERT_EQUAL_STRING(k3::kSetAdminPasscodeCode, persisted.calls[1].adminPasscode.c_str());
+    TEST_ASSERT_TRUE(persisted.result.adminPasscodeConfirmed);
+    TEST_ASSERT_TRUE(rig.lock.scriptDone());
+
+    Rig drawn;
+    load(drawn.lock, pairingSteps(bits({Feature::Passcode})));
+    ttlock::LockKeys drawnKeys;
+    Persisted drawnPersisted;
+    assertStatus(Status::Ok, pair(drawn, drawnKeys, drawnPersisted));
+    TEST_ASSERT_EQUAL_UINT(drawn.random.drawn() - ttlock::kAdminPasscodeDigits * 4, rig.random.drawn());
+}
+
+static const char* const kInvalidAdminPasscodes[] = {"123",      "1234567890", "12a4567",
+                                                     " 123456",  "1234567\n",  "\xEF\xBC\x91\xEF\xBC\x92\xEF\xBC\x93"};
+
+static void test_pair_refuses_an_invalid_admin_passcode_before_any_frame() {
+    for (const char* code : kInvalidAdminPasscodes) {
+        Rig rig;
+        ttlock::LockKeys keys;
+        Persisted persisted;
+        assertStatus(Status::InvalidArgument, pairWith(rig, code, keys, persisted));
+        TEST_ASSERT_EQUAL_UINT_MESSAGE(0, rig.lock.requests().size(), code);
+        TEST_ASSERT_EQUAL_UINT_MESSAGE(0, rig.random.drawn(), code);
+        TEST_ASSERT_EQUAL_UINT_MESSAGE(0, persisted.calls.size(), code);
+    }
 }
 
 static void assertMandatoryStepFailure(uint8_t command, size_t persists) {
@@ -1866,6 +1912,8 @@ int main() {
     RUN_TEST(test_a_confirmed_admin_passcode_is_persisted_before_it_is_sent);
     RUN_TEST(test_a_refused_admin_passcode_rolls_back_and_makes_pairing_incomplete);
     RUN_TEST(test_a_silent_admin_passcode_keeps_the_tentative_code);
+    RUN_TEST(test_pair_sends_the_admin_passcode_the_owner_chose);
+    RUN_TEST(test_pair_refuses_an_invalid_admin_passcode_before_any_frame);
     RUN_TEST(test_refused_mandatory_steps_make_pairing_incomplete);
     RUN_TEST(test_a_silent_optional_read_makes_pairing_incomplete);
     RUN_TEST(test_unlock_checks_user_time_then_sends_the_sum_and_utc_time);

@@ -12,29 +12,11 @@
 namespace ttlock {
 namespace {
 
-constexpr size_t kMinPasscodeDigits = 4;
-constexpr size_t kMaxPasscodeDigits = 9;
 constexpr uint16_t kFirstYear = 2000;
 constexpr uint16_t kLastYear = 2099;
 constexpr uint8_t kFirstWeekDay = 1;
 constexpr uint8_t kLastWeekDay = 7;
 constexpr uint16_t kMinutesPerDay = 24 * 60;
-
-bool isDigits(const std::string& code, size_t minimum, size_t maximum) {
-    if (code.size() < minimum || code.size() > maximum) {
-        return false;
-    }
-    for (char digit : code) {
-        if (digit < '0' || digit > '9') {
-            return false;
-        }
-    }
-    return true;
-}
-
-bool isPasscode(const std::string& code) {
-    return isDigits(code, kMinPasscodeDigits, kMaxPasscodeDigits);
-}
 
 bool isKnownPasscodeType(PasscodeType type) {
     switch (type) {
