@@ -34,6 +34,7 @@
 #include "latchkey_util/tz.h"
 #include "lock_manager.h"
 #include "methods.h"
+#include "mqtt.h"
 #include "rpc.h"
 #include "store.h"
 #include "wifi.h"
@@ -191,6 +192,8 @@ rpc::Reply info(const cJSON*, const rpc::Context&) {
     cJSON_AddNumberToObject(stacks, "httpsServer", http::serverStackFree());
     cJSON_AddNumberToObject(stacks, "webRequests", http::workerStackFree());
     cJSON_AddNumberToObject(stacks, "webJobs", jobs::stackFree());
+    cJSON_AddNumberToObject(stacks, "mqtt", mqtt::stackFree());
+    cJSON_AddNumberToObject(stacks, "mqttClient", stackFree("mqtt_task"));
     cJSON_AddItemToObject(result, "ble", bleJson());
     store::Usage usage;
     if (store::usage(usage) != ESP_OK) {
