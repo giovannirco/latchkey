@@ -28,9 +28,20 @@ Test hooks used by tools/ui-tests/:
   "expireSessions", "dropSockets" (closes every event socket), "setLock" {"id", fields} (changes a
   lock without an event), "failNext" {"method", "code", "message"}, "warnNext" {"method", "warning"}
   (adds a warning to the next result), "delay" {"method", "ms"} (holds the next reply), "scanExtra"
-  [devices], "emit" [{"event", "data"}];
+  [devices], "emit" [{"event", "data"}], "logLines" [{"level", "tag", "message"}] (adds lines to the
+  board's log);
 - GET /__mock/calls     every RPC since the last reset, with secret parameters replaced by "***";
 - GET /__mock/health    readiness probe.
+
+system.logs pages through the board's recent log lines, oldest first: {since?, level?, limit?} gives up
+to limit (1 to 100) lines after the sequence number since, or the newest ones without it, at that level
+or a more severe one (error, warn, info, debug, verbose); each line is {seq, uptimeMs, utcMs (null until
+the clock is set), level, tag, message}. The result is {lines, more, next, missed}: pass next as since to
+continue, more says lines that match follow, missed counts lines the board overwrote after since. The
+board may return fewer than limit lines when they are long. system.syslog.get/set read and change the
+remote logging settings {enabled, host, port, transport (udp or tcp), appName, level} and report
+{connected, sent, dropped, errors}; system.info carries logs {lines, capacity, withheld} and syslog
+{enabled, connected, sent, dropped, errors}.
 
 Results may carry a "warning" the UI must show, as on the board: a name the board could not store,
 a pairing whose offline-code seeds were lost, or an easy passcode (a run or one repeated digit). Like
@@ -81,6 +92,7 @@ QUEUE_WAIT_S = 60
 MAX_BODY = 64 * 1024
 OTA_SLOT_BYTES = 0x1E0000
 WS_GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
+SYSLOG_COUNTERS = ("enabled", "connected", "sent", "dropped", "errors")
 SECRET_PARAMS = {"password", "totp", "passphrase", "code", "current", "new", "backup", "adminPasscode"}
 FRONT_DOOR = "00:00:5E:00:53:01"
 SHED = "00:00:5E:00:53:02"
@@ -111,6 +123,14 @@ EASY_CODE_WARNING = (
     "opens whenever the code appears among the digits typed"
 )
 HHMM = re.compile(r"^([01]\d|2[0-3]):[0-5]\d$")
+HOST_NAME = re.compile(r"^[A-Za-z0-9_-]+(\.[A-Za-z0-9_-]+)*$")
+HOST_MESSAGE = "host must be a host name or an IPv4 address of at most 64 characters"
+WIFI_MESSAGE = "wifi needs ssid, password, ip, gateway, netmask and dns"
+LOG_LEVELS = ("error", "warn", "info", "debug", "verbose")
+LEVEL_MESSAGE = "level is error, warn, info, debug or verbose"
+LOG_RING_BYTES = 32768
+LOG_RING_LINES = 320
+LOG_PAGE_LINES = 100
 LOG_APP_UNLOCK = 1
 LOG_PASSCODE_UNLOCK = 4
 LOG_WRONG_PASSCODE = 7
@@ -201,6 +221,29 @@ def redact(value: Any) -> Any:
 
 def invalid(message: str) -> RpcError:
     return RpcError("invalid_argument", message)
+
+
+def parse_ipv4(value: Any) -> int | None:
+    if not isinstance(value, str):
+        return None
+    octets = value.split(".")
+    if len(octets) != 4 or any(not octet.isdigit() or len(octet) > 3 or octet != str(int(octet)) for octet in octets):
+        return None
+    numbers = [int(octet) for octet in octets]
+    return None if max(numbers) > 255 else int.from_bytes(bytes(numbers), "big")
+
+
+def is_static_ipv4(address: int, gateway: int, netmask: int) -> bool:
+    prefix = bin(netmask).count("1")
+    if netmask != (0xFFFFFFFF << (32 - prefix)) & 0xFFFFFFFF or not 1 <= prefix <= 30:
+        return False
+    host_bits = ~netmask & 0xFFFFFFFF
+    hosts = all(value & host_bits not in (0, host_bits) for value in (address, gateway))
+    return hosts and address != gateway and address & netmask == gateway & netmask
+
+
+def is_app_name(value: str) -> bool:
+    return 1 <= len(value) <= 48 and all(33 <= ord(c) <= 126 for c in value)
 
 
 def text_param(params: dict, key: str, *, max_len: int, required: bool = False) -> str:
@@ -500,7 +543,27 @@ class Mock:
             self.locks: dict[str, dict] = {lock["id"]: lock for lock in demo_locks()}
             self.nearby = demo_nearby()
             self.backups: dict[str, dict] = {lock_id: copy.deepcopy(lock) for lock_id, lock in self.locks.items()}
-            self.wifi = {"connected": True, "ssid": "lab-iot", "ip": "192.0.2.10", "rssi": -58}
+            self.wifi = {
+                "configured": True,
+                "connected": True,
+                "ssid": "lab-iot",
+                "ip": "192.0.2.10",
+                "gateway": "192.0.2.1",
+                "netmask": "255.255.255.0",
+                "dns": "192.0.2.53",
+                "rssi": -58,
+            }
+            self.syslog = {
+                "enabled": False,
+                "host": "",
+                "port": 514,
+                "transport": "udp",
+                "appName": "latchkey",
+                "level": "info",
+            }
+            self.logs: list[dict] = []
+            self.log_seq = 0
+            self._seed_logs()
             self.mqtt = {
                 "enabled": False,
                 "host": "",
@@ -511,6 +574,31 @@ class Mock:
             }
             self._seed_audit()
         self.events.disconnect()
+
+    def _seed_logs(self) -> None:
+        synced = int(self.started) + 3
+        for uptime_ms, level, tag, message in (
+            (120, "info", "", "latchkey 0.1.0 board=esp32s3-atom chip=esp32s3 idf=v6.1.0"),
+            (380, "info", "certs", f"HTTPS certificate SHA-256 {CERT_FINGERPRINT}"),
+            (2100, "info", "wifi", "connected, ip 192.0.2.10"),
+            (2950, "info", "clock", f"SNTP synced, utc {synced}"),
+            (3400, "info", "lock", "2 lock(s) stored"),
+            (64000, "warn", "wifi", "disconnected, reason 8"),
+            (66100, "info", "wifi", "connected, ip 192.0.2.10"),
+            (66200, "info", "http", "HTTPS on port 443, redirect on port 80"),
+        ):
+            self.append_line(level, tag, message, uptime_ms)
+
+    def append_line(self, level: str, tag: str, message: str, uptime_ms: int | None = None) -> None:
+        with self.lock:
+            self.log_seq += 1
+            elapsed = uptime_ms if uptime_ms is not None else int((time.time() - self.started) * 1000)
+            self.logs.append({"seq": self.log_seq, "uptimeMs": elapsed, "level": level, "tag": tag, "message": message})
+            del self.logs[:-LOG_RING_LINES]
+
+    def _log_view(self, line: dict) -> dict:
+        utc = int(self.started * 1000) + line["uptimeMs"] if self.config.time_synced else None
+        return {**line, "utcMs": utc}
 
     def _seed_audit(self) -> None:
         stamp = now()
@@ -697,6 +785,8 @@ class Mock:
                 self.fail_next[failure["method"]] = RpcError(failure["code"], failure.get("message", failure["code"]))
             if "scanExtra" in body:
                 self.nearby.extend(dict(device) for device in body["scanExtra"])
+            for line in body.get("logLines", []):
+                self.append_line(line.get("level", "info"), line.get("tag", ""), line["message"])
             if "setLock" in body:
                 changes = dict(body["setLock"])
                 self.locks[changes.pop("id")].update(changes)
@@ -722,6 +812,8 @@ class Mock:
             "localTime": time.strftime("%Y-%m-%dT%H:%M:%S+00:00", time.gmtime()) if synced else None,
             "wifi": dict(self.wifi),
             "certFingerprint": CERT_FINGERPRINT,
+            "logs": {"lines": len(self.logs), "capacity": LOG_RING_BYTES, "withheld": 0},
+            "syslog": {key: value for key, value in self._syslog_view().items() if key in SYSLOG_COUNTERS},
         }
 
     @rpc("system.setup", session=False, audited=False)
@@ -730,13 +822,103 @@ class Mock:
 
     @rpc("system.wifi.set")
     def system_wifi_set(self, ctx: Context, params: dict) -> dict:
-        ssid = text_param(params, "ssid", max_len=32, required=True)
-        password = params.get("password", "")
-        if not isinstance(password, str) or (password and not 8 <= len(password) <= 63):
-            raise invalid("a Wi-Fi password is empty (open network) or 8 to 63 characters")
+        ssid = params.get("ssid")
+        password = params.get("password")
+        addresses = {key: parse_ipv4(params.get(key)) for key in ("ip", "gateway", "netmask", "dns")}
+        valid = (
+            isinstance(ssid, str)
+            and 1 <= len(ssid.encode()) <= 32
+            and isinstance(password, str)
+            and (password == "" or 8 <= len(password.encode()) <= 63)
+            and None not in addresses.values()
+            and addresses["dns"] != 0
+            and is_static_ipv4(addresses["ip"], addresses["gateway"], addresses["netmask"])
+        )
+        if not valid:
+            raise invalid(WIFI_MESSAGE)
         with self.lock:
-            self.wifi["ssid"] = ssid
-        return {"ssid": ssid, "reconnecting": True}
+            self.wifi.update({"configured": True, "ssid": ssid})
+            self.wifi.update({key: params[key] for key in addresses})
+        return {}
+
+    @rpc("system.logs", audited=False)
+    def system_logs(self, ctx: Context, params: dict) -> dict:
+        since = params.get("since")
+        if since is not None and (isinstance(since, bool) or not isinstance(since, int) or not 0 <= since < 2**32):
+            raise invalid("since must be the sequence number of a log line")
+        level = params.get("level", "verbose")
+        if level is None:
+            level = "verbose"
+        if level not in LOG_LEVELS:
+            raise invalid(LEVEL_MESSAGE)
+        limit = params.get("limit", LOG_PAGE_LINES)
+        if limit is None:
+            limit = LOG_PAGE_LINES
+        if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= LOG_PAGE_LINES:
+            raise invalid("limit must be 1 to 100")
+        allowed = LOG_LEVELS[: LOG_LEVELS.index(level) + 1]
+        with self.lock:
+            held = [dict(line) for line in self.logs]
+            newest = self.log_seq
+        matching = [line for line in held if line["level"] in allowed]
+        if since is None:
+            window, more = matching[-limit:], False
+        else:
+            later = [line for line in matching if line["seq"] > since]
+            window, more = later[:limit], len(later) > limit
+        oldest = held[0]["seq"] if held else newest + 1
+        return {
+            "lines": [self._log_view(line) for line in window],
+            "more": more,
+            "next": window[-1]["seq"] if more else newest,
+            "missed": max(0, oldest - since - 1) if since is not None else 0,
+        }
+
+    def _syslog_view(self) -> dict:
+        on = self.syslog["enabled"]
+        return {**self.syslog, "connected": on, "sent": 0, "dropped": 0, "errors": 0}
+
+    @rpc("system.syslog.get", audited=False)
+    def system_syslog_get(self, ctx: Context, params: dict) -> dict:
+        return self._syslog_view()
+
+    @rpc("system.syslog.set")
+    def system_syslog_set(self, ctx: Context, params: dict) -> dict:
+        enabled = params.get("enabled")
+        if not isinstance(enabled, bool):
+            raise invalid("enabled must be true or false")
+        host = params.get("host") or ""
+        if not isinstance(host, str):
+            raise invalid(HOST_MESSAGE)
+        host = host.strip(" ")
+        if host and (len(host) > 64 or not HOST_NAME.match(host)):
+            raise invalid(HOST_MESSAGE)
+        if enabled and not host:
+            raise invalid("host is required to turn remote logging on")
+        port = params.get("port")
+        if port is None:
+            port = 514
+        if isinstance(port, bool) or not isinstance(port, int) or not 1 <= port <= 65535:
+            raise invalid("port must be 1 to 65535")
+        transport = params.get("transport") or "udp"
+        if transport not in ("udp", "tcp"):
+            raise invalid("transport is udp or tcp")
+        app_name = params.get("appName") or ""
+        if not isinstance(app_name, str) or (app_name.strip(" ") and not is_app_name(app_name.strip(" "))):
+            raise invalid("appName must be 1 to 48 printable ASCII characters without spaces")
+        level = params.get("level") or "info"
+        if level not in LOG_LEVELS:
+            raise invalid(LEVEL_MESSAGE)
+        with self.lock:
+            self.syslog = {
+                "enabled": enabled,
+                "host": host,
+                "port": port,
+                "transport": transport,
+                "appName": app_name.strip(" ") or "latchkey",
+                "level": level,
+            }
+        return self._syslog_view()
 
     @rpc("system.reboot")
     def system_reboot(self, ctx: Context, params: dict) -> dict:
