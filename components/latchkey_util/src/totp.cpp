@@ -85,4 +85,30 @@ bool parseTotpCode(std::string_view text, uint32_t& code) {
     return true;
 }
 
+void TotpReplayGuard::restore(uint64_t lastStep) {
+    lastStep_ = lastStep;
+    unknown_ = false;
+}
+
+void TotpReplayGuard::restoreUnknown() { unknown_ = true; }
+
+uint64_t TotpReplayGuard::lastStepAt(int64_t unixSeconds) {
+    if (unknown_) {
+        const uint64_t window = totpStep(unixSeconds) + 1;
+        lastStep_ = lastStep_ > window ? lastStep_ : window;
+        unknown_ = false;
+    }
+    return lastStep_;
+}
+
+void TotpReplayGuard::accept(uint64_t step) {
+    lastStep_ = step;
+    unknown_ = false;
+}
+
+void TotpReplayGuard::reset() {
+    lastStep_ = 0;
+    unknown_ = false;
+}
+
 }

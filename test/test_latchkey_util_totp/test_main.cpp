@@ -187,6 +187,61 @@ static void test_codes_parse_as_exactly_six_digits() {
     TEST_ASSERT_FALSE(latchkey_util::parseTotpCode("-87082", code));
 }
 
+static void test_a_fresh_replay_guard_refuses_nothing() {
+    latchkey_util::TotpReplayGuard guard;
+    TEST_ASSERT_EQUAL_UINT64(0, guard.lastStepAt(1111111111));
+}
+
+static void test_a_restored_step_is_the_floor() {
+    latchkey_util::TotpReplayGuard guard;
+    guard.restore(0x23523ED);
+    TEST_ASSERT_EQUAL_UINT64(0x23523ED, guard.lastStepAt(1111111111));
+}
+
+static void test_an_unknown_step_refuses_the_window_of_the_first_check() {
+    latchkey_util::TotpReplayGuard guard;
+    guard.restoreUnknown();
+    const uint64_t floor = guard.lastStepAt(1111111111);
+    TEST_ASSERT_EQUAL_UINT64(0x23523EE, floor);
+    uint64_t accepted = 0;
+    TEST_ASSERT_EQUAL(TotpVerdict::Rejected, verify(1111111111, 81804, floor, accepted));
+    TEST_ASSERT_EQUAL(TotpVerdict::Rejected, verify(1111111111, 50471, floor, accepted));
+    TEST_ASSERT_EQUAL(TotpVerdict::Rejected, verify(1111111111, codeAt(1111111111 + 30), floor, accepted));
+    const int64_t later = 1111111111 + 60;
+    TEST_ASSERT_EQUAL_UINT64(floor, guard.lastStepAt(later));
+    TEST_ASSERT_EQUAL(TotpVerdict::Accepted, verify(later, codeAt(later), guard.lastStepAt(later), accepted));
+}
+
+static void test_an_unknown_step_is_settled_once() {
+    latchkey_util::TotpReplayGuard guard;
+    guard.restoreUnknown();
+    const uint64_t first = guard.lastStepAt(1111111111);
+    TEST_ASSERT_EQUAL_UINT64(first, guard.lastStepAt(1111111111 + 3600));
+}
+
+static void test_an_unknown_step_never_lowers_the_floor() {
+    latchkey_util::TotpReplayGuard guard;
+    guard.restore(0x23523ED + 10);
+    guard.restoreUnknown();
+    TEST_ASSERT_EQUAL_UINT64(0x23523ED + 10, guard.lastStepAt(1111111111));
+}
+
+static void test_an_accepted_step_becomes_the_floor() {
+    latchkey_util::TotpReplayGuard guard;
+    guard.accept(0x23523ED);
+    TEST_ASSERT_EQUAL_UINT64(0x23523ED, guard.lastStepAt(1111111111));
+}
+
+static void test_a_reset_forgets_the_floor() {
+    latchkey_util::TotpReplayGuard guard;
+    guard.restoreUnknown();
+    guard.reset();
+    TEST_ASSERT_EQUAL_UINT64(0, guard.lastStepAt(1111111111));
+    guard.accept(0x23523ED);
+    guard.reset();
+    TEST_ASSERT_EQUAL_UINT64(0, guard.lastStepAt(1111111111));
+}
+
 int main() {
     UNITY_BEGIN();
     RUN_TEST(test_reference_sha1_matches_fips_180);
@@ -204,5 +259,12 @@ int main() {
     RUN_TEST(test_the_window_starts_at_step_zero);
     RUN_TEST(test_an_hmac_failure_is_reported);
     RUN_TEST(test_codes_parse_as_exactly_six_digits);
+    RUN_TEST(test_a_fresh_replay_guard_refuses_nothing);
+    RUN_TEST(test_a_restored_step_is_the_floor);
+    RUN_TEST(test_an_unknown_step_refuses_the_window_of_the_first_check);
+    RUN_TEST(test_an_unknown_step_is_settled_once);
+    RUN_TEST(test_an_unknown_step_never_lowers_the_floor);
+    RUN_TEST(test_an_accepted_step_becomes_the_floor);
+    RUN_TEST(test_a_reset_forgets_the_floor);
     return UNITY_END();
 }

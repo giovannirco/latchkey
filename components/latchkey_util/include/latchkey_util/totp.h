@@ -28,4 +28,21 @@ TotpVerdict totpVerify(const uint8_t* secret, size_t secretLength, int64_t unixS
 
 bool parseTotpCode(std::string_view text, uint32_t& code);
 
+class TotpReplayGuard {
+public:
+    void restore(uint64_t lastStep);
+
+    void restoreUnknown();
+
+    uint64_t lastStepAt(int64_t unixSeconds);
+
+    void accept(uint64_t step);
+
+    void reset();
+
+private:
+    uint64_t lastStep_ = 0;
+    bool unknown_ = false;
+};
+
 }
