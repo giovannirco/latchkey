@@ -188,7 +188,11 @@ esp_err_t acceptRpc(httpd_req_t* req) {
         return refuse(req, "503 Service Unavailable", "busy", "the board is answering other requests");
     }
     auto* request = new (std::nothrow) Request{nullptr, {}};
-    if (request == nullptr || !readBody(req, request->body)) {
+    if (request == nullptr) {
+        return refuse(req, "503 Service Unavailable", "busy", "the board is out of memory");
+    }
+    if (!readBody(req, request->body)) {
+        mbedtls_platform_zeroize(request->body.data(), request->body.size());
         delete request;
         return ESP_FAIL;
     }
