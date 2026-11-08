@@ -174,8 +174,9 @@ def test_setup_returns_otpauth_once(
 
 
 def test_time_zone_sets_the_local_time(console: Console, fresh: list[str]) -> None:
-    assert console.call("system.timezone.get") == {"tz": "UTC0", "utcOffset": 0}
+    assert console.call("system.timezone.get") == {"tz": "UTC0", "utcOffset": None}
     set_clock(console)
+    assert console.call("system.timezone.get") == {"tz": "UTC0", "utcOffset": 0}
     assert_local_time(console.call("system.info"), "UTC0", 0)
     assert console.call("system.timezone.set", {"tz": "BRT3"}) == {"tz": "BRT3", "utcOffset": -10800}
     assert_local_time(console.call("system.info"), "BRT3", -10800)
@@ -188,6 +189,7 @@ def test_time_zone_sets_the_local_time(console: Console, fresh: list[str]) -> No
     info = console.call_and_wait_restart("system.reboot")
     assert info["timezone"] == CET
     assert info["localTime"] is None
+    assert console.call("system.timezone.get") == {"tz": CET, "utcOffset": None}
     set_clock(console)
     assert console.call("system.timezone.get") == {"tz": CET, "utcOffset": paris_offset()}
 

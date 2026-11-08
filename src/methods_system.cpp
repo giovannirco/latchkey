@@ -316,7 +316,11 @@ rpc::Reply timeSet(const cJSON* params, const rpc::Context&) {
 cJSON* timezoneJson() {
     cJSON* result = cJSON_CreateObject();
     cJSON_AddStringToObject(result, "tz", wallclock::timezone().c_str());
-    cJSON_AddNumberToObject(result, "utcOffset", wallclock::utcOffsetSeconds());
+    if (wallclock::synced()) {
+        cJSON_AddNumberToObject(result, "utcOffset", wallclock::utcOffsetSeconds());
+    } else {
+        cJSON_AddNullToObject(result, "utcOffset");
+    }
     return result;
 }
 
