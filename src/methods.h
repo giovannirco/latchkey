@@ -15,4 +15,6 @@ void registerCredentials();
 
 void registerAdminPasscode();
 
+void registerLog();
+
 }

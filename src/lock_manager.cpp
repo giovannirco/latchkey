@@ -23,14 +23,19 @@
 #include "freertos/task.h"
 #include "mbedtls/platform_util.h"
 
+#include "access_requests.h"
 #include "ble_central.h"
 #include "clock.h"
 #include "events.h"
 #include "latchkey_util/ble_adv.h"
 #include "latchkey_util/job_queue.h"
+#include "latchkey_util/lock_watch.h"
 #include "latchkey_util/pair_verdict.h"
 #include "latchkey_util/repeat_filter.h"
 #include "latchkey_util/seed_table.h"
+#include "latchkey_util/unlock_ledger.h"
+#include "latchkey_util/watch_schedule.h"
+#include "lock_log.h"
 #include "store.h"
 #include "ttlock/advert.h"
 #include "ttlock/errors.h"
@@ -62,6 +67,15 @@ constexpr uint32_t kScanRetryMs = 500;
 constexpr uint32_t kRepeatWindowMs = 2000;
 constexpr TickType_t kNotReadyDelay = pdMS_TO_TICKS(100);
 constexpr ttlock::LockVersion kV3Frames{5, 3, 1, 1, 1};
+constexpr int64_t kMinuteMs = 60 * 1000;
+constexpr int64_t kWatchIntervalMs = 375 * kMinuteMs;
+constexpr int64_t kWatchRetryMs = 15 * kMinuteMs;
+constexpr int64_t kWatchGapMs = 2 * kMinuteMs;
+constexpr int64_t kWatchFirstMs = 1 * kMinuteMs;
+constexpr int64_t kWatchSpreadMs = 5 * kMinuteMs;
+constexpr int64_t kClockDriftSeconds = 24 * 3600;
+constexpr size_t kUnlocksKept = 16;
+constexpr int64_t kUnlockKeepSeconds = 24 * 3600;
 
 enum class Kind : uint8_t {
     Scan,
@@ -74,6 +88,7 @@ enum class Kind : uint8_t {
     TimeSync,
     FactoryReset,
     Access,
+    Log,
 };
 
 struct Job {
@@ -82,6 +97,7 @@ struct Job {
     std::string name;
     uint32_t seconds = 0;
     std::string adminPasscode;
+    std::optional<uint16_t> since;
     const char* action = nullptr;
     LockWork work;
     rpc::Reply reply;
@@ -103,6 +119,9 @@ struct Live {
     bool timeSyncTried = false;
     bool featuresTried = false;
     bool warnedUnpaired = false;
+    latchkey_util::WatchState watch;
+    latchkey_util::WatchSchedule schedule{kWatchIntervalMs, kWatchRetryMs, kWatchGapMs};
+    latchkey_util::UnlockLedger ledger{kUnlocksKept, kUnlockKeepSeconds};
 };
 
 struct Lock {
@@ -167,6 +186,8 @@ const char* kindName(Kind kind) {
             return "lock.time.sync";
         case Kind::FactoryReset:
             return "lock.factoryReset";
+        case Kind::Log:
+            return "lock.log.fetch";
         case Kind::Access:
             break;
     }
@@ -318,8 +339,11 @@ bool updateRecord(std::string_view mac, const std::function<void(Record&)>& chan
 }
 
 esp_err_t eraseDescriptions(const std::string& mac) {
-    const esp_err_t error = store::seeds::erase(mac.c_str());
-    return error == ESP_OK ? store::labels::erase(mac.c_str()) : error;
+    esp_err_t error = store::seeds::erase(mac.c_str());
+    if (error == ESP_OK) {
+        error = store::labels::erase(mac.c_str());
+    }
+    return error == ESP_OK ? store::watch::erase(mac.c_str()) : error;
 }
 
 esp_err_t removeRecord(std::string_view mac) {
@@ -696,6 +720,42 @@ Status openLink(const Record& record) {
     return Status::Ok;
 }
 
+int64_t monotonicMs() { return esp_timer_get_time() / 1000; }
+
+void saveWatch(Lock& lock, const latchkey_util::WatchState& state) {
+    if (state == lock.live.watch) {
+        return;
+    }
+    const esp_err_t error = store::watch::save(lock.record.mac, state);
+    if (error != ESP_OK) {
+        ESP_LOGE(TAG, "cannot store where the log of %s was read up to: %s", lock.record.mac, esp_err_to_name(error));
+    }
+    lock.live.watch = state;
+}
+
+void noteClockSet(const std::string& mac, int32_t offset, int64_t utc) {
+    std::lock_guard<std::mutex> guard(s_mutex);
+    Lock* lock = findLocked(mac);
+    if (lock == nullptr || s_erased) {
+        return;
+    }
+    latchkey_util::WatchState state = lock->live.watch;
+    state.clockKnown = true;
+    state.clockOffset = offset;
+    state.clockSetUtc = static_cast<uint32_t>(utc);
+    saveWatch(*lock, state);
+}
+
+Status setLockClock(ttlock::Session& session, const std::string& mac) {
+    const int32_t offset = wallclock::utcOffsetSeconds();
+    const Status status = session.syncTime();
+    if (status == Status::Ok) {
+        noteClockSet(mac, offset, utcNow());
+        updateRecord(mac, [](Record& record) { record.flags |= store::locks::kFlagTimeCalibrated; });
+    }
+    return status;
+}
+
 void catchUp(ttlock::Session& session, const Lock& lock) {
     const std::string mac = lock.record.mac;
     if ((lock.record.flags & store::locks::kFlagTimeCalibrated) == 0 && wallclock::synced() &&
@@ -707,11 +767,8 @@ void catchUp(ttlock::Session& session, const Lock& lock) {
                 stored->live.timeSyncTried = true;
             }
         }
-        const Status synced = session.syncTime();
+        const Status synced = setLockClock(session, mac);
         ESP_LOGI(TAG, "catch-up time sync: %s", ttlock::toString(synced));
-        if (synced == Status::Ok) {
-            updateRecord(mac, [](Record& record) { record.flags |= store::locks::kFlagTimeCalibrated; });
-        }
     }
     if (lock.record.features == 0 && !lock.live.featuresTried) {
         {
@@ -771,12 +828,28 @@ Status readFeatures(ttlock::Session& session, const Lock& lock, rpc::Reply& repl
     return Status::Ok;
 }
 
+void noteUnlockAttempt(const std::string& mac, int64_t fromUtc, int64_t toUtc) {
+    std::lock_guard<std::mutex> guard(s_mutex);
+    Lock* lock = findLocked(mac);
+    if (lock == nullptr) {
+        return;
+    }
+    lock->live.ledger.note(fromUtc, toUtc);
+    lock->live.schedule.unlocked();
+}
+
 Status operate(ttlock::Session& session, const Lock& lock, bool open, rpc::Reply& reply) {
     ttlock::OperationResult out;
+    const int64_t sentFrom = utcNow();
     const Status status = open ? session.unlock(out) : session.lock(out);
+    if (open) {
+        noteUnlockAttempt(lock.record.mac, sentFrom, utcNow());
+    }
     if (status != Status::Ok) {
         return status;
     }
+    ESP_LOGD(TAG, "%s reply: record %s, uid %u, record id %u", open ? "unlock" : "lock", out.hasRecord ? "yes" : "no",
+             static_cast<unsigned>(out.uid), static_cast<unsigned>(out.recordId));
     const LockState state = open ? LockState::Unlocked : LockState::Locked;
     const int battery = out.battery >= 0 ? out.battery : lock.live.battery;
     noteState(lock.record.mac, state, battery, true);
@@ -789,11 +862,10 @@ Status operate(ttlock::Session& session, const Lock& lock, bool open, rpc::Reply
 }
 
 Status syncClock(ttlock::Session& session, const Lock& lock, rpc::Reply& reply) {
-    const Status status = session.syncTime();
+    const Status status = setLockClock(session, lock.record.mac);
     if (status != Status::Ok) {
         return status;
     }
-    updateRecord(lock.record.mac, [](Record& record) { record.flags |= store::locks::kFlagTimeCalibrated; });
     cJSON* result = cJSON_CreateObject();
     cJSON_AddNumberToObject(result, "time", static_cast<double>(utcNow()));
     reply = rpc::ok(result);
@@ -815,6 +887,121 @@ Status resetLock(ttlock::Session& session, const Lock& lock, rpc::Reply& reply) 
     }
     reply = rpc::ok();
     return Status::Ok;
+}
+
+struct WatchView {
+    latchkey_util::WatchState state;
+    latchkey_util::UnlockLedger ledger{kUnlocksKept, kUnlockKeepSeconds};
+};
+
+bool watchView(const std::string& mac, WatchView& out) {
+    std::lock_guard<std::mutex> guard(s_mutex);
+    const Lock* lock = findLocked(mac);
+    if (lock == nullptr) {
+        return false;
+    }
+    out.state = lock->live.watch;
+    out.ledger = lock->live.ledger;
+    return true;
+}
+
+void keepWatch(const std::string& mac, const WatchView& view, bool answered, bool more) {
+    std::lock_guard<std::mutex> guard(s_mutex);
+    Lock* lock = findLocked(mac);
+    if (lock == nullptr || s_erased) {
+        return;
+    }
+    lock->live.ledger = view.ledger;
+    if (answered) {
+        saveWatch(*lock, view.state);
+    }
+    lock->live.schedule.attempted(monotonicMs(), answered);
+    if (more) {
+        lock->live.schedule.more();
+    }
+}
+
+int32_t logOffset(const latchkey_util::WatchState& state) {
+    return state.clockKnown ? state.clockOffset : wallclock::utcOffsetAt(utcNow());
+}
+
+Status readNewEntries(ttlock::Session& session, const std::string& mac, WatchView& view, lock_log::Entries& fresh,
+                      bool& more) {
+    more = false;
+    const int32_t offset = logOffset(view.state);
+    if (!view.state.baselined) {
+        return lock_log::findEnd(session, offset, view.state);
+    }
+    const Status status = lock_log::catchUp(session, offset, view.state, fresh, more);
+    if (!fresh.items().empty()) {
+        lock_log::judge(mac, fresh, view.ledger, offset, utcNow());
+    }
+    return status;
+}
+
+Status keepClock(ttlock::Session& session, const std::string& mac, WatchView& view) {
+    const int64_t now = utcNow();
+    const int32_t offset = wallclock::utcOffsetAt(now);
+    const latchkey_util::ClockSync need = latchkey_util::clockSyncNeeded(view.state, offset, now, kClockDriftSeconds);
+    if (need == latchkey_util::ClockSync::None) {
+        return Status::Ok;
+    }
+    const Status status = session.syncTime();
+    ESP_LOGI(TAG, "%s the clock of %s (offset %ld s): %s",
+             need == latchkey_util::ClockSync::Now ? "set" : "corrected", mac.c_str(), static_cast<long>(offset),
+             ttlock::toString(status));
+    if (status == Status::Ok) {
+        view.state.clockKnown = true;
+        view.state.clockOffset = offset;
+        view.state.clockSetUtc = static_cast<uint32_t>(utcNow());
+        updateRecord(mac, [](Record& record) { record.flags |= store::locks::kFlagTimeCalibrated; });
+    }
+    return status;
+}
+
+Status watchLock(ttlock::Session& session, const std::string& mac) {
+    WatchView view;
+    if (!watchView(mac, view)) {
+        return Status::Ok;
+    }
+    lock_log::Entries fresh;
+    bool more = false;
+    Status status = readNewEntries(session, mac, view, fresh, more);
+    ESP_LOGI(TAG, "read %u new log records of %s: %s", static_cast<unsigned>(fresh.items().size()), mac.c_str(),
+             ttlock::toString(status));
+    if (status == Status::Ok) {
+        status = keepClock(session, mac, view);
+    }
+    if (status != Status::Ok) {
+        ESP_LOGW(TAG, "reading the log of %s: %s", mac.c_str(), ttlock::toString(status));
+    }
+    keepWatch(mac, view, status == Status::Ok, more);
+    return status;
+}
+
+Status readLog(ttlock::Session& session, const Lock& lock, std::optional<uint16_t> since, rpc::Reply& reply) {
+    const std::string mac = lock.record.mac;
+    WatchView view;
+    if (!watchView(mac, view)) {
+        reply = notPaired();
+        return Status::Ok;
+    }
+    lock_log::Entries shown;
+    bool more = false;
+    Status status = readNewEntries(session, mac, view, shown, more);
+    if (status == Status::Ok) {
+        const uint16_t top = view.state.cursor;
+        uint16_t from = top > lock_log::kShownSlots ? static_cast<uint16_t>(top - lock_log::kShownSlots) : 0;
+        if (since.has_value()) {
+            from = std::max<uint16_t>(from, static_cast<uint16_t>(*since + 1));
+        }
+        status = lock_log::readSlots(session, from, top, shown);
+        if (status == Status::Ok) {
+            reply = rpc::ok(lock_log::fetchResult(shown, since, more, logOffset(view.state)));
+        }
+    }
+    keepWatch(mac, view, status == Status::Ok, more);
+    return status;
 }
 
 void runLockJob(Job& job) {
@@ -859,6 +1046,9 @@ void runLockJob(Job& job) {
             break;
         case Kind::Access:
             status = job.work(session, lock.record, reply);
+            break;
+        case Kind::Log:
+            status = readLog(session, lock, job.since, reply);
             break;
         case Kind::Scan:
         case Kind::Pair:
@@ -1298,6 +1488,80 @@ void idle() {
     }
 }
 
+bool queueIdle() {
+    std::lock_guard<std::mutex> guard(s_mutex);
+    return s_queue.empty();
+}
+
+bool watchWithLinkDue(const std::string& mac) {
+    std::lock_guard<std::mutex> guard(s_mutex);
+    const Lock* lock = findLocked(mac);
+    return lock != nullptr && lock->live.schedule.dueWithLink(monotonicMs());
+}
+
+bool watchReady() { return wallclock::synced() && ble::ready() && queueIdle(); }
+
+bool watchOnLink() {
+    if (!watchReady() || !ble::connected() || !watchWithLinkDue(s_link.mac)) {
+        return false;
+    }
+    const std::string mac = s_link.mac;
+    const Status status = watchLock(*s_link.session, mac);
+    if (s_link.open && (breaksLink(status) || !ble::connected())) {
+        closeLink();
+    }
+    return true;
+}
+
+bool dueAlone(const Lock& lock, int64_t nowMs, int64_t utc) {
+    if (lock.live.schedule.due(nowMs)) {
+        return true;
+    }
+    const latchkey_util::ClockSync need =
+        latchkey_util::clockSyncNeeded(lock.live.watch, wallclock::utcOffsetAt(utc), utc, kClockDriftSeconds);
+    return need == latchkey_util::ClockSync::Now && lock.live.schedule.dueWithLink(nowMs);
+}
+
+bool nextWatched(Lock& out) {
+    const int64_t nowMs = monotonicMs();
+    const int64_t utc = utcNow();
+    std::lock_guard<std::mutex> guard(s_mutex);
+    const Lock* chosen = nullptr;
+    for (const Lock& lock : s_locks) {
+        if (dueAlone(lock, nowMs, utc) &&
+            (chosen == nullptr || lock.live.schedule.dueAtMs() < chosen->live.schedule.dueAtMs())) {
+            chosen = &lock;
+        }
+    }
+    if (chosen == nullptr) {
+        return false;
+    }
+    out = *chosen;
+    return true;
+}
+
+bool watchAlone() {
+    Lock lock;
+    if (!watchReady() || !nextWatched(lock)) {
+        return false;
+    }
+    const std::string mac = lock.record.mac;
+    const Status opened = openLink(lock.record);
+    if (opened != Status::Ok) {
+        ESP_LOGW(TAG, "no link to %s to read its log: %s", mac.c_str(), ttlock::toString(opened));
+        WatchView view;
+        if (watchView(mac, view)) {
+            keepWatch(mac, view, false, false);
+        }
+        return true;
+    }
+    const Status status = watchLock(*s_link.session, mac);
+    if (s_link.open && (breaksLink(status) || !ble::connected())) {
+        closeLink();
+    }
+    return true;
+}
+
 void worker(void*) {
     while (true) {
         failExpired();
@@ -1307,10 +1571,14 @@ void worker(void*) {
             continue;
         }
         if (s_link.open) {
-            keepAlive();
+            if (!watchOnLink()) {
+                keepAlive();
+            }
             continue;
         }
-        idle();
+        if (!watchAlone()) {
+            idle();
+        }
     }
 }
 
@@ -1359,8 +1627,15 @@ void start() {
     }
     {
         std::lock_guard<std::mutex> guard(s_mutex);
+        const int64_t nowMs = monotonicMs();
         for (const Record& record : records) {
-            s_locks.push_back(Lock{record, Live{}});
+            Lock lock{record, Live{}};
+            const esp_err_t read = store::watch::load(record.mac, lock.live.watch);
+            if (read != ESP_OK) {
+                ESP_LOGE(TAG, "cannot read where the log of %s was read up to: %s", record.mac, esp_err_to_name(read));
+            }
+            lock.live.schedule.begin(s_locks.size(), nowMs, kWatchFirstMs, kWatchSpreadMs);
+            s_locks.push_back(std::move(lock));
         }
     }
     ESP_LOGI(TAG, "%u lock(s) stored", static_cast<unsigned>(records.size()));
@@ -1545,6 +1820,17 @@ rpc::Reply features(const std::string& mac) {
 
 rpc::Reply unlock(const std::string& mac) { return submitFor(Kind::Unlock, mac); }
 
+rpc::Reply readLog(const std::string& mac, std::optional<uint16_t> since) {
+    if (!exists(mac)) {
+        return notPaired();
+    }
+    Job job;
+    job.kind = Kind::Log;
+    job.mac = mac;
+    job.since = since;
+    return submit(job);
+}
+
 rpc::Reply lock(const std::string& mac) { return submitFor(Kind::Lock, mac); }
 
 rpc::Reply syncTime(const std::string& mac) { return submitFor(Kind::TimeSync, mac); }
@@ -1568,6 +1854,9 @@ esp_err_t eraseAll() {
     esp_err_t error = store::seeds::eraseAll();
     if (error == ESP_OK) {
         error = store::labels::eraseAll();
+    }
+    if (error == ESP_OK) {
+        error = store::watch::eraseAll();
     }
     if (error == ESP_OK) {
         error = store::locks::eraseAll();
