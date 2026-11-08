@@ -37,6 +37,7 @@ const cJSON* member(const cJSON* params, const char* key) { return cJSON_GetObje
 bool absent(const cJSON* item) { return item == nullptr || cJSON_IsNull(item); }
 
 void wipe(std::string& secret) {
+    secret.resize(secret.capacity());
     mbedtls_platform_zeroize(secret.data(), secret.size());
     secret.clear();
 }
@@ -123,11 +124,13 @@ rpc::Reply readSettings(const cJSON* params, store::cfg::Mqtt& out, bool& passwo
         }
         settings.password = password->valuestring;
     }
-    out = std::move(settings);
+    out = settings;
+    wipe(settings.password);
     return rpc::ok();
 }
 
 cJSON* view(const store::cfg::Mqtt& settings) {
+    const mqtt::Status status = mqtt::status();
     cJSON* json = cJSON_CreateObject();
     cJSON_AddBoolToObject(json, "enabled", settings.enabled);
     cJSON_AddStringToObject(json, "host", settings.host.c_str());
@@ -135,6 +138,12 @@ cJSON* view(const store::cfg::Mqtt& settings) {
     cJSON_AddStringToObject(json, "username", settings.username.c_str());
     cJSON_AddStringToObject(json, "prefix", settings.prefix.c_str());
     cJSON_AddBoolToObject(json, "passwordSet", !settings.password.empty());
+    cJSON_AddBoolToObject(json, "connected", settings.enabled && status.connected);
+    if (settings.enabled && !status.problem.empty()) {
+        cJSON_AddStringToObject(json, "problem", status.problem.c_str());
+    } else {
+        cJSON_AddNullToObject(json, "problem");
+    }
     return json;
 }
 
@@ -160,9 +169,13 @@ rpc::Reply set(const cJSON* params, const rpc::Context&) {
         store::cfg::Mqtt current;
         const esp_err_t error = store::cfg::loadMqtt(current);
         if (error != ESP_OK && error != ESP_ERR_INVALID_VERSION) {
+            wipe(current.password);
             return rpc::fail("internal", "cannot read the MQTT settings");
         }
-        settings.password = std::move(current.password);
+        if (latchkey_util::keepsPassword({current.host, current.port, current.username},
+                                         {settings.host, settings.port, settings.username})) {
+            settings.password = current.password;
+        }
         wipe(current.password);
     }
     if (store::cfg::saveMqtt(settings) != ESP_OK) {

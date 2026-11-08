@@ -194,7 +194,7 @@ rpc::Reply info(const cJSON*, const rpc::Context&) {
     cJSON_AddNumberToObject(stacks, "webRequests", http::workerStackFree());
     cJSON_AddNumberToObject(stacks, "webJobs", jobs::stackFree());
     cJSON_AddNumberToObject(stacks, "mqtt", mqtt::stackFree());
-    cJSON_AddNumberToObject(stacks, "mqttClient", stackFree("mqtt_task"));
+    cJSON_AddNumberToObject(stacks, "mqttClient", mqtt::clientStackFree());
     cJSON_AddItemToObject(result, "ble", bleJson());
     store::Usage usage;
     if (store::usage(usage) != ESP_OK) {
@@ -330,6 +330,9 @@ rpc::Reply factoryReset(const cJSON* params, const rpc::Context&) {
     rpc::Reply problem = checkLocksKept(force);
     if (!problem.error.empty()) {
         return problem;
+    }
+    if (!mqtt::forgetAll()) {
+        ESP_LOGW(TAG, "factory reset: the Home Assistant entities could not be removed from the broker");
     }
     if (lock_manager::eraseAll() != ESP_OK) {
         return rpc::fail("internal", "cannot erase the lock keys");
