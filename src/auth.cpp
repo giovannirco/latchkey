@@ -10,12 +10,9 @@
 #include "mbedtls/platform_util.h"
 #include "psa/crypto.h"
 
-extern "C" {
-#include "mbedtls/constant_time.h"
-}
-
 #include "board.h"
 #include "clock.h"
+#include "latchkey_util/constant_time.h"
 #include "latchkey_util/otpauth.h"
 #include "latchkey_util/rate_limit.h"
 #include "latchkey_util/session_table.h"
@@ -62,7 +59,7 @@ bool passwordMatches(std::string_view password, const latchkey_util::PasswordRec
     if (!derive(password, record.salt, record.iterations, derived)) {
         return false;
     }
-    matches = mbedtls_ct_memcmp(derived.data(), record.hash.data(), derived.size()) == 0;
+    matches = latchkey_util::constantTimeEqual(derived.data(), record.hash.data(), derived.size());
     mbedtls_platform_zeroize(derived.data(), derived.size());
     return true;
 }
