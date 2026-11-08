@@ -12,22 +12,10 @@ from typing import Any
 
 import pytest
 from latchkey_cli import Console
+from owner import Private, claim_secret, hide
 
 SECRETS = Path(__file__).resolve().parents[2] / "secrets.local.json"
 OTPAUTH_SECRET = re.compile(r"secret=[A-Z2-7]+")
-
-
-class Private(str):
-    def __repr__(self) -> str:
-        return "<private>"
-
-
-def hide(value: Any) -> Any:
-    if isinstance(value, dict):
-        return {key: hide(item) for key, item in value.items()}
-    if isinstance(value, str):
-        return Private(value)
-    return value
 
 
 def pytest_addoption(parser: pytest.Parser) -> None:
@@ -91,3 +79,29 @@ def touch_file(request: pytest.FixtureRequest) -> Path | None:
 @pytest.fixture(scope="session")
 def allow_lock_reset(request: pytest.FixtureRequest) -> bool:
     return bool(request.config.getoption("--allow-lock-reset"))
+
+
+def held_locks(console: Console) -> list[dict[str, Any]]:
+    reply = console.request("locks.list")
+    return reply.get("result", {}).get("locks", [])
+
+
+@pytest.fixture
+def fresh(console: Console) -> list[str]:
+    console.wait_ready()
+    if held_locks(console):
+        pytest.skip("the board holds lock keys, which a factory reset would erase")
+    console.lines.clear()
+    console.events.clear()
+    console.call_and_wait_restart("system.factoryReset")
+    return list(console.lines)
+
+
+@pytest.fixture
+def claimed(console: Console, fresh: list[str], secrets: dict[str, Any], board_settings: dict[str, Any]) -> bytes:
+    return claim_secret(console, secrets, board_settings, console.call("system.info")["board"])
+
+
+@pytest.fixture
+def online(console: Console, claimed: bytes) -> dict[str, Any]:
+    return console.wait_info(lambda state: state["wifi"]["connected"], 45.0, "wifi to connect")

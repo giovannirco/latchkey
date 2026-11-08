@@ -6,68 +6,24 @@ Each test builds its own state through the fresh, claimed and online fixtures, s
 
 from __future__ import annotations
 
-import base64
 import json
 import re
 import time
 from typing import Any
 
-import pytest
 from latchkey_cli import Console
+from owner import claim_secret, holds_no_secret, setup_params, wifi_params
 
-OTPAUTH = re.compile(
-    r"otpauth://totp/Latchkey:(?P<board>[a-z0-9-]+)\?secret=(?P<secret>[A-Z2-7]{32})"
-    r"&issuer=Latchkey&algorithm=SHA1&digits=6&period=30"
-)
 BOARDS = {"esp32": ("esp32-devkit", 0), "esp32s3": ("esp32s3-atom", 41)}
 AUDIT_CAPACITY = 200
 MIN_UTC = 1704067200
 SYNC_TOLERANCE_S = 10
 NVS_HEADROOM_ENTRIES = 500
-claims: list[bytes] = []
-
-
-def wifi_params(secrets: dict[str, Any], board: dict[str, Any]) -> dict[str, Any]:
-    return {
-        "ssid": secrets["wifi_ssid"],
-        "password": secrets["wifi_password"],
-        "ip": board["static_ip"],
-        "gateway": secrets["gateway"],
-        "netmask": secrets["netmask"],
-        "dns": secrets["dns"],
-    }
-
-
-def setup_params(secrets: dict[str, Any], board: dict[str, Any]) -> dict[str, Any]:
-    return {"wifi": wifi_params(secrets, board), "password": secrets["owner_password"]}
 
 
 def error_code(console: Console, method: str, params: dict[str, Any] | None = None) -> str | None:
     reply = console.request(method, params, timeout=30.0)
     return reply.get("error", {}).get("code")
-
-
-def claim_secret(console: Console, secrets: dict[str, Any], board: dict[str, Any], expected_board: str) -> bytes:
-    result = console.call("system.setup", setup_params(secrets, board), timeout=30.0)
-    only_otpauth = set(result) == {"otpauth"}
-    assert only_otpauth, "system.setup returned more than the otpauth URI"
-    match = OTPAUTH.fullmatch(result["otpauth"])
-    shaped = match is not None
-    assert shaped, "otpauth URI does not have the expected shape"
-    assert match["board"] == expected_board
-    secret = base64.b32decode(match["secret"])
-    length = len(secret)
-    assert length == 20
-    nonzero = any(secret)
-    assert nonzero, "TOTP secret is all zeros"
-    claims.append(secret)
-    return secret
-
-
-def holds_no_secret(text: str, secrets: dict[str, Any]) -> bool:
-    needles = [secrets["owner_password"], secrets["wifi_password"]]
-    needles += [base64.b32encode(secret).decode() for secret in claims]
-    return not any(needle in text for needle in needles)
 
 
 def audit_entries(console: Console) -> list[dict[str, Any]]:
@@ -82,32 +38,6 @@ def audit_entries(console: Console) -> list[dict[str, Any]]:
         before = page["next"]
         if before is None:
             return entries
-
-
-def held_locks(console: Console) -> list[dict[str, Any]]:
-    reply = console.request("locks.list")
-    return reply.get("result", {}).get("locks", [])
-
-
-@pytest.fixture
-def fresh(console: Console) -> list[str]:
-    console.wait_ready()
-    if held_locks(console):
-        pytest.skip("the board holds lock keys, which a factory reset would erase")
-    console.lines.clear()
-    console.events.clear()
-    console.call_and_wait_restart("system.factoryReset")
-    return list(console.lines)
-
-
-@pytest.fixture
-def claimed(console: Console, fresh: list[str], secrets: dict[str, Any], board_settings: dict[str, Any]) -> bytes:
-    return claim_secret(console, secrets, board_settings, console.call("system.info")["board"])
-
-
-@pytest.fixture
-def online(console: Console, claimed: bytes) -> dict[str, Any]:
-    return console.wait_info(lambda state: state["wifi"]["connected"], 45.0, "wifi to connect")
 
 
 def test_info_reports_identity(console: Console, fresh: list[str]) -> None:
