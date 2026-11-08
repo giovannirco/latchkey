@@ -41,4 +41,5 @@ idf_component_register(
         vfs
 )
 
-include("${CMAKE_CURRENT_LIST_DIR}/web_assets.cmake")
+target_add_binary_data(${COMPONENT_LIB} "${CMAKE_BINARY_DIR}/web/index.html.gz" BINARY)
+target_add_binary_data(${COMPONENT_LIB} "${CMAKE_BINARY_DIR}/web/index.html.gz.csp.txt" TEXT)

@@ -1,9 +1,10 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """PlatformIO pre-script: bundle web/ into the page that the firmware embeds.
 
-PlatformIO builds ESP-IDF projects with SCons from CMake's code model, so the custom command in
-src/web_assets.cmake does not run under it. This runs the same tools/build_web.py step before the build,
-writing the files that board_build.embed_files and board_build.embed_txtfiles name in platformio.ini.
+PlatformIO builds ESP-IDF projects with SCons from CMake's code model and runs no CMake custom commands, so
+this runs tools/build_web.py before the build. It writes the files that board_build.embed_files and
+board_build.embed_txtfiles name in platformio.ini; src/CMakeLists.txt declares the same files with
+target_add_binary_data, which puts their generated assembly into the code model.
 """
 
 import subprocess
