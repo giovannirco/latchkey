@@ -142,8 +142,14 @@ cJSON* wifiJson() {
     cJSON_AddBoolToObject(json, "connected", status.connected);
     if (status.configured) {
         cJSON_AddStringToObject(json, "ssid", status.ssid.c_str());
+        addIpv4(json, "gateway", status.gateway);
+        addIpv4(json, "netmask", status.netmask);
+        addIpv4(json, "dns", status.dns);
     } else {
         cJSON_AddNullToObject(json, "ssid");
+        cJSON_AddNullToObject(json, "gateway");
+        cJSON_AddNullToObject(json, "netmask");
+        cJSON_AddNullToObject(json, "dns");
     }
     if (status.connected) {
         addIpv4(json, "ip", status.ip);

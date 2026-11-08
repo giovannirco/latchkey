@@ -26,6 +26,9 @@ esp_timer_handle_t s_retryTimer = nullptr;
 std::mutex s_mutex;
 std::mutex s_applyMutex;
 std::string s_ssid;
+uint32_t s_gateway = 0;
+uint32_t s_netmask = 0;
+uint32_t s_dns = 0;
 bool s_configured = false;
 std::atomic<bool> s_running{false};
 std::atomic<bool> s_connected{false};
@@ -114,6 +117,9 @@ esp_err_t configureInterface(const store::cfg::Wifi& config) {
 void remember(const store::cfg::Wifi& config) {
     std::lock_guard<std::mutex> lock(s_mutex);
     s_ssid = config.ssid;
+    s_gateway = config.gateway;
+    s_netmask = config.netmask;
+    s_dns = config.dns;
     s_configured = true;
 }
 
@@ -176,6 +182,9 @@ Status status() {
         std::lock_guard<std::mutex> lock(s_mutex);
         result.configured = s_configured;
         result.ssid = s_ssid;
+        result.gateway = s_gateway;
+        result.netmask = s_netmask;
+        result.dns = s_dns;
     }
     result.connected = s_connected;
     if (!result.connected) {

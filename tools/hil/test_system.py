@@ -13,6 +13,7 @@ from datetime import datetime, timezone
 from typing import Any
 from zoneinfo import ZoneInfo
 
+import pytest
 from board import error_code, is_json_object, set_clock
 from latchkey_cli import Console
 from owner import claim_secret, holds_no_secret, setup_params, wifi_params
@@ -69,11 +70,32 @@ def test_info_reports_a_fresh_board(console: Console, fresh: list[str]) -> None:
     info = console.call("system.info")
     assert info["heap"]["free"] > 50_000
     assert info["claimed"] is False
-    assert info["wifi"] == {"configured": False, "connected": False, "ssid": None, "ip": None, "rssi": None}
+    assert info["wifi"] == {
+        "configured": False,
+        "connected": False,
+        "ssid": None,
+        "ip": None,
+        "gateway": None,
+        "netmask": None,
+        "dns": None,
+        "rssi": None,
+    }
     assert info["time"] == {"utc": None, "synced": False}
     assert info["timezone"] == "UTC0"
     assert info["localTime"] is None
     assert info["certFingerprint"] is None
+
+
+def test_info_reports_the_static_wifi_settings(
+    console: Console, secrets: dict[str, Any], board_settings: dict[str, Any]
+) -> None:
+    wifi = console.wait_ready()["wifi"]
+    if not wifi["configured"] or wifi["ssid"] != secrets["wifi_ssid"]:
+        pytest.skip("the board is not set up for the Wi-Fi in secrets.local.json")
+    same = (wifi["gateway"], wifi["netmask"], wifi["dns"]) == (secrets["gateway"], secrets["netmask"], secrets["dns"])
+    assert same, "system.info does not report the stored gateway, netmask and DNS server"
+    same_ip = not wifi["connected"] or wifi["ip"] == board_settings["static_ip"]
+    assert same_ip, "the board does not use its static IP"
 
 
 def test_bluetooth_comes_up_idle(console: Console, fresh: list[str]) -> None:
