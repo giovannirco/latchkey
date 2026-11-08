@@ -55,6 +55,7 @@ std::string render(const cJSON* id, Reply reply) {
     cJSON_AddItemToObject(envelope.get(), "id", id != nullptr ? cJSON_Duplicate(id, true) : cJSON_CreateNull());
     addOutcome(envelope.get(), std::move(reply));
     char* text = cJSON_PrintUnformatted(envelope.get());
+    envelope.reset();
     if (text == nullptr) {
         ESP_LOGE(TAG, "out of memory rendering a reply");
         return kOutOfMemoryLine;
@@ -139,7 +140,17 @@ JobSpec methodJob(const std::string& method, const Method& target, const Context
 
 }
 
-const char* toString(Transport transport) { return transport == Transport::Serial ? "serial" : "web"; }
+const char* toString(Transport transport) {
+    switch (transport) {
+        case Transport::Serial:
+            return "serial";
+        case Transport::Web:
+            return "web";
+        case Transport::Mqtt:
+            return "mqtt";
+    }
+    return "web";
+}
 
 Reply ok(cJSON* result) {
     Reply reply;

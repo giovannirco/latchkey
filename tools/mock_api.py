@@ -111,6 +111,8 @@ EASY_CODE_WARNING = (
     "opens whenever the code appears among the digits typed"
 )
 HHMM = re.compile(r"^([01]\d|2[0-3]):[0-5]\d$")
+MQTT_HOST = re.compile(r"^[A-Za-z0-9_-]+(\.[A-Za-z0-9_-]+)*$")
+HA_ID = re.compile(r"^[A-Za-z0-9_-]+$")
 LOG_APP_UNLOCK = 1
 LOG_PASSCODE_UNLOCK = 4
 LOG_WRONG_PASSCODE = 7
@@ -1343,6 +1345,8 @@ class Mock:
     def _mqtt_view(self) -> dict:
         view = {key: value for key, value in self.mqtt.items() if key != "password"}
         view["passwordSet"] = bool(self.mqtt["password"])
+        view["connected"] = self.mqtt["enabled"]
+        view["problem"] = None
         return view
 
     @rpc("mqtt.get", audited=False)
@@ -1353,16 +1357,25 @@ class Mock:
     def mqtt_set(self, ctx: Context, params: dict) -> dict:
         enabled = bool_param(params, "enabled")
         host = text_param(params, "host", max_len=64, required=enabled)
+        if host and not MQTT_HOST.match(host):
+            raise invalid("host must be a host name or an IPv4 address of at most 64 characters")
         port = int_param(params, "port", default=1883, lo=1, hi=65535)
         username = text_param(params, "username", max_len=64)
+        if any(ord(c) < 0x20 or ord(c) == 0x7F for c in username):
+            raise invalid("username must be at most 64 printable characters")
         prefix = text_param(params, "prefix", max_len=32) or "homeassistant"
+        if not HA_ID.match(prefix):
+            raise invalid("prefix must be 1 to 32 letters, digits, - or _")
         password = params.get("password")
-        if password is not None and (not isinstance(password, str) or len(password) > 64):
-            raise invalid("the MQTT password is at most 64 characters")
+        if password is not None and (not isinstance(password, str) or len(password.encode()) > 64):
+            raise invalid("password must be a string of at most 64 bytes")
         with self.lock:
+            same_broker = (self.mqtt["host"], self.mqtt["port"], self.mqtt["username"]) == (host, port, username)
             self.mqtt.update({"enabled": enabled, "host": host, "port": port, "username": username, "prefix": prefix})
             if password is not None:
                 self.mqtt["password"] = password
+            elif not same_broker:
+                self.mqtt["password"] = ""
         return self._mqtt_view()
 
 

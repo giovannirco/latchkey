@@ -18,12 +18,17 @@ Notable changes to Latchkey, in the format of [Keep a Changelog](https://keepach
 - Lists render straight to JSON text and answer `too_large` instead of running out of memory on boards with little free heap.
 - Easy codes (a run or one repeated digit) are taken with a warning, and the passcode page explains the lock's anti-peeping behaviour.
 - Web UI: every result `warning` shows until dismissed; fingerprints and cards choose Always, Between dates or a weekly schedule with day toggles and a plain summary; date fields name the time zones; code fields no longer look like passwords to browsers.
+- Home Assistant over MQTT, off until configured with `mqtt.set`: plain MQTT over TCP with a retained availability topic and last will, retained discovery configs for each stored lock (lock, battery, last event, Bluetooth link, unlock alert), state, battery and last event after each lock event, a status read after boot and every 6 hours (one lock at a time, only while no web job waits), `LOCK` and `UNLOCK` on each held lock's own `set` topic through the web job queue (one queued command per lock), every command that runs audited with the source `mqtt` and refusals counted into at most one entry a minute per kind, retained commands ignored, the entities of a forgotten lock, a stale lock, an old prefix or broker, and of a factory-reset board removed, and reconnects that wait from 1 s up to 2 min. `mqtt.get` never returns the password and reports `connected` and `problem`; a new host, port or username clears the stored password unless a new one is given. `system.info.stackFree` reports `mqtt` and `mqttClient`.
 
 ### Changed
 
 - `lock_error` messages carry the lock's error code in hex.
 - A code on the lock and the admin passcode are refused with the same "already in use" answer, a code whose id would collide with another passcode's is refused, and `lock.adminPasscode.set` refuses a user passcode and keeps its candidate unconfirmed until the lock takes it.
 - The passcode list no longer carries an `admin` flag.
+
+### Fixed
+
+- `audit.list` renders its page one entry at a time and replies no longer keep their JSON tree while the text is copied: a page of 50 entries, as the web UI's Audit page asks for, took about 34 KB of heap on the classic ESP32 at its peak.
 
 ## [0.1.0] - 2026-11-08
 

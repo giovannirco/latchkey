@@ -10,6 +10,7 @@
 #include "esp_err.h"
 #include "latchkey_util/certificate.h"
 #include "latchkey_util/label_table.h"
+#include "latchkey_util/mqtt_settings.h"
 #include "latchkey_util/password_record.h"
 #include "latchkey_util/seed_table.h"
 
@@ -49,6 +50,19 @@ esp_err_t saveTimezone(const std::string& timezone);
 bool loadTlsIdentity(latchkey_util::TlsIdentity& out);
 
 esp_err_t saveTlsIdentity(const latchkey_util::TlsIdentity& identity);
+
+struct Mqtt {
+    bool enabled = false;
+    std::string host;
+    uint16_t port = latchkey_util::kDefaultMqttPort;
+    std::string username;
+    std::string password;
+    std::string prefix = latchkey_util::kDefaultHaPrefix;
+};
+
+esp_err_t loadMqtt(Mqtt& out);
+
+esp_err_t saveMqtt(const Mqtt& mqtt);
 
 esp_err_t erase();
 

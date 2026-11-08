@@ -34,6 +34,7 @@
 #include "latchkey_util/tz.h"
 #include "lock_manager.h"
 #include "methods.h"
+#include "mqtt.h"
 #include "rpc.h"
 #include "store.h"
 #include "wifi.h"
@@ -49,6 +50,7 @@ constexpr size_t kMaxWifiPassword = 63;
 constexpr uint64_t kRestartDelayUs = 500 * 1000;
 constexpr const char* kWifiParamsMessage = "wifi needs ssid, password, ip, gateway, netmask and dns";
 constexpr size_t kMaxLogTag = 15;
+constexpr size_t kAuditEntryText = 128;
 
 struct LogLevelName {
     const char* name;
@@ -191,6 +193,8 @@ rpc::Reply info(const cJSON*, const rpc::Context&) {
     cJSON_AddNumberToObject(stacks, "httpsServer", http::serverStackFree());
     cJSON_AddNumberToObject(stacks, "webRequests", http::workerStackFree());
     cJSON_AddNumberToObject(stacks, "webJobs", jobs::stackFree());
+    cJSON_AddNumberToObject(stacks, "mqtt", mqtt::stackFree());
+    cJSON_AddNumberToObject(stacks, "mqttClient", mqtt::clientStackFree());
     cJSON_AddItemToObject(result, "ble", bleJson());
     store::Usage usage;
     if (store::usage(usage) != ESP_OK) {
@@ -328,6 +332,9 @@ rpc::Reply factoryReset(const cJSON* params, const rpc::Context&) {
     if (!problem.error.empty()) {
         return problem;
     }
+    if (!mqtt::forgetAll()) {
+        ESP_LOGW(TAG, "factory reset: the Home Assistant entities could not be removed from the broker");
+    }
     if (lock_manager::eraseAll() != ESP_OK) {
         return rpc::fail("internal", "cannot erase the lock keys");
     }
@@ -406,15 +413,38 @@ rpc::Reply auditList(const cJSON* params, const rpc::Context&) {
     if (limitItem != nullptr && !readWhole(limitItem, 1, audit::kMaxPage, limit)) {
         return rpc::fail("invalid_argument", "limit must be 1 to 50");
     }
-    const audit::Page page = audit::list(static_cast<uint32_t>(before), static_cast<size_t>(limit));
-    cJSON* result = cJSON_CreateObject();
-    cJSON* entries = cJSON_AddArrayToObject(result, "entries");
-    for (const audit::StoredEntry& stored : page.entries) {
-        cJSON_AddItemToArray(entries, audit::toJson(stored));
+    std::string entries = "[";
+    bool more = false;
+    uint32_t next = 0;
+    {
+        const audit::Page page = audit::list(static_cast<uint32_t>(before), static_cast<size_t>(limit));
+        entries.reserve(page.entries.size() * kAuditEntryText + 2);
+        for (const audit::StoredEntry& stored : page.entries) {
+            const rpc::Json entry(audit::toJson(stored));
+            char* text = cJSON_PrintUnformatted(entry.get());
+            if (text == nullptr) {
+                return rpc::fail("internal", "out of memory listing the audit log");
+            }
+            if (entries.size() > 1) {
+                entries += ',';
+            }
+            entries += text;
+            cJSON_free(text);
+        }
+        more = page.more;
+        next = page.more ? page.entries.back().seq : 0;
     }
-    cJSON_AddBoolToObject(result, "more", page.more);
-    if (page.more) {
-        cJSON_AddNumberToObject(result, "next", page.entries.back().seq);
+    entries += ']';
+    cJSON* result = cJSON_CreateObject();
+    const bool added = cJSON_AddRawToObject(result, "entries", entries.c_str()) != nullptr;
+    std::string().swap(entries);
+    if (!added) {
+        cJSON_Delete(result);
+        return rpc::fail("internal", "out of memory listing the audit log");
+    }
+    cJSON_AddBoolToObject(result, "more", more);
+    if (more) {
+        cJSON_AddNumberToObject(result, "next", next);
     } else {
         cJSON_AddNullToObject(result, "next");
     }
