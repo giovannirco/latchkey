@@ -15,4 +15,6 @@ bool buttonPressed();
 
 uint32_t buttonPresses();
 
+bool waitForPress(uint32_t timeoutMs);
+
 }

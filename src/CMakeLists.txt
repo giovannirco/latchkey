@@ -10,6 +10,7 @@ idf_component_register(
         "console.cpp"
         "events.cpp"
         "http.cpp"
+        "jobs.cpp"
         "lock_manager.cpp"
         "main.cpp"
         "methods_auth.cpp"

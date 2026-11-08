@@ -24,6 +24,7 @@ struct Access {
     bool needsButton = false;
     bool serialOnly = false;
     bool audited = true;
+    bool job = false;
 };
 
 struct Context {
@@ -57,6 +58,8 @@ struct Response {
 Reply ok(cJSON* result = nullptr);
 
 Reply fail(const char* code, const char* message);
+
+void addOutcome(cJSON* object, Reply reply);
 
 using Handler = std::function<Reply(const cJSON* params, const Context& context)>;
 

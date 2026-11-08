@@ -28,6 +28,7 @@
 #include "clock.h"
 #include "console.h"
 #include "http.h"
+#include "jobs.h"
 #include "latchkey_util/ipv4.h"
 #include "latchkey_util/otpauth.h"
 #include "latchkey_util/tz.h"
@@ -189,6 +190,7 @@ rpc::Reply info(const cJSON*, const rpc::Context&) {
     cJSON_AddNumberToObject(stacks, "console", stackFree("console"));
     cJSON_AddNumberToObject(stacks, "httpsServer", http::serverStackFree());
     cJSON_AddNumberToObject(stacks, "webRequests", http::workerStackFree());
+    cJSON_AddNumberToObject(stacks, "webJobs", jobs::stackFree());
     cJSON_AddItemToObject(result, "ble", bleJson());
     store::Usage usage;
     if (store::usage(usage) != ESP_OK) {

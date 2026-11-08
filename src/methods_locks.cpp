@@ -144,18 +144,18 @@ rpc::Reply rename(const cJSON* params, const rpc::Context&) {
 }
 
 void registerLocks() {
-    rpc::registerMethod("locks.scan", {.audited = false}, scan);
+    rpc::registerMethod("locks.scan", {.audited = false, .job = true}, scan);
     rpc::registerMethod("locks.list", {.audited = false}, list);
     rpc::registerMethod("locks.rename", {}, rename);
     rpc::registerMethod("locks.forget", {}, forLock(lock_manager::forget));
-    rpc::registerMethod("locks.pair", {.needsButton = true}, pair);
-    rpc::registerMethod("lock.status", {.audited = false}, forLock(lock_manager::status));
-    rpc::registerMethod("lock.info", {.audited = false}, forLock(lock_manager::info));
-    rpc::registerMethod("lock.features", {.audited = false}, forLock(lock_manager::features));
-    rpc::registerMethod("lock.unlock", {}, forLock(lock_manager::unlock));
-    rpc::registerMethod("lock.lock", {}, forLock(lock_manager::lock));
-    rpc::registerMethod("lock.time.sync", {}, forLock(lock_manager::syncTime));
-    rpc::registerMethod("lock.factoryReset", {.needsButton = true}, forLock(lock_manager::factoryReset));
+    rpc::registerMethod("locks.pair", {.needsButton = true, .job = true}, pair);
+    rpc::registerMethod("lock.status", {.audited = false, .job = true}, forLock(lock_manager::status));
+    rpc::registerMethod("lock.info", {.audited = false, .job = true}, forLock(lock_manager::info));
+    rpc::registerMethod("lock.features", {.audited = false, .job = true}, forLock(lock_manager::features));
+    rpc::registerMethod("lock.unlock", {.job = true}, forLock(lock_manager::unlock));
+    rpc::registerMethod("lock.lock", {.job = true}, forLock(lock_manager::lock));
+    rpc::registerMethod("lock.time.sync", {.job = true}, forLock(lock_manager::syncTime));
+    rpc::registerMethod("lock.factoryReset", {.needsButton = true, .job = true}, forLock(lock_manager::factoryReset));
 }
 
 }

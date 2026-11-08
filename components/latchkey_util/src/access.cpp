@@ -14,10 +14,9 @@ AccessDecision decideAccess(const AccessRule& rule, bool serial, bool hasSession
     } else if (rule.needsSession && !hasSession) {
         decision.error = "unauthorized";
         decision.message = "sign in first";
-    } else if (rule.needsButton) {
-        decision.error = "forbidden";
-        decision.message = "this needs a press of the board's button, which the web cannot ask for yet";
     } else {
+        decision.confirm = rule.needsButton;
+        decision.job = rule.job || rule.needsButton;
         return decision;
     }
     decision.audited = hasSession;

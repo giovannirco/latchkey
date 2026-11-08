@@ -3,6 +3,7 @@
 
 #include <cstdlib>
 #include <map>
+#include <memory>
 #include <string_view>
 #include <utility>
 
@@ -10,7 +11,10 @@
 
 #include "audit.h"
 #include "auth.h"
+#include "board.h"
 #include "clock.h"
+#include "events.h"
+#include "jobs.h"
 #include "latchkey_util/access.h"
 #include "latchkey_util/json_depth.h"
 
@@ -21,6 +25,7 @@ namespace {
 constexpr const char* TAG = "rpc";
 constexpr size_t kMaxNesting = 8;
 constexpr const char* kOutOfMemoryLine = R"({"id":null,"error":{"code":"internal","message":"out of memory"}})";
+constexpr uint32_t kConfirmTimeoutMs = 30000;
 
 struct Method {
     Access access;
@@ -46,12 +51,7 @@ cJSON* errorObject(const Reply& reply) {
 std::string render(const cJSON* id, Reply reply) {
     Json envelope(cJSON_CreateObject());
     cJSON_AddItemToObject(envelope.get(), "id", id != nullptr ? cJSON_Duplicate(id, true) : cJSON_CreateNull());
-    if (reply.error.empty()) {
-        cJSON_AddItemToObject(envelope.get(), "result",
-                              reply.result != nullptr ? reply.result.release() : cJSON_CreateObject());
-    } else {
-        cJSON_AddItemToObject(envelope.get(), "error", errorObject(reply));
-    }
+    addOutcome(envelope.get(), std::move(reply));
     char* text = cJSON_PrintUnformatted(envelope.get());
     if (text == nullptr) {
         ESP_LOGE(TAG, "out of memory rendering a reply");
@@ -66,16 +66,9 @@ bool isValidId(const cJSON* id) {
     return id == nullptr || cJSON_IsNull(id) || cJSON_IsNumber(id) || cJSON_IsString(id);
 }
 
-Reply checkAccess(const Access& access, const Context& context) {
-    const latchkey_util::AccessDecision decision =
-        latchkey_util::decideAccess({access.needsSession, access.needsButton, access.serialOnly},
-                                    context.origin == Transport::Serial, context.session.has_value());
-    if (decision.error == nullptr) {
-        return ok();
-    }
-    Reply reply = fail(decision.error, decision.message);
-    reply.audited = decision.audited;
-    return reply;
+latchkey_util::AccessDecision decide(const Access& access, const Context& context) {
+    return latchkey_util::decideAccess({access.needsSession, access.needsButton, access.serialOnly, access.job},
+                                       context.origin == Transport::Serial, context.session.has_value());
 }
 
 Response respond(const cJSON* id, Reply reply) {
@@ -87,6 +80,50 @@ Response respond(const cJSON* id, Reply reply) {
 }
 
 uint32_t auditTime() { return wallclock::synced() ? static_cast<uint32_t>(wallclock::utcSeconds()) : 0; }
+
+void record(const std::string& method, const Method& target, const Context& context, const Reply& reply) {
+    if (target.access.audited && reply.audited) {
+        audit::append({auditTime(), context.origin, method, reply.target, reply.error.empty() ? "ok" : reply.error});
+    }
+}
+
+bool confirmPresence(const std::string& action) {
+    cJSON* required = cJSON_CreateObject();
+    cJSON_AddStringToObject(required, "action", action.c_str());
+    cJSON_AddNumberToObject(required, "timeoutMs", kConfirmTimeoutMs);
+    events::publish("confirm.required", required);
+    const bool pressed = board::waitForPress(kConfirmTimeoutMs);
+    cJSON* result = cJSON_CreateObject();
+    cJSON_AddStringToObject(result, "action", action.c_str());
+    cJSON_AddBoolToObject(result, "confirmed", pressed);
+    events::publish("confirm.result", result);
+    return pressed;
+}
+
+Reply startJob(const std::string& method, const Method& target, const cJSON* params, const Context& context,
+               bool confirm) {
+    std::shared_ptr<cJSON> copy(cJSON_Duplicate(params, true), cJSON_Delete);
+    if (copy == nullptr) {
+        return fail("internal", "out of memory");
+    }
+    const std::optional<std::string> job =
+        jobs::submit(context.session, [&method, &target, copy, context, confirm](bool expired) {
+            Reply reply = expired ? fail("busy", "the board was busy with other requests for 60 s; try again")
+                          : confirm && !confirmPresence(method)
+                              ? fail("confirm_timeout", "the button was not pressed within 30 s")
+                              : target.handler(copy.get(), context);
+            record(method, target, context, reply);
+            return reply;
+        });
+    if (!job.has_value()) {
+        return fail("busy", "too many requests are waiting; try again");
+    }
+    cJSON* result = cJSON_CreateObject();
+    cJSON_AddStringToObject(result, "job", job->c_str());
+    Reply reply = ok(result);
+    reply.audited = false;
+    return reply;
+}
 
 }
 
@@ -103,6 +140,14 @@ Reply fail(const char* code, const char* message) {
     reply.error = code;
     reply.message = message;
     return reply;
+}
+
+void addOutcome(cJSON* object, Reply reply) {
+    if (reply.error.empty()) {
+        cJSON_AddItemToObject(object, "result", reply.result != nullptr ? reply.result.release() : cJSON_CreateObject());
+    } else {
+        cJSON_AddItemToObject(object, "error", errorObject(reply));
+    }
 }
 
 void registerMethod(const char* name, Access access, Handler handler) {
@@ -144,13 +189,17 @@ Response dispatch(const char* requestJson, Transport origin, std::string_view se
     }
     const Method& target = entry->second;
     const Context context{origin, origin == Transport::Web ? auth::sessionFor(sessionToken) : std::nullopt};
-    Reply reply = checkAccess(target.access, context);
-    if (reply.error.empty()) {
+    const latchkey_util::AccessDecision decision = decide(target.access, context);
+    Reply reply;
+    if (decision.error != nullptr) {
+        reply = fail(decision.error, decision.message);
+        reply.audited = decision.audited;
+    } else if (decision.job) {
+        reply = startJob(entry->first, target, params, context, decision.confirm);
+    } else {
         reply = target.handler(params, context);
     }
-    if (target.access.audited && reply.audited) {
-        audit::append({auditTime(), origin, entry->first, reply.target, reply.error.empty() ? "ok" : reply.error});
-    }
+    record(entry->first, target, context, reply);
     return respond(id, std::move(reply));
 }
 

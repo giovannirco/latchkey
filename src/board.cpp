@@ -5,6 +5,8 @@
 
 #include "driver/gpio.h"
 #include "esp_timer.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 
 #include "latchkey_util/debounce.h"
 
@@ -21,6 +23,7 @@ namespace board {
 namespace {
 
 constexpr uint64_t kSamplePeriodUs = 10 * 1000;
+constexpr TickType_t kPressPoll = pdMS_TO_TICKS(50);
 constexpr uint8_t kStableSamples = 3;
 constexpr gpio_num_t kButton = static_cast<gpio_num_t>(LATCHKEY_BUTTON_GPIO);
 
@@ -66,5 +69,14 @@ void init() {
 bool buttonPressed() { return s_pressed; }
 
 uint32_t buttonPresses() { return s_presses; }
+
+bool waitForPress(uint32_t timeoutMs) {
+    const uint32_t before = s_presses;
+    const int64_t deadline = esp_timer_get_time() + static_cast<int64_t>(timeoutMs) * 1000;
+    while (s_presses == before && esp_timer_get_time() < deadline) {
+        vTaskDelay(kPressPoll);
+    }
+    return s_presses != before;
+}
 
 }

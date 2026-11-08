@@ -17,6 +17,7 @@
 #include "clock.h"
 #include "console.h"
 #include "http.h"
+#include "jobs.h"
 #include "lock_manager.h"
 #include "methods.h"
 #include "store.h"
@@ -52,6 +53,7 @@ extern "C" void app_main() {
     methods::registerSystem();
     methods::registerAuth();
     methods::registerLocks();
+    jobs::start();
     http::start();
     console::start();
 }
