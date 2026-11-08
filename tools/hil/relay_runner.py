@@ -13,6 +13,8 @@ Step types:
   job_from replied with, and only if its data has the fields in match), collect_s; reports status, headers, events
   (each with at_ms), steps, closed and closed_after_ms (the board closed the socket);
 - stall: port, timeout_s: opens a TCP connection, sends nothing and reports closed_after_ms, when the board closes it;
+- syslog: port, seconds: listens on that UDP and TCP port of every address of the relay host for that long, then
+  closes both; reports datagrams_b64 (one per UDP datagram) and streams_b64 (all the bytes of each TCP connection);
 - sleep: seconds.
 """
 
@@ -23,6 +25,7 @@ import hashlib
 import http.client
 import json
 import os
+import select
 import socket
 import ssl
 import struct
@@ -273,6 +276,45 @@ def stall_step(host: str, step: dict) -> dict:
     return result
 
 
+def syslog_step(step: dict) -> dict:
+    result: dict = {"datagrams_b64": [], "streams_b64": []}
+    deadline = time.monotonic() + min(float(step["seconds"]), 300.0)
+    udp = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    tcp = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    streams: dict = {}
+    try:
+        tcp.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        udp.bind(("0.0.0.0", step["port"]))
+        tcp.bind(("0.0.0.0", step["port"]))
+        tcp.listen(4)
+        while True:
+            left = deadline - time.monotonic()
+            if left <= 0:
+                break
+            readable, _, _ = select.select([udp, tcp, *streams], [], [], min(left, 1.0))
+            for sock in readable:
+                if sock is udp:
+                    result["datagrams_b64"].append(base64.b64encode(udp.recv(65535)).decode())
+                elif sock is tcp:
+                    connection, _ = tcp.accept()
+                    streams[connection] = b""
+                else:
+                    chunk = sock.recv(65536)
+                    streams[sock] += chunk
+                    if not chunk:
+                        result["streams_b64"].append(base64.b64encode(streams.pop(sock)).decode())
+                        sock.close()
+    except OSError as err:
+        result["error"] = describe(err)
+    finally:
+        for connection, data in streams.items():
+            result["streams_b64"].append(base64.b64encode(data).decode())
+            connection.close()
+        udp.close()
+        tcp.close()
+    return result
+
+
 def run_step(host: str, step: dict) -> dict:
     if step["type"] == "http":
         return http_step(host, step)
@@ -280,6 +322,8 @@ def run_step(host: str, step: dict) -> dict:
         return ws_step(host, step)
     if step["type"] == "stall":
         return stall_step(host, step)
+    if step["type"] == "syslog":
+        return syslog_step(step)
     if step["type"] == "sleep":
         time.sleep(step["seconds"])
         return {}
