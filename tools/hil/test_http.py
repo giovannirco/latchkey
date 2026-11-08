@@ -458,6 +458,24 @@ def test_admin_passcode_methods_check_the_lock_before_the_press(relay: Relay, se
         assert events_named(result, "confirm.required") == []
 
 
+def test_the_reset_button_switch_is_checked_before_the_press(
+    console: Console, relay: Relay, session: Login, origin: str, lock_mac: str
+) -> None:
+    unknown = job_run(relay, session, origin, "lock.resetButton.set", {"lock": DOCUMENTATION_MAC, "enabled": True}, 20)
+    assert job_outcome(unknown)["error"]["code"] == "not_paired"
+    assert events_named(unknown, "confirm.required") == []
+    if not any(lock["id"] == lock_mac for lock in console.call("locks.list")["locks"]):
+        pytest.skip("this board holds no keys for the lock")
+    if "reset_button" not in console.call("lock.features", {"lock": lock_mac}, timeout=60.0)["features"]:
+        pytest.skip("the lock does not report reset_button")
+    off = job_run(relay, session, origin, "lock.resetButton.set", {"lock": lock_mac, "enabled": False}, 20)
+    assert job_outcome(off)["error"]["code"] == "backup_required"
+    assert events_named(off, "confirm.required") == []
+    on = job_run(relay, session, origin, "lock.resetButton.set", {"lock": lock_mac, "enabled": True}, 45)
+    assert events_named(on, "confirm.required") == [{"action": "lock.resetButton.set", "timeoutMs": CONFIRM_TIMEOUT_MS}]
+    assert job_outcome(on)["error"]["code"] == "confirm_timeout"
+
+
 def test_ending_the_session_ends_its_button_wait(
     relay: Relay, codes: Codes, secrets: dict[str, Any], session: Login, origin: str
 ) -> None:
