@@ -18,12 +18,19 @@ Notable changes to Latchkey, in the format of [Keep a Changelog](https://keepach
 - Lists render straight to JSON text and answer `too_large` instead of running out of memory on boards with little free heap.
 - Easy codes (a run or one repeated digit) are taken with a warning, and the passcode page explains the lock's anti-peeping behaviour.
 - Web UI: every result `warning` shows until dismissed; fingerprints and cards choose Always, Between dates or a weekly schedule with day toggles and a plain summary; date fields name the time zones; code fields no longer look like passwords to browsers.
+- Lock settings from the board, each checked against the lock's feature bits before any Bluetooth: `lock.autolock.get`/`set`, `lock.passage.list`/`add`/`delete`/`clear` (weekly windows in the lock's local time), `lock.sound.get`/`set`, `lock.resetButton.get`/`set`, and `lock.privacyLock.*` and `lock.tamperAlert.*` (experimental). `lock.resetButton.set` needs the board's button from the web either way and answers `backup_required` to turning the button off until the encrypted key backup exists.
+- The lock's operation log: `lock.log.fetch` reads new records from a cursor the board keeps per lock in NVS (found by bisection the first time) and answers the newest entries, or those after `since`, as `{entries, last, more}`; passcodes the lock records in its log never leave the board.
+- Unlock alerts: the board reads each lock's log after the connections it makes anyway, and about every six hours otherwise, and raises `lock.alert {lock, method, time, seq, type}` with an audit entry (source `board`) for every unlock from an app it did not make and every forced opening. The web UI shows a notice that stays until dismissed.
+- The lock's clock follows the board's time zone: the board sets it again after a time-zone change or a daylight-saving change, and once a day against drift.
+- Web UI: privacy lock and tamper alert marked experimental, features the board does not use listed apart, and the log reads on until it has every new entry.
+- `tools/hil/test_lock_settings.py` and `tools/hil/test_lock_log.py`, run on the owner's lock.
 
 ### Changed
 
 - `lock_error` messages carry the lock's error code in hex.
 - A code on the lock and the admin passcode are refused with the same "already in use" answer, a code whose id would collide with another passcode's is refused, and `lock.adminPasscode.set` refuses a user passcode and keeps its candidate unconfirmed until the lock takes it.
 - The passcode list no longer carries an `admin` flag.
+- The remote unlock control is gone from the web UI and the mock: the board does not implement it, and the lock's `config_gateway_unlock` bit is listed as reported but not used.
 
 ## [0.1.0] - 2026-11-08
 
