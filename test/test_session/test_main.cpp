@@ -2030,10 +2030,22 @@ static void test_unlock_key_derived_values_travel_only_under_the_lock_key() {
     TEST_ASSERT_EQUAL_UINT(3, secretFrames);
 }
 
-static Bytes replyUnder(const ttlock::LockVersion& version, const Bytes& plain) {
-    Bytes wire = ttlock::encodeFrame(version, fake::kReplyCommand, plain, kLockKey);
+static Bytes replyUnderKey(const ttlock::LockVersion& version, const AesKey& key, const Bytes& plain) {
+    Bytes wire = ttlock::encodeFrame(version, fake::kReplyCommand, plain, key);
     wire.resize(wire.size() - 2);
     return wire;
+}
+
+static Bytes replyUnder(const ttlock::LockVersion& version, const Bytes& plain) {
+    return replyUnderKey(version, kLockKey, plain);
+}
+
+static void assertVersion(const ttlock::LockVersion& expected, const ttlock::LockVersion& actual) {
+    TEST_ASSERT_EQUAL_UINT8(expected.protocolType, actual.protocolType);
+    TEST_ASSERT_EQUAL_UINT8(expected.protocolVersion, actual.protocolVersion);
+    TEST_ASSERT_EQUAL_UINT8(expected.scene, actual.scene);
+    TEST_ASSERT_EQUAL_UINT16(expected.groupId, actual.groupId);
+    TEST_ASSERT_EQUAL_UINT16(expected.orgId, actual.orgId);
 }
 
 static void test_a_paired_session_drops_replies_that_switch_protocol_or_lock_type() {
@@ -2048,6 +2060,8 @@ static void test_a_paired_session_drops_replies_that_switch_protocol_or_lock_typ
                                  replyUnder(typeZero, userTimeReply(kForgedPs)),
                                  replyUnder(carScene, userTimeReply(kForgedPs))});
     assertUnlockUsedTheGenuinePs(rig, 4);
+    TEST_ASSERT_EQUAL_UINT(4, rig.session.lockTypeMismatches());
+    assertVersion(carScene, rig.session.lastMismatchedVersion());
 
     Rig pushes;
     attach(pushes);
@@ -2058,6 +2072,85 @@ static void test_a_paired_session_drops_replies_that_switch_protocol_or_lock_typ
     TEST_ASSERT_EQUAL_UINT(1, pushes.events.size());
     TEST_ASSERT_EQUAL(ttlock::LockState::Locked, pushes.events[0].state);
     TEST_ASSERT_EQUAL_UINT(1, pushes.session.droppedFrames());
+    TEST_ASSERT_EQUAL_UINT(1, pushes.session.lockTypeMismatches());
+    assertVersion(otherVersion, pushes.session.lastMismatchedVersion());
+}
+
+static void test_pairing_with_a_lock_of_another_type_is_unsupported_not_a_timeout() {
+    const ttlock::LockVersion otherVersion{5, 4, 2, 1, 1};
+    Rig rig;
+    std::vector<PairStep> steps = pairingSteps(bits({Feature::Passcode}));
+    steps.resize(1);
+    steps[0].replies = {replyUnderKey(otherVersion, kDefault, Bytes{cmd::kInitialization, fake::kSuccess})};
+    TEST_ASSERT_FALSE(undecodable(steps[0].replies[0], kDefault));
+    load(rig.lock, std::move(steps));
+    ttlock::LockKeys keys;
+    Persisted persisted;
+    assertStatus(Status::Unsupported, pair(rig, keys, persisted));
+    assertCommands({cmd::kInitialization}, rig.lock);
+    TEST_ASSERT_EQUAL_UINT(1, rig.session.lockTypeMismatches());
+    assertVersion(otherVersion, rig.session.lastMismatchedVersion());
+    TEST_ASSERT_EQUAL_UINT(1, rig.session.droppedFrames());
+    TEST_ASSERT_EQUAL_UINT(0, persisted.calls.size());
+    TEST_ASSERT_EQUAL_UINT(0, rig.random.drawn());
+
+    const ttlock::LockVersion carScene{5, 3, 7, 1, 1};
+    Rig car;
+    std::vector<PairStep> carSteps = pairingSteps(bits({Feature::Passcode}));
+    carSteps.resize(2);
+    carSteps[1].replies = {
+        replyUnderKey(carScene, kDefault, concat({Bytes{cmd::kGetAesKey, fake::kSuccess}, keyBytes(kLockKey)}))};
+    TEST_ASSERT_FALSE(undecodable(carSteps[1].replies[0], kDefault));
+    load(car.lock, std::move(carSteps));
+    ttlock::LockKeys carKeys;
+    Persisted carPersisted;
+    assertStatus(Status::Unsupported, pair(car, carKeys, carPersisted));
+    assertCommands({cmd::kInitialization, cmd::kGetAesKey}, car.lock);
+    TEST_ASSERT_EQUAL_UINT(1, car.session.lockTypeMismatches());
+    assertVersion(carScene, car.session.lastMismatchedVersion());
+    TEST_ASSERT_EQUAL_UINT(0, carPersisted.calls.size());
+}
+
+static void test_a_silent_or_garbled_lock_in_pairing_is_still_a_timeout() {
+    Rig silent;
+    std::vector<PairStep> steps = pairingSteps(bits({Feature::Passcode}));
+    steps.resize(1);
+    steps[0].replies.clear();
+    load(silent.lock, std::move(steps));
+    ttlock::LockKeys keys;
+    Persisted persisted;
+    assertStatus(Status::Timeout, pair(silent, keys, persisted));
+    TEST_ASSERT_EQUAL_UINT(0, silent.session.lockTypeMismatches());
+
+    Rig garbled;
+    std::vector<PairStep> garbledSteps = pairingSteps(bits({Feature::Passcode}));
+    garbledSteps.resize(1);
+    garbledSteps[0].replies = {success(kOtherKey, cmd::kInitialization)};
+    TEST_ASSERT_TRUE(undecodable(garbledSteps[0].replies[0], kDefault));
+    load(garbled.lock, std::move(garbledSteps));
+    ttlock::LockKeys garbledKeys;
+    Persisted garbledPersisted;
+    assertStatus(Status::Timeout, pair(garbled, garbledKeys, garbledPersisted));
+    TEST_ASSERT_EQUAL_UINT(0, garbled.session.lockTypeMismatches());
+    TEST_ASSERT_EQUAL_UINT(1, garbled.session.droppedFrames());
+}
+
+static void test_a_lock_type_mismatch_after_add_admin_still_ends_pair_incomplete() {
+    const ttlock::LockVersion otherVersion{5, 4, 2, 1, 1};
+    Rig rig;
+    std::vector<PairStep> steps = pairingSteps(bits({Feature::Passcode}));
+    steps.resize(5);
+    stepFor(steps, cmd::kSearchDeviceFeature).replies = {replyUnder(
+        otherVersion,
+        concat({Bytes{cmd::kSearchDeviceFeature, fake::kSuccess}, featureData(bits({Feature::Passcode}))}))};
+    load(rig.lock, std::move(steps));
+    ttlock::LockKeys keys;
+    Persisted persisted;
+    assertStatus(Status::PairIncomplete, pair(rig, keys, persisted));
+    TEST_ASSERT_EQUAL_UINT(1, persisted.calls.size());
+    TEST_ASSERT_EQUAL_UINT(1, rig.session.lockTypeMismatches());
+    assertVersion(otherVersion, rig.session.lastMismatchedVersion());
+    TEST_ASSERT_EQUAL_HEX8(cmd::kSearchDeviceFeature, rig.lock.commands().back());
 }
 
 static void test_pairing_refuses_a_lock_that_hands_back_the_default_key() {
@@ -2182,6 +2275,9 @@ int main() {
     RUN_TEST(test_a_paired_session_never_switches_to_the_xor_codec);
     RUN_TEST(test_unlock_key_derived_values_travel_only_under_the_lock_key);
     RUN_TEST(test_a_paired_session_drops_replies_that_switch_protocol_or_lock_type);
+    RUN_TEST(test_pairing_with_a_lock_of_another_type_is_unsupported_not_a_timeout);
+    RUN_TEST(test_a_silent_or_garbled_lock_in_pairing_is_still_a_timeout);
+    RUN_TEST(test_a_lock_type_mismatch_after_add_admin_still_ends_pair_incomplete);
     RUN_TEST(test_pairing_refuses_a_lock_that_hands_back_the_default_key);
     RUN_TEST(test_attach_refuses_a_record_holding_the_default_key);
     return UNITY_END();

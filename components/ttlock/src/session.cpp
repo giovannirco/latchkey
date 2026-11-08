@@ -49,6 +49,14 @@ size_t Session::droppedFrames() const {
     return droppedFrames_;
 }
 
+size_t Session::lockTypeMismatches() const {
+    return lockTypeMismatches_;
+}
+
+LockVersion Session::lastMismatchedVersion() const {
+    return lastMismatchedVersion_;
+}
+
 Status Session::attach(const LockKeys& keys) {
     attached_ = false;
     lockErrorCode_ = 0;
@@ -106,8 +114,12 @@ Status Session::nextFrame(uint32_t timeoutMs, size_t& budget, DecodedFrame& fram
         if (received != Status::Ok) {
             return received;
         }
-        if (decodeFrame(raw, keys_.aesKey, frame) == Status::Ok && sameLockType(frame.version, keys_.version)) {
-            return Status::Ok;
+        if (decodeFrame(raw, keys_.aesKey, frame) == Status::Ok) {
+            if (sameLockType(frame.version, keys_.version)) {
+                return Status::Ok;
+            }
+            ++lockTypeMismatches_;
+            lastMismatchedVersion_ = frame.version;
         }
         ++droppedFrames_;
     }

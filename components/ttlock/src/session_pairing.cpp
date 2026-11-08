@@ -85,13 +85,14 @@ Status Session::pair(const LockVersion& version, const PairOptions& options, Loc
     fresh.version = version;
     fresh.aesKey = kDefaultAesKey;
     keys_ = std::move(fresh);
+    const size_t mismatchesBefore = lockTypeMismatches_;
     Status status = initialize();
     if (status != Status::Ok) {
-        return status;
+        return beforeKeysFailure(status, mismatchesBefore);
     }
     status = fetchAesKey();
     if (status != Status::Ok) {
-        return status;
+        return beforeKeysFailure(status, mismatchesBefore);
     }
     keys_.adminPs = randomSecret();
     keys_.unlockKey = randomSecret();
@@ -117,6 +118,10 @@ Status Session::pair(const LockVersion& version, const PairOptions& options, Loc
     }
     persist();
     return Status::Ok;
+}
+
+Status Session::beforeKeysFailure(Status status, size_t mismatchesBefore) const {
+    return status == Status::Timeout && lockTypeMismatches_ > mismatchesBefore ? Status::Unsupported : status;
 }
 
 Status Session::initialize() {

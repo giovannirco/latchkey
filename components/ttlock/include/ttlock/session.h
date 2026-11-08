@@ -56,6 +56,8 @@ public:
     const LockKeys& keys() const;
     uint8_t lockErrorCode() const;
     size_t droppedFrames() const;
+    size_t lockTypeMismatches() const;
+    LockVersion lastMismatchedVersion() const;
 
     Status unlock(OperationResult& out);
     Status lock(OperationResult& out);
@@ -140,6 +142,7 @@ private:
     Status beginAdmin(Feature feature);
     Status adminRequest(Feature feature, uint8_t command, const Bytes& payload, Bytes& data);
 
+    Status beforeKeysFailure(Status status, size_t mismatchesBefore) const;
     Status initialize();
     Status fetchAesKey();
     Status addAdmin();
@@ -159,6 +162,8 @@ private:
     bool attached_ = false;
     uint8_t lockErrorCode_ = 0;
     size_t droppedFrames_ = 0;
+    size_t lockTypeMismatches_ = 0;
+    LockVersion lastMismatchedVersion_;
 };
 
 }
