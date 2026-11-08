@@ -7,7 +7,24 @@ Notable changes to Latchkey, in the format of [Keep a Changelog](https://keepach
 
 ### Added
 
+- Passcodes on the lock from the board: `lock.passcodes.list`, `add`, `update`, `delete` and `clear`, with ids derived from the lock's key, names and a managed flag kept on the board, and codes shown once when added and never listed. Duplicates and the admin passcode are refused before anything is sent; cyclic passcodes answer `unsupported`.
+- Fingerprints and IC cards: `lock.fingerprints.*` and `lock.cards.*` list, enrol with `enroll.progress` events, set validity with an optional weekly window where the lock supports it, delete and clear.
+- The keypad's super admin passcode: `locks.pair` takes an optional `adminPasscode`, `lock.adminPasscode.set` changes it and `lock.adminPasscode.get` reads it back from the lock, both after a press of the board's button from the web; `lock.adminPasscode.raw` (USB only) returns the lock's raw reply.
+- Pairing stores the offline-code seed table before it goes out, and a lock that answers as another lock type than its advert fails with a message naming both.
+- Web UI: an optional super admin passcode when adding a lock, Show and Change admin passcode on the lock's settings, and weekly windows for fingerprints and cards; cyclic passcodes are no longer offered.
+- `tools/hil/test_lock_features.py`, run on a real lock; the lock's behaviour is recorded in `docs/protocol.md`.
+
+- An NVS reserve for pairing a lock and the audit ring: writes that would grow the board's names into it answer `storage_full`; `system.info.nvs.reservedEntries` reports it.
+- Lists render straight to JSON text and answer `too_large` instead of running out of memory on boards with little free heap.
+- Easy codes (a run or one repeated digit) are taken with a warning, and the passcode page explains the lock's anti-peeping behaviour.
+- Web UI: every result `warning` shows until dismissed; fingerprints and cards choose Always, Between dates or a weekly schedule with day toggles and a plain summary; date fields name the time zones; code fields no longer look like passwords to browsers.
 - Home Assistant over MQTT, off until configured with `mqtt.set`: plain MQTT over TCP with a retained availability topic and last will, retained discovery configs for each stored lock (lock, battery, last event, Bluetooth link, unlock alert), state, battery and last event after each lock event, a status read after boot and every 6 hours (one lock at a time, only while no web job waits), `LOCK` and `UNLOCK` on each held lock's own `set` topic through the web job queue (one queued command per lock), every command that runs audited with the source `mqtt` and refusals counted into at most one entry a minute per kind, retained commands ignored, the entities of a forgotten lock, a stale lock, an old prefix or broker, and of a factory-reset board removed, and reconnects that wait from 1 s up to 2 min. `mqtt.get` never returns the password and reports `connected` and `problem`; a new host, port or username clears the stored password unless a new one is given. `system.info.stackFree` reports `mqtt` and `mqttClient`.
+
+### Changed
+
+- `lock_error` messages carry the lock's error code in hex.
+- A code on the lock and the admin passcode are refused with the same "already in use" answer, a code whose id would collide with another passcode's is refused, and `lock.adminPasscode.set` refuses a user passcode and keeps its candidate unconfirmed until the lock takes it.
+- The passcode list no longer carries an `admin` flag.
 
 ### Fixed
 

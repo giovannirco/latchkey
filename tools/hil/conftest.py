@@ -16,6 +16,7 @@ from owner import Private, claim_secret, hide
 
 SECRETS = Path(__file__).resolve().parents[2] / "secrets.local.json"
 OTPAUTH_SECRET = re.compile(r"secret=[A-Z2-7]+")
+SECRET_VALUE = re.compile(r'"(code|adminPasscode)":"[0-9]+"|"(reply)":"[0-9a-f]+"')
 
 
 def pytest_addoption(parser: pytest.Parser) -> None:
@@ -33,6 +34,17 @@ def pytest_addoption(parser: pytest.Parser) -> None:
         default=False,
         help="let the lock suite factory-reset the paired lock",
     )
+    parser.addoption(
+        "--allow-admin-passcode-change",
+        action="store_true",
+        default=False,
+        help="let the lock feature suite change the keypad admin passcode and put the original back",
+    )
+
+
+def redact(line: str) -> str:
+    masked = SECRET_VALUE.sub(lambda found: f'"{found.group(1) or found.group(2)}":"REDACTED"', line)
+    return OTPAUTH_SECRET.sub("secret=REDACTED", masked)
 
 
 @pytest.fixture(scope="session")
@@ -50,9 +62,7 @@ def console(request: pytest.FixtureRequest) -> Iterator[Console]:
     log_path = request.config.getoption("--console-log")
     with ExitStack() as stack:
         log = stack.enter_context(open(log_path, "a", encoding="utf-8")) if log_path else None
-        on_line = (
-            (lambda line: print(OTPAUTH_SECRET.sub("secret=REDACTED", line), file=log, flush=True)) if log else None
-        )
+        on_line = (lambda line: print(redact(line), file=log, flush=True)) if log else None
         yield stack.enter_context(Console(port, on_line=on_line))
 
 
@@ -79,6 +89,11 @@ def touch_file(request: pytest.FixtureRequest) -> Path | None:
 @pytest.fixture(scope="session")
 def allow_lock_reset(request: pytest.FixtureRequest) -> bool:
     return bool(request.config.getoption("--allow-lock-reset"))
+
+
+@pytest.fixture(scope="session")
+def allow_admin_passcode_change(request: pytest.FixtureRequest) -> bool:
+    return bool(request.config.getoption("--allow-admin-passcode-change"))
 
 
 def held_locks(console: Console) -> list[dict[str, Any]]:

@@ -9,6 +9,12 @@ void registerAuth();
 
 void registerLocks();
 
+void registerPasscodes();
+
+void registerCredentials();
+
+void registerAdminPasscode();
+
 void registerMqtt();
 
 }

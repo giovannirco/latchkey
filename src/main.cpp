@@ -54,6 +54,9 @@ extern "C" void app_main() {
     methods::registerSystem();
     methods::registerAuth();
     methods::registerLocks();
+    methods::registerPasscodes();
+    methods::registerCredentials();
+    methods::registerAdminPasscode();
     methods::registerMqtt();
     jobs::start();
     mqtt::start();

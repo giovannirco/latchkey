@@ -7,11 +7,11 @@
 #include <cstddef>
 #include <initializer_list>
 
+#include "latchkey_util/lock_time.h"
+
 namespace latchkey_util {
 
 namespace {
-
-constexpr int64_t kSecondsPerDay = 86400;
 
 struct TypeMethod {
     uint8_t type;
@@ -45,32 +45,6 @@ constexpr TypeMethod kUnlockTypes[] = {
     {94, UnlockMethod::Other},
     {111, UnlockMethod::Other},
 };
-
-bool isLeap(int64_t year) { return (year % 4 == 0 && year % 100 != 0) || year % 400 == 0; }
-
-uint8_t daysInMonth(int64_t year, uint8_t month) {
-    constexpr uint8_t kDays[] = {31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31};
-    return month == 2 && isLeap(year) ? 29 : kDays[month - 1];
-}
-
-int64_t daysFromCivil(int64_t year, uint8_t month, uint8_t day) {
-    year -= month <= 2 ? 1 : 0;
-    const int64_t era = (year >= 0 ? year : year - 399) / 400;
-    const int64_t yearOfEra = year - era * 400;
-    const int64_t dayOfYear = (153 * (month > 2 ? month - 3 : month + 9) + 2) / 5 + day - 1;
-    const int64_t dayOfEra = yearOfEra * 365 + yearOfEra / 4 - yearOfEra / 100 + dayOfYear;
-    return era * 146097 + dayOfEra - 719468;
-}
-
-bool lockSeconds(const ttlock::LockTime& time, int64_t& out) {
-    if (time.month < 1 || time.month > 12 || time.day < 1 || time.day > daysInMonth(time.year, time.month) ||
-        time.hour > 23 || time.minute > 59 || time.second > 59) {
-        return false;
-    }
-    out = daysFromCivil(time.year, time.month, time.day) * kSecondsPerDay + time.hour * 3600 + time.minute * 60 +
-          time.second;
-    return true;
-}
 
 bool needsExplaining(UnlockMethod method) { return method == UnlockMethod::App || method == UnlockMethod::Remote; }
 
@@ -162,7 +136,7 @@ std::vector<UnlockFinding> classifyUnlocks(const std::vector<ttlock::LogEntry>& 
         }
         findings[i].verdict = UnlockVerdict::Alert;
         int64_t local = 0;
-        datable[i] = lockSeconds(entries[i].time, local);
+        datable[i] = localSecondsOf(entries[i].time, local);
         utc[i] = local - lockUtcOffsetSeconds;
     }
     Matcher matcher(performed, toleranceSeconds);

@@ -13,6 +13,7 @@
 
 #include "board.h"
 #include "clock.h"
+#include "hmac.h"
 #include "latchkey_util/constant_time.h"
 #include "latchkey_util/otpauth.h"
 #include "latchkey_util/rate_limit.h"
@@ -71,26 +72,6 @@ bool passwordMatches(std::string_view password, const latchkey_util::PasswordRec
     matches = latchkey_util::constantTimeEqual(derived.data(), record.hash.data(), derived.size());
     mbedtls_platform_zeroize(derived.data(), derived.size());
     return true;
-}
-
-bool hmacSha1(const uint8_t* key, size_t keyLength, const uint8_t* message, size_t messageLength,
-              uint8_t (&digest)[latchkey_util::kHmacSha1Size]) {
-    psa_key_attributes_t attributes = PSA_KEY_ATTRIBUTES_INIT;
-    psa_set_key_type(&attributes, PSA_KEY_TYPE_HMAC);
-    psa_set_key_bits(&attributes, PSA_BYTES_TO_BITS(keyLength));
-    psa_set_key_usage_flags(&attributes, PSA_KEY_USAGE_SIGN_MESSAGE);
-    psa_set_key_algorithm(&attributes, PSA_ALG_HMAC(PSA_ALG_SHA_1));
-    mbedtls_svc_key_id_t keyId = MBEDTLS_SVC_KEY_ID_INIT;
-    const psa_status_t imported = psa_import_key(&attributes, key, keyLength, &keyId);
-    psa_reset_key_attributes(&attributes);
-    if (imported != PSA_SUCCESS) {
-        return false;
-    }
-    size_t length = 0;
-    const psa_status_t computed = psa_mac_compute(keyId, PSA_ALG_HMAC(PSA_ALG_SHA_1), message, messageLength,
-                                                  digest, sizeof(digest), &length);
-    psa_destroy_key(keyId);
-    return computed == PSA_SUCCESS && length == sizeof(digest);
 }
 
 bool digestOf(std::string_view token, latchkey_util::SessionDigest& out) {
@@ -234,7 +215,7 @@ Login login(const std::optional<Credentials>& credentials, bool openSession) {
     uint64_t step = 0;
     const latchkey_util::TotpVerdict code =
         latchkey_util::totpVerify(owner.totpSecret.data(), owner.totpSecret.size(), now, credentials->code,
-                                  s_replay.lastStepAt(now), hmacSha1, step);
+                                  s_replay.lastStepAt(now), hmac::sha1, step);
     mbedtls_platform_zeroize(&owner, sizeof(owner));
     if (!derived || code == latchkey_util::TotpVerdict::HmacFailed) {
         ESP_LOGE(TAG, "login check failed in the crypto library");

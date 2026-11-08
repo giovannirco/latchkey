@@ -4,6 +4,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <string>
 #include <string_view>
 
 #include "latchkey_util/hmac_sha256.h"
@@ -17,5 +18,11 @@ using PasscodeId = std::array<uint8_t, kPasscodeIdSize>;
 using LockAesKey = ttlock::AesKey;
 
 bool passcodeId(const LockAesKey& lockKey, std::string_view code, HmacSha256 hmac, PasscodeId& out);
+
+std::string formatPasscodeId(const PasscodeId& id);
+
+bool parsePasscodeId(std::string_view text, PasscodeId& out);
+
+uint64_t passcodeIdNumber(const PasscodeId& id);
 
 }
