@@ -211,11 +211,16 @@ static void test_decode_with_the_wrong_key_does_not_yield_the_payload() {
 }
 
 static void test_failed_decode_leaves_output_untouched() {
-    ttlock::DecodedFrame decoded{0x99, Bytes{0x01, 0x02}, true};
+    const ttlock::LockVersion untouched{9, 9, 9, 9, 9};
+    ttlock::DecodedFrame decoded{0x99, Bytes{0x01, 0x02}, true, untouched};
     assertStatus(Status::BadResponse, ttlock::decodeFrame(Bytes{}, ttlock::kDefaultAesKey, decoded), "empty");
+    const Bytes badPadding(vectors::frame::kWireBadPadding,
+                           vectors::frame::kWireBadPadding + sizeof(vectors::frame::kWireBadPadding) - 2);
+    assertStatus(Status::BadResponse, ttlock::decodeFrame(badPadding, ttlock::kDefaultAesKey, decoded), "padding");
     TEST_ASSERT_EQUAL_HEX8(0x99, decoded.command);
     TEST_ASSERT_EQUAL_UINT(2, decoded.payload.size());
     TEST_ASSERT_TRUE(decoded.crcOk);
+    assertVersion(untouched, decoded.version, "untouched");
 }
 
 static void test_chunk_splits_into_20_byte_notifications() {
