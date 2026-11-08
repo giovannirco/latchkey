@@ -1,4 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
+// Callers pass windows only, without record ids, until a hardware check confirms that a lock's log record id equals
+// the record id in its unlock reply.
 #pragma once
 
 #include <cstdint>

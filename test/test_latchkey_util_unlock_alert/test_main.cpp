@@ -156,6 +156,15 @@ static void test_a_record_id_picks_the_entry_latchkey_made() {
                    classify({entry(1, localAt(2), 41), entry(1, localAt(3), 42)}, {sent(kTwoPm, kTwoPm + 5), ours}));
 }
 
+static void test_a_record_id_that_differs_from_the_log_alerts_even_inside_the_window() {
+    const LogEntry logged = entry(1, localAt(2), 7);
+    assertVerdicts({UnlockVerdict::Alert}, classify({logged}, {sentWithRecord(kTwoPm, kTwoPm + 5, 42)}));
+    assertVerdicts({UnlockVerdict::Latchkey}, classify({logged}, {sent(kTwoPm, kTwoPm + 5)}));
+    assertVerdicts({UnlockVerdict::Alert, UnlockVerdict::Alert},
+                   classify({logged, entry(1, localAt(3), 8)}, {sentWithRecord(kTwoPm, kTwoPm + 5, 42),
+                                                                sentWithRecord(kTwoPm, kTwoPm + 5, 43)}));
+}
+
 static void test_remote_unlocks_need_a_remote_action() {
     const std::vector<UnlockFinding> alone = classify({entry(28, localAt(2))}, {sent(kTwoPm, kTwoPm + 5)});
     TEST_ASSERT_EQUAL(UnlockMethod::Remote, alone[0].method);
@@ -226,6 +235,7 @@ int main() {
     RUN_TEST(test_the_tolerance_widens_the_window_and_no_more);
     RUN_TEST(test_one_latchkey_unlock_explains_one_entry);
     RUN_TEST(test_a_record_id_picks_the_entry_latchkey_made);
+    RUN_TEST(test_a_record_id_that_differs_from_the_log_alerts_even_inside_the_window);
     RUN_TEST(test_remote_unlocks_need_a_remote_action);
     RUN_TEST(test_keypad_fingerprint_card_and_key_unlocks_are_reported_not_alerts);
     RUN_TEST(test_entries_that_are_not_unlocks);
