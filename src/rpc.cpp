@@ -139,7 +139,17 @@ JobSpec methodJob(const std::string& method, const Method& target, const Context
 
 }
 
-const char* toString(Transport transport) { return transport == Transport::Serial ? "serial" : "web"; }
+const char* toString(Transport transport) {
+    switch (transport) {
+        case Transport::Serial:
+            return "serial";
+        case Transport::Web:
+            return "web";
+        case Transport::Board:
+            return "board";
+    }
+    return "web";
+}
 
 Reply ok(cJSON* result) {
     Reply reply;

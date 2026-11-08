@@ -15,6 +15,7 @@ namespace rpc {
 enum class Transport : uint8_t {
     Serial,
     Web,
+    Board,
 };
 
 const char* toString(Transport transport);
