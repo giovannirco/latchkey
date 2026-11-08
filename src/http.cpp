@@ -94,6 +94,7 @@ QueueHandle_t s_requests = nullptr;
 TaskHandle_t s_worker = nullptr;
 std::atomic<TaskHandle_t> s_server{nullptr};
 std::atomic<bool> s_started{false};
+std::atomic<bool> s_serving{false};
 
 void securityHeaders(httpd_req_t* req) {
     httpd_resp_set_hdr(req, "Content-Security-Policy", kPolicy);
@@ -101,6 +102,8 @@ void securityHeaders(httpd_req_t* req) {
     httpd_resp_set_hdr(req, "Referrer-Policy", "no-referrer");
     httpd_resp_set_hdr(req, "X-Content-Type-Options", "nosniff");
     httpd_resp_set_hdr(req, "Cache-Control", "no-store");
+}
+
 }
 
 esp_err_t sendJson(httpd_req_t* req, const char* status, const std::string& json) {
@@ -114,6 +117,19 @@ esp_err_t refuse(httpd_req_t* req, const char* status, const char* code, const c
     sendJson(req, status, rpc::errorLine(code, message));
     return ESP_FAIL;
 }
+
+std::string sessionToken(httpd_req_t* req) {
+    char token[kTokenBuffer] = {};
+    size_t length = sizeof(token);
+    std::string value;
+    if (httpd_req_get_cookie_val(req, latchkey_util::kSessionCookieName, token, &length) == ESP_OK) {
+        value = token;
+    }
+    mbedtls_platform_zeroize(token, sizeof(token));
+    return value;
+}
+
+namespace {
 
 esp_err_t answerError(httpd_req_t* req, httpd_err_code_t error) {
     for (const ErrorReply& reply : kErrors) {
@@ -203,17 +219,6 @@ esp_err_t acceptRpc(httpd_req_t* req) {
         return ESP_FAIL;
     }
     return ESP_OK;
-}
-
-std::string sessionToken(httpd_req_t* req) {
-    char token[kTokenBuffer] = {};
-    size_t length = sizeof(token);
-    std::string value;
-    if (httpd_req_get_cookie_val(req, latchkey_util::kSessionCookieName, token, &length) == ESP_OK) {
-        value = token;
-    }
-    mbedtls_platform_zeroize(token, sizeof(token));
-    return value;
 }
 
 void abandon(httpd_req_t* req) {
@@ -363,6 +368,7 @@ void startServers(void* arg) {
     if (error != ESP_OK) {
         ESP_LOGE(TAG, "the web server did not start: %s", esp_err_to_name(error));
     } else {
+        s_serving = true;
         ESP_LOGI(TAG, "HTTPS on port 443, redirect on port 80");
     }
     vTaskDelete(nullptr);
@@ -392,6 +398,8 @@ void start() {
     }
     ESP_ERROR_CHECK(esp_event_handler_register(IP_EVENT, IP_EVENT_STA_GOT_IP, onGotIp, nullptr));
 }
+
+bool serving() { return s_serving; }
 
 bool fromBoardAddress(httpd_req_t* req) {
     const uint32_t own = wifi::address();
