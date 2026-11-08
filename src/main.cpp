@@ -10,9 +10,11 @@
 #include "sdkconfig.h"
 
 #include "audit.h"
+#include "ble_central.h"
 #include "board.h"
 #include "clock.h"
 #include "console.h"
+#include "lock_manager.h"
 #include "methods.h"
 #include "store.h"
 #include "wifi.h"
@@ -40,6 +42,9 @@ extern "C" void app_main() {
     store::cfg::Wifi config;
     const bool configured = store::cfg::loadWifi(config);
     wifi::start(configured ? &config : nullptr);
+    ble::init();
+    lock_manager::start();
     methods::registerSystem();
+    methods::registerLocks();
     console::start();
 }

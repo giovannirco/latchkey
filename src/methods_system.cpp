@@ -7,22 +7,27 @@
 #include <utility>
 
 #include "esp_app_desc.h"
+#include "esp_heap_caps.h"
 #include "esp_idf_version.h"
 #include "esp_log.h"
 #include "esp_random.h"
 #include "esp_system.h"
 #include "esp_timer.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 #include "lwip/inet.h"
 #include "mbedtls/platform_util.h"
 #include "psa/crypto.h"
 #include "sdkconfig.h"
 
 #include "audit.h"
+#include "ble_central.h"
 #include "board.h"
 #include "clock.h"
 #include "console.h"
 #include "latchkey_util/ipv4.h"
 #include "latchkey_util/otpauth.h"
+#include "lock_manager.h"
 #include "methods.h"
 #include "rpc.h"
 #include "store.h"
@@ -42,6 +47,17 @@ constexpr size_t kMaxWifiPassword = 63;
 constexpr size_t kDefaultAuditPage = 20;
 constexpr uint64_t kRestartDelayUs = 500 * 1000;
 constexpr const char* kWifiParamsMessage = "wifi needs ssid, password, ip, gateway, netmask and dns";
+constexpr size_t kMaxLogTag = 15;
+
+struct LogLevelName {
+    const char* name;
+    esp_log_level_t level;
+};
+
+constexpr LogLevelName kLogLevels[] = {
+    {"none", ESP_LOG_NONE}, {"error", ESP_LOG_ERROR}, {"warn", ESP_LOG_WARN},
+    {"info", ESP_LOG_INFO}, {"debug", ESP_LOG_DEBUG}, {"verbose", ESP_LOG_VERBOSE},
+};
 
 std::mutex s_claimMutex;
 esp_timer_handle_t s_restartTimer = nullptr;
@@ -152,6 +168,24 @@ cJSON* wifiJson() {
     return json;
 }
 
+uint32_t stackFree(const char* task) {
+    TaskHandle_t handle = xTaskGetHandle(task);
+    return handle != nullptr ? uxTaskGetStackHighWaterMark(handle) : 0;
+}
+
+cJSON* bleJson() {
+    const ble::Stats stats = ble::stats();
+    cJSON* json = cJSON_CreateObject();
+    cJSON_AddBoolToObject(json, "ready", stats.ready);
+    cJSON_AddBoolToObject(json, "scanning", stats.scan != ble::ScanMode::Off);
+    cJSON_AddBoolToObject(json, "connected", stats.connected);
+    cJSON_AddNumberToObject(json, "reports", stats.reports);
+    cJSON_AddNumberToObject(json, "frames", stats.frames);
+    cJSON_AddNumberToObject(json, "bad_crc", stats.badCrc);
+    cJSON_AddNumberToObject(json, "dropped", stats.dropped);
+    return json;
+}
+
 rpc::Reply info(const cJSON*, const rpc::Context&) {
     cJSON* result = cJSON_CreateObject();
     cJSON_AddStringToObject(result, "firmware", esp_app_get_description()->version);
@@ -162,6 +196,12 @@ rpc::Reply info(const cJSON*, const rpc::Context&) {
     cJSON* heap = cJSON_AddObjectToObject(result, "heap");
     cJSON_AddNumberToObject(heap, "free", esp_get_free_heap_size());
     cJSON_AddNumberToObject(heap, "min_free", esp_get_minimum_free_heap_size());
+    cJSON_AddNumberToObject(heap, "largest_block", heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL));
+    cJSON* stacks = cJSON_AddObjectToObject(result, "stack_free");
+    cJSON_AddNumberToObject(stacks, "lock_worker", lock_manager::workerStackFree());
+    cJSON_AddNumberToObject(stacks, "nimble_host", stackFree("nimble_host"));
+    cJSON_AddNumberToObject(stacks, "console", stackFree("console"));
+    cJSON_AddItemToObject(result, "ble", bleJson());
     store::Usage usage;
     if (store::usage(usage) != ESP_OK) {
         cJSON_Delete(result);
@@ -246,14 +286,27 @@ rpc::Reply reboot(const cJSON*, const rpc::Context&) {
     return restartLater() == ESP_OK ? rpc::ok() : rpc::fail("internal", "cannot schedule the restart");
 }
 
-rpc::Reply factoryReset(const cJSON*, const rpc::Context&) {
+rpc::Reply factoryReset(const cJSON* params, const rpc::Context&) {
+    const cJSON* forceItem = member(params, "force");
+    if (forceItem != nullptr && !cJSON_IsNull(forceItem) && !cJSON_IsBool(forceItem)) {
+        return rpc::fail("invalid_params", "force must be true or false");
+    }
+    const bool force = cJSON_IsTrue(forceItem);
     std::lock_guard<std::mutex> lock(s_claimMutex);
-    const bool erased =
-        store::auth::erase() == ESP_OK && store::cfg::erase() == ESP_OK && audit::clear() == ESP_OK;
+    size_t locks = 0;
+    if (lock_manager::storedCount(locks) != ESP_OK) {
+        return rpc::fail("internal", "cannot read the stored locks");
+    }
+    if (locks > 0 && !force) {
+        return rpc::fail("locks_paired",
+                         "the board holds lock keys: factory-reset or forget each lock first, or pass force");
+    }
+    const bool erased = lock_manager::eraseAll() == ESP_OK && store::auth::erase() == ESP_OK &&
+                        store::cfg::erase() == ESP_OK && audit::clear() == ESP_OK;
     if (!erased) {
         return rpc::fail("internal", "erase failed");
     }
-    ESP_LOGW(TAG, "factory reset: owner, Wi-Fi and audit erased");
+    ESP_LOGW(TAG, "factory reset: owner, Wi-Fi, locks and audit erased");
     return restartLater() == ESP_OK ? rpc::ok() : rpc::fail("internal", "erased, but cannot schedule the restart");
 }
 
@@ -266,6 +319,21 @@ rpc::Reply timeSet(const cJSON* params, const rpc::Context&) {
         return rpc::fail("internal", "cannot set the clock");
     }
     return rpc::ok();
+}
+
+rpc::Reply logSet(const cJSON* params, const rpc::Context&) {
+    std::string tag;
+    std::string level;
+    if (!readString(params, "tag", 1, kMaxLogTag, tag) || !readString(params, "level", 1, 8, level)) {
+        return rpc::fail("invalid_params", "log.set needs a tag and a level");
+    }
+    for (const LogLevelName& entry : kLogLevels) {
+        if (level == entry.name) {
+            esp_log_level_set(tag.c_str(), entry.level);
+            return rpc::ok();
+        }
+    }
+    return rpc::fail("invalid_params", "level is none, error, warn, info, debug or verbose");
 }
 
 rpc::Reply auditList(const cJSON* params, const rpc::Context&) {
@@ -310,6 +378,7 @@ void registerSystem() {
     rpc::registerMethod("system.reboot", {}, reboot);
     rpc::registerMethod("system.factoryReset", {.needsButton = true}, factoryReset);
     rpc::registerMethod("system.time.set", {.serialOnly = true}, timeSet);
+    rpc::registerMethod("system.log.set", {.serialOnly = true, .audited = false}, logSet);
     rpc::registerMethod("audit.list", {.audited = false}, auditList);
 }
 

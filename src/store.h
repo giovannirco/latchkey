@@ -5,6 +5,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <string>
+#include <vector>
 
 #include "esp_err.h"
 
@@ -55,6 +56,50 @@ bool loadOwner(Owner& out);
 esp_err_t saveOwner(const Owner& owner);
 
 esp_err_t erase();
+
+}
+
+namespace locks {
+
+inline constexpr size_t kMaxLocks = 8;
+inline constexpr uint8_t kRecordVersion = 1;
+inline constexpr uint8_t kFlagPairComplete = 0x01;
+inline constexpr uint8_t kFlagAdminPasscodeConfirmed = 0x02;
+inline constexpr uint8_t kFlagTimeCalibrated = 0x04;
+
+struct Record {
+    uint8_t version = kRecordVersion;
+    uint8_t flags = 0;
+    uint8_t addressType = 0;
+    uint8_t address[6] = {};
+    char mac[18] = {};
+    char name[100] = {};
+    uint8_t protocolType = 0;
+    uint8_t protocolVersion = 0;
+    uint8_t scene = 0;
+    uint16_t groupId = 0;
+    uint16_t orgId = 0;
+    uint8_t aesKey[16] = {};
+    uint32_t adminPs = 0;
+    uint32_t unlockKey = 0;
+    uint32_t lockFlagPos = 0;
+    uint64_t features = 0;
+    char adminPasscode[16] = {};
+    char model[32] = {};
+    char hardware[32] = {};
+    char firmware[32] = {};
+    char manufactureDate[16] = {};
+};
+
+esp_err_t list(std::vector<Record>& out);
+
+esp_err_t count(size_t& out);
+
+esp_err_t save(const Record& record);
+
+esp_err_t erase(const char* mac);
+
+esp_err_t eraseAll();
 
 }
 
