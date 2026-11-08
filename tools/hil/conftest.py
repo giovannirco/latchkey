@@ -16,7 +16,7 @@ from owner import Private, claim_secret, hide
 
 SECRETS = Path(__file__).resolve().parents[2] / "secrets.local.json"
 OTPAUTH_SECRET = re.compile(r"secret=[A-Z2-7]+")
-SECRET_VALUE = re.compile(r'"(code|reply|adminPasscode)":"[^"]*"')
+SECRET_VALUE = re.compile(r'"(code|adminPasscode)":"[0-9]+"|"(reply)":"[0-9a-f]+"')
 
 
 def pytest_addoption(parser: pytest.Parser) -> None:
@@ -43,7 +43,8 @@ def pytest_addoption(parser: pytest.Parser) -> None:
 
 
 def redact(line: str) -> str:
-    return SECRET_VALUE.sub(r'"\1":"REDACTED"', OTPAUTH_SECRET.sub("secret=REDACTED", line))
+    masked = SECRET_VALUE.sub(lambda found: f'"{found.group(1) or found.group(2)}":"REDACTED"', line)
+    return OTPAUTH_SECRET.sub("secret=REDACTED", masked)
 
 
 @pytest.fixture(scope="session")

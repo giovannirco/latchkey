@@ -39,6 +39,8 @@ PASSCODE_KEYS = {"id", "type", "name", "validity", "managed"}
 CREDENTIAL_KEYS = {"id", "name", "validity"}
 PASSCODE_TYPES = {"permanent", "timed", "one_time", "cyclic"}
 ADMIN_KEYS = {"code", "source"}
+EASY_CODE = "9876543"
+IN_USE_MESSAGE = "that code is already in use on the lock"
 UNKNOWN_PASSCODE = "000000000000"
 LOCK_METHODS: dict[str, dict[str, Any]] = {
     "lock.passcodes.list": {},
@@ -197,7 +199,7 @@ def test_cyclic_passcodes_are_refused_without_a_frame(console: Console, held: di
 def test_the_passcode_list_has_ids_and_never_codes(console: Console, held: dict[str, Any], lock_mac: str) -> None:
     entries = passcodes(console, lock_mac)
     for entry in entries:
-        assert set(entry) in (PASSCODE_KEYS, PASSCODE_KEYS | {"admin"})
+        assert set(entry) == PASSCODE_KEYS
         assert PASSCODE_ID.fullmatch(entry["id"])
         assert entry["type"] in PASSCODE_TYPES
         assert isinstance(entry["managed"], bool)
@@ -205,12 +207,7 @@ def test_the_passcode_list_has_ids_and_never_codes(console: Console, held: dict[
     types = Counter(entry["type"] for entry in entries)
     managed = sum(entry["managed"] for entry in entries)
     named = sum(bool(entry["name"]) for entry in entries)
-    admin = sum(entry.get("admin", False) for entry in entries)
-    print(
-        f"passcode list: {len(entries)} entries {dict(types)}, {managed} managed, {named} named, "
-        f"{admin} equal to the admin passcode",
-        file=sys.stderr,
-    )
+    print(f"passcode list: {len(entries)} entries {dict(types)}, {managed} managed, {named} named", file=sys.stderr)
 
 
 def test_a_passcode_is_added_listed_changed_and_deleted(
@@ -346,6 +343,51 @@ def test_the_raw_admin_code_reply_holds_the_code_at_its_declared_length(
         assert holds_code, "the raw reply does not hold the parsed code at its declared length"
 
 
+def test_an_easy_code_is_added_with_a_warning(
+    console: Console, held: dict[str, Any], lock_mac: str, created: list[str]
+) -> None:
+    params = {"lock": lock_mac, "type": "permanent", "name": NAME_PREFIX + "easy", "code": Private(EASY_CODE)}
+    added = console.call("lock.passcodes.add", params, timeout=LOCK_TIMEOUT_S)
+    created.append(added["passcode"]["id"])
+    assert "easy to guess" in added["warning"]
+    gone = console.call(
+        "lock.passcodes.delete", {"lock": lock_mac, "id": added["passcode"]["id"]}, timeout=LOCK_TIMEOUT_S
+    )
+    assert gone == {}
+
+
+def test_the_admin_passcode_is_refused_like_any_code_in_use(
+    console: Console, held: dict[str, Any], lock_mac: str, admin: dict[str, Any], created: list[str]
+) -> None:
+    if "code" not in admin:
+        pytest.skip("the admin passcode was not read")
+    params = {"lock": lock_mac, "type": "permanent", "name": NAME_PREFIX + "in use"}
+    added = console.call("lock.passcodes.add", params, timeout=LOCK_TIMEOUT_S)["passcode"]
+    created.append(added["id"])
+    try:
+        duplicate = console.request(
+            "lock.passcodes.add", {**params, "code": Private(added["code"])}, timeout=LOCK_TIMEOUT_S
+        )["error"]
+        admin_code = console.request("lock.passcodes.add", {**params, "code": admin["code"]}, timeout=LOCK_TIMEOUT_S)[
+            "error"
+        ]
+        assert duplicate == admin_code == {"code": "lock_error", "message": IN_USE_MESSAGE}
+    finally:
+        console.call("lock.passcodes.delete", {"lock": lock_mac, "id": added["id"]}, timeout=LOCK_TIMEOUT_S)
+
+
+def test_the_nvs_reserve_leaves_room_for_names(console: Console, held: dict[str, Any]) -> None:
+    nvs = console.call("system.info")["nvs"]
+    room = nvs["availableEntries"] - nvs["reservedEntries"]
+    print(
+        f"nvs: {nvs['usedEntries']} used, {nvs['availableEntries']} available, {nvs['reservedEntries']} reserved for "
+        f"pairing and the audit log, {room} left for names",
+        file=sys.stderr,
+    )
+    assert nvs["reservedEntries"] > 0
+    assert room > 0
+
+
 def test_the_admin_passcode_must_be_four_to_nine_digits(console: Console, held: dict[str, Any], lock_mac: str) -> None:
     wait_idle(console)
     before = frames(console)
@@ -355,13 +397,19 @@ def test_the_admin_passcode_must_be_four_to_nine_digits(console: Console, held: 
 
 
 def test_the_admin_passcode_can_be_set_to_the_code_it_has(
-    console: Console, held: dict[str, Any], lock_mac: str, admin: dict[str, Any]
+    console: Console, held: dict[str, Any], lock_mac: str, admin: dict[str, Any], allow_admin_passcode_change: bool
 ) -> None:
+    if not allow_admin_passcode_change:
+        pytest.skip("pass --allow-admin-passcode-change to write the keypad admin passcode")
     if admin.get("source") != "lock" or admin.get("matches") is not True:
         pytest.skip("the lock's admin passcode could not be read back")
     same = {"lock": lock_mac, "code": admin["code"]}
-    assert console.call("lock.adminPasscode.set", same, timeout=LOCK_TIMEOUT_S) == {}
-    read = console.call("lock.adminPasscode.get", {"lock": lock_mac}, timeout=LOCK_TIMEOUT_S)
+    try:
+        assert console.call("lock.adminPasscode.set", same, timeout=LOCK_TIMEOUT_S) == {}
+    finally:
+        read = console.call("lock.adminPasscode.get", {"lock": lock_mac}, timeout=LOCK_TIMEOUT_S)
+        if read["code"] != admin["code"]:
+            console.call("lock.adminPasscode.set", same, timeout=LOCK_TIMEOUT_S)
     kept = (read["code"] == admin["code"], read["source"], read["matchesBoard"])
     assert kept == (True, "lock", True)
 
@@ -377,7 +425,12 @@ def test_the_admin_passcode_changes_and_comes_back(
     chosen = random_code(8)
     while chosen == original:
         chosen = random_code(8)
+    params = {"lock": lock_mac, "type": "permanent", "name": NAME_PREFIX + "not admin"}
+    user = console.call("lock.passcodes.add", params, timeout=LOCK_TIMEOUT_S)["passcode"]
     try:
+        taken = {"lock": lock_mac, "code": Private(user["code"])}
+        refused = console.request("lock.adminPasscode.set", taken, timeout=LOCK_TIMEOUT_S)["error"]
+        assert refused == {"code": "lock_error", "message": IN_USE_MESSAGE}
         assert console.call("lock.adminPasscode.set", {"lock": lock_mac, "code": chosen}, timeout=LOCK_TIMEOUT_S) == {}
         read = console.call("lock.adminPasscode.get", {"lock": lock_mac}, timeout=LOCK_TIMEOUT_S)
         changed = (read["code"] == chosen, read["source"], read["matchesBoard"])
@@ -390,9 +443,9 @@ def test_the_admin_passcode_changes_and_comes_back(
         read = console.call("lock.adminPasscode.get", {"lock": lock_mac}, timeout=LOCK_TIMEOUT_S)
         assert (read["code"] == fresh, read["source"]) == (True, "lock")
     finally:
-        assert (
-            console.call("lock.adminPasscode.set", {"lock": lock_mac, "code": original}, timeout=LOCK_TIMEOUT_S) == {}
-        )
+        put_back = console.call("lock.adminPasscode.set", {"lock": lock_mac, "code": original}, timeout=LOCK_TIMEOUT_S)
+        console.call("lock.passcodes.delete", {"lock": lock_mac, "id": user["id"]}, timeout=LOCK_TIMEOUT_S)
+        assert put_back == {}
     read = console.call("lock.adminPasscode.get", {"lock": lock_mac}, timeout=LOCK_TIMEOUT_S)
     restored = (read["code"] == original, read["source"], read["matchesBoard"])
     assert restored == (True, "lock", True)
@@ -408,6 +461,10 @@ def test_an_enrolment_without_a_finger_or_card_ends_by_itself(
     started = time.monotonic()
     reply = console.request(method, {"lock": lock_mac, "name": NAME_PREFIX + kind}, timeout=ENROL_TIMEOUT_S)
     elapsed = time.monotonic() - started
+    if "result" in reply:
+        enrolled = reply["result"][kind]["id"]
+        console.call(method.replace(".enroll", ".delete"), {"lock": lock_mac, "id": enrolled}, timeout=LOCK_TIMEOUT_S)
+        pytest.fail(f"a {kind} was enrolled while nobody should be at the lock; it was deleted again")
     error = reply.get("error", {})
     timed_out = error.get("code") == "timeout"
     ended_by_lock = error.get("code") == "lock_error" and error.get("message", "").startswith(
@@ -417,7 +474,8 @@ def test_an_enrolment_without_a_finger_or_card_ends_by_itself(
     assert elapsed < ENROL_LIMIT_S
     progress = events_for(console, "enroll.progress", lock_mac)
     assert progress, "no enroll.progress event arrived"
-    assert progress[0] == {"lock": lock_mac, "kind": kind, "stage": "waiting", "scans": 0, "total": total}
+    first = hide(progress[0])
+    assert first == {"lock": lock_mac, "kind": kind, "stage": "waiting", "scans": 0, "total": total}
     assert all(event["stage"] == "waiting" for event in progress)
     waited, refused = settle(console, lock_mac)
     print(
