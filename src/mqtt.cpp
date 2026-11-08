@@ -55,6 +55,9 @@ constexpr int kBufferSize = 256;
 constexpr uint64_t kOutboxLimit = 2048;
 constexpr TickType_t kTick = pdMS_TO_TICKS(1000);
 constexpr TickType_t kForgetWait = pdMS_TO_TICKS(5000);
+constexpr int64_t kLeaveWaitMs = 3000;
+constexpr int64_t kAvailabilityWaitMs = 1000;
+constexpr TickType_t kDrainPoll = pdMS_TO_TICKS(20);
 constexpr int64_t kReconcileMs = 30 * 1000;
 constexpr int64_t kPollIntervalMs = 6LL * 3600 * 1000;
 constexpr int64_t kPollRetryMs = 15LL * 60 * 1000;
@@ -299,9 +302,28 @@ void fault(State& state, const char* problem) {
     esp_mqtt_client_disconnect(state.client);
 }
 
-bool removeLock(State& state, const std::string& prefix, const std::string& id) {
+bool removeLock(State& state, const std::string& prefix, const std::string& id, int qos) {
     std::vector<latchkey_util::MqttMessage> removal;
-    return latchkey_util::haRemoval(prefix, state.board, id, removal) && publishAll(state, removal, kAtMostOnce);
+    return latchkey_util::haRemoval(prefix, state.board, id, removal) && publishAll(state, removal, qos);
+}
+
+bool drained(State& state, int64_t deadlineMs) {
+    while (esp_mqtt_client_get_outbox_size(state.client) > 0) {
+        if (nowMs() >= deadlineMs) {
+            return false;
+        }
+        vTaskDelay(kDrainPoll);
+    }
+    return true;
+}
+
+bool removeBeforeLeaving(State& state, const std::string& prefix, int64_t deadlineMs) {
+    bool confirmed = true;
+    for (const auto& [id, entry] : state.announced) {
+        const bool sent = removeLock(state, prefix, id, kAtLeastOnce);
+        confirmed = sent && drained(state, deadlineMs) && confirmed;
+    }
+    return confirmed;
 }
 
 std::optional<std::vector<View>> snapshot() {
@@ -415,7 +437,7 @@ void retire(State& state, const std::string& id) {
         esp_mqtt_client_unsubscribe(state.client, topicsOf(state, id).command.c_str());
     }
     entry->second.subscribed = false;
-    if (!removeLock(state, state.settings.prefix, id)) {
+    if (!removeLock(state, state.settings.prefix, id, kAtMostOnce)) {
         ESP_LOGW(TAG, "could not remove lock %s from Home Assistant yet; trying again", entry->second.mac.c_str());
         return;
     }
@@ -542,7 +564,7 @@ void pruneStale(State& state, const std::string& id) {
     if (state.pruned.count(id) > 0 || state.announced.count(id) > 0 || lock_manager::holds(macOf(id))) {
         return;
     }
-    if (removeLock(state, state.settings.prefix, id)) {
+    if (removeLock(state, state.settings.prefix, id, kAtMostOnce)) {
         state.pruned.insert(id);
         ESP_LOGI(TAG, "removed the Home Assistant entities of lock %s, which the board does not hold",
                  macOf(id).c_str());
@@ -626,6 +648,9 @@ void stopClient(State& state, const char* availability) {
     s_active = false;
     if (state.connected && availability != nullptr) {
         publish(state, state.availability, availability, true, kAtLeastOnce);
+        if (!drained(state, nowMs() + kAvailabilityWaitMs)) {
+            ESP_LOGW(TAG, "the broker did not confirm the availability update before the board left");
+        }
     }
     esp_mqtt_client_stop(state.client);
     esp_mqtt_client_destroy(state.client);
@@ -641,11 +666,15 @@ void stopClient(State& state, const char* availability) {
 
 void forget(State& state) {
     if (state.connected) {
-        for (const auto& [id, entry] : state.announced) {
-            removeLock(state, state.settings.prefix, id);
-        }
+        const int64_t deadline = nowMs() + kLeaveWaitMs;
+        const bool removed = removeBeforeLeaving(state, state.settings.prefix, deadline);
         publish(state, state.availability, std::string(), true, kAtLeastOnce);
-        ESP_LOGI(TAG, "removed the board's entities from Home Assistant");
+        if (drained(state, deadline) && removed) {
+            ESP_LOGI(TAG, "removed the board's entities from Home Assistant");
+        } else {
+            ESP_LOGW(TAG,
+                     "the broker did not confirm the removal of the board's entities: Home Assistant may keep them");
+        }
     }
     stopClient(state, nullptr);
     state.settings.enabled = false;
@@ -850,10 +879,12 @@ void reconfigure(State& state, const store::cfg::Mqtt& settings) {
                                                          {settings.host, settings.port, settings.username});
     const bool samePlace = sameBroker && old.prefix == settings.prefix;
     if (state.connected && !samePlace) {
-        for (const auto& [id, entry] : state.announced) {
-            removeLock(state, old.prefix, id);
+        if (removeBeforeLeaving(state, old.prefix, nowMs() + kLeaveWaitMs)) {
+            ESP_LOGI(TAG, "removed the board's entities under the previous broker or prefix");
+        } else {
+            ESP_LOGW(TAG, "the broker did not confirm the removal of the board's entities under the previous broker or "
+                          "prefix: they may stay there");
         }
-        ESP_LOGI(TAG, "removed the board's entities under the previous broker or prefix");
     }
     stopClient(state, sameBroker ? latchkey_util::kHaOffline : "");
     wipe(state.settings.password);
