@@ -5,7 +5,7 @@
 
 Latchkey is firmware for ESP32 boards that takes a TTLock Bluetooth LE smart lock off the TTLock cloud and puts it under one owner's control: the board pairs with the lock by itself, manages what the TTLock app can manage on that lock, and serves an owner-only web UI, with no phone app, TTLock account or computer Bluetooth involved.
 
-Latchkey is in early development. The TTLock protocol core, the USB serial console, claiming the board, Wi-Fi, time and the time zone, the audit log, the owner login with web sessions, and the web UI served by the board over HTTPS with live events and button confirmation are in place; pairing from the board, hardening, over-the-air updates and key backup are being built.
+Latchkey is in early development; the current release is v0.2.0. Pairing from the board, locking and unlocking, passcodes, fingerprints, IC cards and the keypad's super admin passcode work and have been checked on a real lock, and Home Assistant can drive the lock over MQTT. Lock settings with the operation log and unlock alerts, logging with syslog shipping, and board firmware updates from the web page are being built; hardening and the encrypted key backup come next. The [roadmap](https://github.com/giovannirco/latchkey/issues/26) tracks what is left.
 
 ## Why
 
@@ -19,11 +19,12 @@ Works today:
 
 - TTLock protocol core (`components/ttlock`), tested on the host: pairing, lock and unlock, status and battery, device info and feature bits, time sync, passcodes, IC cards and fingerprints with validity periods and weekly windows, auto-lock, passage mode, sound, remote unlock, the reset button, privacy lock and tamper alert switches, the passcode display, the operation log and factory reset. A command the lock does not report in its feature bits answers `unsupported` without touching the radio.
 - Firmware for the classic ESP32 and the ESP32-S3: a JSON-lines console over USB, claiming the board, Wi-Fi with a static address, SNTP time with a configurable time zone, an audit log, the owner login (password, TOTP code and rate limit) with web sessions, and HTTPS with a certificate the board makes itself: the web UI, the JSON API behind a session cookie, live events over a WebSocket, and a press of the board's button before destructive actions from the web.
+- Pairing from the board, checked on a real lock: the web UI starts it and a press of the board's button confirms it; then lock, unlock, status, battery and time sync from the web.
 - Lock access from the board, checked on a real lock: passcodes (permanent, timed and one-time, listed by id and never by code), fingerprints and IC cards (enrolment with live progress, validity, weekly windows), and the keypad's super admin passcode, which pairing can take from the owner and the web UI can show and change after a press of the board's button.
 - The owner web UI (`web/`), served by the board and tested against a mock of the board API.
 - Home Assistant over MQTT, off until configured: each lock appears as a device with a lock entity, battery, last event, Bluetooth link and an unlock alert, through MQTT discovery, and LOCK and UNLOCK from Home Assistant run through the same queue as the web.
 
-In progress: the Bluetooth link and lock manager on the board, over-the-air updates, lock hardening and the encrypted key backup.
+In progress: lock settings (auto-lock, passage mode, sound), the operation log and unlock alerts; recent log lines on the board and syslog shipping; board firmware updates from the web page, with rollback. Next: lock hardening and the encrypted key backup. The web UI already shows the Export and Harden steps, but the board answers them only once they are built.
 
 ## Security model
 
@@ -32,7 +33,7 @@ In progress: the Bluetooth link and lock manager on the board, over-the-air upda
 - Destructive actions from the web also need a press of the board's button.
 - HTTPS with a certificate the board generates, whose fingerprint you check once.
 - An audit log of every action, never containing secrets.
-- Hardening (in progress): a random admin passcode on the lock, unknown passcodes removed, the lock's reset button disabled only after an encrypted backup of its keys.
+- Hardening (planned): a random admin passcode on the lock, unknown passcodes removed, the lock's reset button disabled only after an encrypted backup of its keys.
 - No cloud: the board only reaches the internet for DNS and SNTP.
 - MQTT, when you turn it on, is plain MQTT over TCP to a broker you choose: whoever may publish to a lock's command topic there can lock and unlock it.
 - Profile P1: lock keys sit in plaintext NVS, so whoever reads the flash of a stolen board can use them. Flash encryption is possible but not the default.
