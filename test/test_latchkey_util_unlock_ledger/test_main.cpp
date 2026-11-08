@@ -3,6 +3,7 @@
 
 #include <cstdint>
 #include <initializer_list>
+#include <optional>
 #include <vector>
 
 #include "latchkey_util/unlock_alert.h"
@@ -34,6 +35,12 @@ static LogEntry at(uint8_t type, int64_t secondsAfterTwoPm) {
     const int64_t secondOfDay = ((local % 86400) + 86400) % 86400;
     log.time = LockTime{2025, 11, 7, static_cast<uint8_t>(secondOfDay / 3600),
                         static_cast<uint8_t>(secondOfDay % 3600 / 60), static_cast<uint8_t>(secondOfDay % 60)};
+    return log;
+}
+
+static LogEntry withRecord(uint8_t type, int64_t secondsAfterTwoPm, uint32_t recordId) {
+    LogEntry log = at(type, secondsAfterTwoPm);
+    log.recordId = recordId;
     return log;
 }
 
@@ -116,6 +123,29 @@ static void test_the_ledger_keeps_the_newest_windows() {
                          kTwoPm + 6000));
 }
 
+static void test_the_boards_own_unlock_is_known_by_its_record_id_whatever_the_lock_clock_says() {
+    UnlockLedger ledger(kCapacity, kKeep);
+    const uint32_t sent = static_cast<uint32_t>(kTwoPm + 1);
+    ledger.note(kTwoPm, kTwoPm + 2, sent);
+    assertVerdicts({UnlockVerdict::Latchkey}, judge(ledger, {withRecord(1, 2 * 3600, sent)}));
+    TEST_ASSERT_EQUAL_UINT(0, ledger.size());
+}
+
+static void test_a_foreign_unlock_inside_the_boards_window_alerts_when_its_record_id_differs() {
+    UnlockLedger ledger(kCapacity, kKeep);
+    const uint32_t sent = static_cast<uint32_t>(kTwoPm + 1);
+    ledger.note(kTwoPm, kTwoPm + 2, sent);
+    assertVerdicts({UnlockVerdict::Alert, UnlockVerdict::Latchkey, UnlockVerdict::Alert},
+                   judge(ledger, {withRecord(1, 1, 999), withRecord(1, 1, sent), withRecord(1, 2, 0)}));
+}
+
+static void test_an_unlock_without_a_record_in_its_reply_is_known_by_its_window() {
+    UnlockLedger ledger(kCapacity, kKeep);
+    ledger.note(kTwoPm, kTwoPm + 2, std::nullopt);
+    assertVerdicts({UnlockVerdict::Latchkey, UnlockVerdict::Alert},
+                   judge(ledger, {withRecord(1, 1, 999), withRecord(1, 2, 1000)}));
+}
+
 int main(int, char**) {
     UNITY_BEGIN();
     RUN_TEST(test_the_classifier_says_which_unlocks_explained_an_entry);
@@ -124,5 +154,8 @@ int main(int, char**) {
     RUN_TEST(test_the_owners_own_unlocks_are_reported_and_keep_the_windows);
     RUN_TEST(test_windows_older_than_the_keep_time_are_dropped);
     RUN_TEST(test_the_ledger_keeps_the_newest_windows);
+    RUN_TEST(test_the_boards_own_unlock_is_known_by_its_record_id_whatever_the_lock_clock_says);
+    RUN_TEST(test_a_foreign_unlock_inside_the_boards_window_alerts_when_its_record_id_differs);
+    RUN_TEST(test_an_unlock_without_a_record_in_its_reply_is_known_by_its_window);
     return UNITY_END();
 }

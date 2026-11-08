@@ -7,7 +7,7 @@ namespace latchkey_util {
 
 UnlockLedger::UnlockLedger(size_t capacity, int64_t keepSeconds) : capacity_(capacity), keepSeconds_(keepSeconds) {}
 
-void UnlockLedger::note(int64_t fromUtc, int64_t toUtc) {
+void UnlockLedger::note(int64_t fromUtc, int64_t toUtc, std::optional<uint32_t> recordId) {
     if (capacity_ == 0) {
         return;
     }
@@ -17,6 +17,7 @@ void UnlockLedger::note(int64_t fromUtc, int64_t toUtc) {
     LatchkeyUnlock window;
     window.fromUtc = fromUtc;
     window.toUtc = toUtc;
+    window.recordId = recordId;
     windows_.push_back(window);
 }
 

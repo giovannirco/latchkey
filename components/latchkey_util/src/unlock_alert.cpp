@@ -62,7 +62,7 @@ public:
             if (byRecord && *unlock.recordId != entry.recordId) {
                 continue;
             }
-            if (utc < unlock.fromUtc - tolerance_ || utc > unlock.toUtc + tolerance_) {
+            if (!byRecord && (utc < unlock.fromUtc - tolerance_ || utc > unlock.toUtc + tolerance_)) {
                 continue;
             }
             used_[i] = true;
@@ -151,7 +151,7 @@ std::vector<UnlockFinding> classifyUnlocks(const std::vector<ttlock::LogEntry>& 
     Matcher matcher(performed, toleranceSeconds);
     for (const bool byRecord : {true, false}) {
         for (size_t i = 0; i < entries.size(); ++i) {
-            if (findings[i].verdict == UnlockVerdict::Alert && datable[i] &&
+            if (findings[i].verdict == UnlockVerdict::Alert && (byRecord || datable[i]) &&
                 matcher.claim(entries[i], findings[i].method, utc[i], byRecord)) {
                 findings[i].verdict = UnlockVerdict::Latchkey;
             }

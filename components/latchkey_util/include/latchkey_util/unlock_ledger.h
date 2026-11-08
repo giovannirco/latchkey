@@ -3,6 +3,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <optional>
 #include <vector>
 
 #include "latchkey_util/unlock_alert.h"
@@ -14,7 +15,7 @@ class UnlockLedger {
 public:
     UnlockLedger(size_t capacity, int64_t keepSeconds);
 
-    void note(int64_t fromUtc, int64_t toUtc);
+    void note(int64_t fromUtc, int64_t toUtc, std::optional<uint32_t> recordId = std::nullopt);
 
     std::vector<UnlockFinding> judge(const std::vector<ttlock::LogEntry>& entries, int32_t lockUtcOffsetSeconds,
                                      uint32_t toleranceSeconds, int64_t nowUtc);

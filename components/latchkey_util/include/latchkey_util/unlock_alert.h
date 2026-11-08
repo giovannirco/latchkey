@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Callers pass windows only, without record ids, until a hardware check confirms that a lock's log record id equals
-// the record id in its unlock reply.
+// A record id, when the unlock reply carries one, explains the log entry with that id whatever its time; a window
+// explains the rest.
 #pragma once
 
 #include <cstdint>
