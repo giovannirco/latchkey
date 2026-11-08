@@ -2,6 +2,7 @@
 #include "store.h"
 
 #include <cstdio>
+#include <cstring>
 #include <utility>
 
 #include "mbedtls/platform_util.h"
@@ -19,7 +20,34 @@ constexpr const char* kLocksNamespace = "locks";
 constexpr const char* kPasswordKey = "password";
 constexpr const char* kTotpKey = "totp";
 constexpr const char* kTlsKey = "tls";
+constexpr const char* kMqttKey = "mqtt";
+constexpr uint8_t kMqttRecordVersion = 1;
 constexpr size_t kLockKeySize = 13;
+
+struct MqttRecord {
+    uint8_t version;
+    uint8_t enabled;
+    uint16_t port;
+    char host[latchkey_util::kMaxMqttHost + 1];
+    char username[latchkey_util::kMaxMqttUsername + 1];
+    char password[latchkey_util::kMaxMqttPassword + 1];
+    char prefix[latchkey_util::kMaxHaPrefix + 1];
+};
+
+template <size_t N>
+bool putText(char (&field)[N], const std::string& value) {
+    if (value.size() >= N || value.find('\0') != std::string::npos) {
+        return false;
+    }
+    std::memcpy(field, value.data(), value.size());
+    std::memset(field + value.size(), 0, N - value.size());
+    return true;
+}
+
+template <size_t N>
+std::string takeText(const char (&field)[N]) {
+    return std::string(field, strnlen(field, N));
+}
 
 class Handle {
 public:
@@ -192,6 +220,62 @@ esp_err_t saveTlsIdentity(const latchkey_util::TlsIdentity& identity) {
         }
     }
     mbedtls_platform_zeroize(bytes.data(), bytes.size());
+    return error;
+}
+
+esp_err_t loadMqtt(Mqtt& out) {
+    Handle handle(kCfgNamespace, NVS_READONLY);
+    if (handle.error() == ESP_ERR_NVS_NOT_FOUND) {
+        out = Mqtt{};
+        return ESP_OK;
+    }
+    if (!handle.ok()) {
+        return handle.error();
+    }
+    MqttRecord record{};
+    size_t length = sizeof(record);
+    esp_err_t error = nvs_get_blob(handle.get(), kMqttKey, &record, &length);
+    if (error == ESP_ERR_NVS_NOT_FOUND) {
+        out = Mqtt{};
+        return ESP_OK;
+    }
+    if (error == ESP_OK && (length != sizeof(record) || record.version != kMqttRecordVersion)) {
+        error = ESP_ERR_INVALID_VERSION;
+    }
+    if (error == ESP_OK) {
+        Mqtt mqtt;
+        mqtt.enabled = record.enabled != 0;
+        mqtt.port = record.port;
+        mqtt.host = takeText(record.host);
+        mqtt.username = takeText(record.username);
+        mqtt.password = takeText(record.password);
+        mqtt.prefix = takeText(record.prefix);
+        out = std::move(mqtt);
+    }
+    mbedtls_platform_zeroize(&record, sizeof(record));
+    return error;
+}
+
+esp_err_t saveMqtt(const Mqtt& mqtt) {
+    MqttRecord record{};
+    record.version = kMqttRecordVersion;
+    record.enabled = mqtt.enabled ? 1 : 0;
+    record.port = mqtt.port;
+    esp_err_t error = putText(record.host, mqtt.host) && putText(record.username, mqtt.username) &&
+                              putText(record.password, mqtt.password) && putText(record.prefix, mqtt.prefix)
+                          ? ESP_OK
+                          : ESP_ERR_INVALID_ARG;
+    if (error == ESP_OK) {
+        Handle handle(kCfgNamespace, NVS_READWRITE);
+        error = handle.error();
+        if (handle.ok()) {
+            error = nvs_set_blob(handle.get(), kMqttKey, &record, sizeof(record));
+            if (error == ESP_OK) {
+                error = nvs_commit(handle.get());
+            }
+        }
+    }
+    mbedtls_platform_zeroize(&record, sizeof(record));
     return error;
 }
 
