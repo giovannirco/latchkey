@@ -224,19 +224,34 @@ esp_err_t saveTotpSecret(const TotpSecret& secret) {
     return error == ESP_OK ? nvs_commit(handle.get()) : error;
 }
 
-LoginState loadLoginState() {
-    LoginState state;
+esp_err_t loadLoginState(LoginState& out) {
     Handle handle(kAuthNamespace, NVS_READONLY);
+    if (handle.error() == ESP_ERR_NVS_NOT_FOUND) {
+        out = LoginState{};
+        return ESP_OK;
+    }
     if (!handle.ok()) {
-        return state;
+        return handle.error();
     }
-    if (nvs_get_u32(handle.get(), "fails", &state.failures) != ESP_OK) {
+    LoginState state;
+    esp_err_t error = nvs_get_u32(handle.get(), "fails", &state.failures);
+    if (error == ESP_ERR_NVS_NOT_FOUND) {
         state.failures = 0;
+        error = ESP_OK;
     }
-    if (nvs_get_u64(handle.get(), "totp_step", &state.lastStep) != ESP_OK) {
+    if (error != ESP_OK) {
+        return error;
+    }
+    error = nvs_get_u64(handle.get(), "totp_step", &state.lastStep);
+    if (error == ESP_ERR_NVS_NOT_FOUND) {
         state.lastStep = 0;
+        error = ESP_OK;
     }
-    return state;
+    if (error != ESP_OK) {
+        return error;
+    }
+    out = state;
+    return ESP_OK;
 }
 
 esp_err_t saveFailures(uint32_t failures) {

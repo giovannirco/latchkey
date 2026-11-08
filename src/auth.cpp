@@ -34,7 +34,7 @@ constexpr char kHexDigits[] = "0123456789abcdef";
 std::mutex s_loginMutex;
 std::mutex s_sessionMutex;
 latchkey_util::RateLimiter s_limiter(kLoginPolicy);
-uint64_t s_lastStep = 0;
+latchkey_util::TotpReplayGuard s_replay;
 latchkey_util::SessionTable s_sessions(kIdleTimeoutSeconds, kSessionLifetimeSeconds, 1);
 
 int64_t monotonicMs() { return esp_timer_get_time() / 1000; }
@@ -152,7 +152,7 @@ void recordSuccess(uint64_t step) {
             ESP_LOGE(TAG, "cannot reset the failed login count: %s", esp_err_to_name(error));
         }
     }
-    s_lastStep = step;
+    s_replay.accept(step);
     const esp_err_t error = store::auth::saveLastStep(step);
     if (error != ESP_OK) {
         ESP_LOGE(TAG, "cannot store the last accepted code step: %s", esp_err_to_name(error));
@@ -174,17 +174,26 @@ bool loadClaim(store::auth::Owner& owner, Verdict& verdict) {
 }
 
 void init() {
-    const store::auth::LoginState state = store::auth::loadLoginState();
+    store::auth::LoginState state;
+    const esp_err_t error = store::auth::loadLoginState(state);
     {
         std::lock_guard<std::mutex> lock(s_loginMutex);
-        s_limiter.restore(state.failures, monotonicMs());
-        s_lastStep = state.lastStep;
+        if (error == ESP_OK) {
+            s_limiter.restore(state.failures, monotonicMs());
+            s_replay.restore(state.lastStep);
+        } else {
+            s_limiter.restore(UINT32_MAX, monotonicMs());
+            s_replay.restoreUnknown();
+        }
     }
     {
         std::lock_guard<std::mutex> lock(s_sessionMutex);
         s_sessions = latchkey_util::SessionTable(kIdleTimeoutSeconds, kSessionLifetimeSeconds, esp_random());
     }
-    if (state.failures > 0) {
+    if (error != ESP_OK) {
+        ESP_LOGE(TAG, "cannot read the login state (%s): logins wait the longest time and the current codes are refused",
+                 esp_err_to_name(error));
+    } else if (state.failures > 0) {
         ESP_LOGW(TAG, "%u failed logins on record since the last success", static_cast<unsigned>(state.failures));
     }
 }
@@ -215,10 +224,11 @@ Login login(const std::optional<Credentials>& credentials, bool openSession) {
     }
     bool passwordOk = false;
     const bool derived = passwordMatches(credentials->password, owner.password, passwordOk);
+    const int64_t now = wallclock::utcSeconds();
     uint64_t step = 0;
     const latchkey_util::TotpVerdict code =
-        latchkey_util::totpVerify(owner.totpSecret.data(), owner.totpSecret.size(), wallclock::utcSeconds(),
-                                  credentials->code, s_lastStep, hmacSha1, step);
+        latchkey_util::totpVerify(owner.totpSecret.data(), owner.totpSecret.size(), now, credentials->code,
+                                  s_replay.lastStepAt(now), hmacSha1, step);
     mbedtls_platform_zeroize(&owner, sizeof(owner));
     if (!derived || code == latchkey_util::TotpVerdict::HmacFailed) {
         ESP_LOGE(TAG, "login check failed in the crypto library");
@@ -335,7 +345,7 @@ Rotation rotateTotp() {
         rotation.verdict = Verdict::Failed;
         return rotation;
     }
-    s_lastStep = 0;
+    s_replay.reset();
     const esp_err_t error = store::auth::saveLastStep(0);
     if (error != ESP_OK) {
         ESP_LOGE(TAG, "cannot reset the last accepted code step: %s", esp_err_to_name(error));

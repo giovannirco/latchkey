@@ -69,7 +69,7 @@ struct LoginState {
     uint64_t lastStep = 0;
 };
 
-LoginState loadLoginState();
+esp_err_t loadLoginState(LoginState& out);
 
 esp_err_t saveFailures(uint32_t failures);
 
