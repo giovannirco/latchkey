@@ -5,6 +5,16 @@ Notable changes to Latchkey, in the format of [Keep a Changelog](https://keepach
 
 ## [Unreleased]
 
+### Added
+
+- Recent log lines on the board: every line the USB console prints with `#` (ESP-IDF's and Latchkey's, with lines the Wi-Fi driver writes in pieces joined) goes into a RAM ring with its level, tag and boot time, 6 KiB on the classic ESP32 (in RTC memory, so it costs no heap) and 16 KiB on the ESP32-S3. `system.logs {since?, level?, limit?}` pages through it; a line shaped like a secret is kept only as a notice and counted in `system.info.logs.withheld`.
+- Remote logging over syslog, off until configured: `system.syslog.set {enabled, host, port?, transport?, appName?, level?}` ships the lines as RFC 5424 over UDP, or over TCP with octet counting, to a collector such as rsyslog, Grafana Alloy or a NAS log centre; `system.syslog.get` and `system.info.syslog` report what was sent, dropped and refused. Each change is audited.
+- Web UI: a Logs view on the System page (level filter, refresh every few seconds, copy as text), the remote logging settings, and the Wi-Fi form's IP address, gateway, netmask and DNS server, prefilled from `system.info.wifi`, which now reports `gateway`, `netmask` and `dns`.
+
+### Fixed
+
+- `system.wifi.set` from the web now gets its reply: the board answers first and switches networks a second later, where it used to stop Wi-Fi before the reply left.
+
 ## [0.2.0] - 2026-11-08
 
 ### Added
