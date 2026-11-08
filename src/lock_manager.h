@@ -40,6 +40,8 @@ esp_err_t storedCount(size_t& out);
 
 esp_err_t eraseAll();
 
+void cancelErase();
+
 uint32_t workerStackFree();
 
 }

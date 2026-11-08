@@ -1346,8 +1346,18 @@ esp_err_t storedCount(size_t& out) {
 esp_err_t eraseAll() {
     std::lock_guard<std::mutex> guard(s_mutex);
     s_erased = true;
+    const esp_err_t error = store::locks::eraseAll();
+    if (error != ESP_OK) {
+        s_erased = false;
+        return error;
+    }
     s_locks.clear();
-    return store::locks::eraseAll();
+    return ESP_OK;
+}
+
+void cancelErase() {
+    std::lock_guard<std::mutex> guard(s_mutex);
+    s_erased = false;
 }
 
 uint32_t workerStackFree() { return s_worker != nullptr ? uxTaskGetStackHighWaterMark(s_worker) : 0; }

@@ -302,10 +302,13 @@ rpc::Reply factoryReset(const cJSON* params, const rpc::Context&) {
         return rpc::fail("locks_paired",
                          "the board holds lock keys: factory-reset or forget each lock first, or pass force");
     }
-    const bool erased = lock_manager::eraseAll() == ESP_OK && store::auth::erase() == ESP_OK &&
-                        store::cfg::erase() == ESP_OK && audit::clear() == ESP_OK;
+    if (lock_manager::eraseAll() != ESP_OK) {
+        return rpc::fail("internal", "cannot erase the lock keys");
+    }
+    const bool erased = store::auth::erase() == ESP_OK && store::cfg::erase() == ESP_OK && audit::clear() == ESP_OK;
     if (!erased) {
-        return rpc::fail("internal", "erase failed");
+        lock_manager::cancelErase();
+        return rpc::fail("internal", "the lock keys are erased, but the rest of the reset failed");
     }
     ESP_LOGW(TAG, "factory reset: owner, Wi-Fi, locks and audit erased");
     return restartLater() == ESP_OK ? rpc::ok() : rpc::fail("internal", "erased, but cannot schedule the restart");
