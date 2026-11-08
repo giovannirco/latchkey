@@ -52,20 +52,24 @@ def assert_local_time(info: dict[str, Any], tz: str, offset: int) -> None:
     assert abs(local.timestamp() - info["time"]["utc"]) <= CLOCK_TOLERANCE_S
 
 
-def test_info_reports_identity(console: Console, fresh: list[str]) -> None:
-    info = console.call("system.info")
+def test_info_reports_identity(console: Console) -> None:
+    info = console.wait_ready()
     assert info["chip"] in BOARDS
     board, button = BOARDS[info["chip"]]
     assert info["board"] == board
+    assert info["button"]["gpio"] == button
     assert info["firmware"] == "0.1.0"
     assert re.fullmatch(r"\d+\.\d+\.\d+", info["idf"])
-    assert info["heap"]["free"] > 50_000
     assert 0 < info["heap"]["minFree"] <= info["heap"]["free"]
     assert 0 < info["heap"]["largestBlock"] <= info["heap"]["free"]
     assert isinstance(info["uptime"], int) and info["uptime"] >= 0
+
+
+def test_info_reports_a_fresh_board(console: Console, fresh: list[str]) -> None:
+    info = console.call("system.info")
+    assert info["heap"]["free"] > 50_000
     assert info["claimed"] is False
     assert info["wifi"] == {"configured": False, "connected": False, "ssid": None, "ip": None, "rssi": None}
-    assert info["button"]["gpio"] == button
     assert info["time"] == {"utc": None, "synced": False}
     assert info["timezone"] == "UTC0"
     assert info["localTime"] is None
