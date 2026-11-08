@@ -950,16 +950,6 @@ struct SeedStore {
     ~SeedStore() { mbedtls_platform_zeroize(&table, sizeof(table)); }
 };
 
-rpc::Reply mismatchReply(const ttlock::LockVersion& answered, const ttlock::LockVersion& advertised) {
-    char message[160];
-    std::snprintf(message, sizeof(message),
-                  "the lock answered as lock type %u.%u scene %u, but its advert said %u.%u scene %u: this board "
-                  "only pairs the lock type it advertises",
-                  answered.protocolType, answered.protocolVersion, answered.scene, advertised.protocolType,
-                  advertised.protocolVersion, advertised.scene);
-    return rpc::fail("unsupported", message);
-}
-
 std::string pairingWarning(bool keysCopyFailed, bool seedsLost) {
     std::string warning;
     if (keysCopyFailed) {
@@ -1118,7 +1108,8 @@ void runPair(Job& job) {
     ttlock::PairResult result;
     size_t mismatchesBefore = session->lockTypeMismatches();
     Status paired = session->pair(frames, options, keys, persistEarly, result);
-    bool mismatched = paired == Status::Unsupported && session->lockTypeMismatches() > mismatchesBefore;
+    bool mismatched =
+        latchkey_util::answeredAsAnotherLockType(paired, mismatchesBefore, session->lockTypeMismatches());
     if (paired != Status::Ok && paired != Status::LockError && !stores.keysTaken && !mismatched) {
         ESP_LOGW(TAG, "pairing failed before the lock took keys (%s); trying once more", ttlock::toString(paired));
         if (ble::connected() || connectWithRetries(addressOf(record)) == 0) {
@@ -1127,7 +1118,8 @@ void runPair(Job& job) {
             keys.mac = job.mac;
             mismatchesBefore = session->lockTypeMismatches();
             paired = session->pair(frames, options, keys, persistEarly, result);
-            mismatched = paired == Status::Unsupported && session->lockTypeMismatches() > mismatchesBefore;
+            mismatched =
+                latchkey_util::answeredAsAnotherLockType(paired, mismatchesBefore, session->lockTypeMismatches());
         }
     }
     mbedtls_platform_zeroize(options.adminPasscode.data(), options.adminPasscode.size());
@@ -1176,7 +1168,7 @@ void runPair(Job& job) {
         } else if (verdict == latchkey_util::PairVerdict::Incomplete) {
             finish(job, incompleteReply(paired == Status::Ok, stores.storeFailed));
         } else if (mismatched) {
-            finish(job, mismatchReply(answered, advert.version));
+            finish(job, rpc::fail("unsupported", latchkey_util::lockTypeMismatch(answered, advert.version).c_str()));
         } else {
             finish(job, failure(paired, lockError));
         }
