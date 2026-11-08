@@ -9,6 +9,7 @@ idf_component_register(
         "clock.cpp"
         "console.cpp"
         "events.cpp"
+        "hmac.cpp"
         "http.cpp"
         "jobs.cpp"
         "lock_manager.cpp"
