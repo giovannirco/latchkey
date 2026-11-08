@@ -48,6 +48,9 @@ constexpr size_t kMaxSsid = 32;
 constexpr size_t kMinWifiPassword = 8;
 constexpr size_t kMaxWifiPassword = 63;
 constexpr uint64_t kRestartDelayUs = 500 * 1000;
+constexpr TickType_t kWifiSwitchDelay = pdMS_TO_TICKS(1000);
+constexpr uint32_t kWifiSwitchStack = 4096;
+constexpr UBaseType_t kWifiSwitchPriority = 5;
 constexpr const char* kWifiParamsMessage = "wifi needs ssid, password, ip, gateway, netmask and dns";
 constexpr size_t kMaxLogTag = 15;
 
@@ -63,6 +66,9 @@ constexpr LogLevelName kLogLevels[] = {
 
 std::mutex s_claimMutex;
 esp_timer_handle_t s_restartTimer = nullptr;
+std::mutex s_wifiMutex;
+store::cfg::Wifi s_pendingWifi;
+TaskHandle_t s_wifiSwitch = nullptr;
 
 const cJSON* member(const cJSON* object, const char* key) { return cJSON_GetObjectItemCaseSensitive(object, key); }
 
@@ -280,16 +286,39 @@ rpc::Reply setup(const cJSON* params, const rpc::Context&) {
     return rpc::ok(result);
 }
 
+void switchWifi(void*) {
+    vTaskDelay(kWifiSwitchDelay);
+    store::cfg::Wifi wifi;
+    {
+        std::lock_guard<std::mutex> lock(s_wifiMutex);
+        wifi = s_pendingWifi;
+        mbedtls_platform_zeroize(s_pendingWifi.password.data(), s_pendingWifi.password.size());
+        s_pendingWifi = {};
+        s_wifiSwitch = nullptr;
+    }
+    wifi::apply(wifi);
+    mbedtls_platform_zeroize(wifi.password.data(), wifi.password.size());
+    vTaskDelete(nullptr);
+}
+
 rpc::Reply wifiSet(const cJSON* params, const rpc::Context&) {
     store::cfg::Wifi wifi;
     if (!readWifi(params, wifi)) {
         return rpc::fail("invalid_argument", kWifiParamsMessage);
     }
-    if (store::cfg::saveWifi(wifi) != ESP_OK) {
+    const bool stored = store::cfg::saveWifi(wifi) == ESP_OK;
+    if (!stored) {
+        mbedtls_platform_zeroize(wifi.password.data(), wifi.password.size());
         return rpc::fail("internal", "cannot store the Wi-Fi configuration");
     }
-    if (wifi::apply(wifi) != ESP_OK) {
-        return rpc::fail("internal", "cannot apply the Wi-Fi configuration");
+    std::lock_guard<std::mutex> lock(s_wifiMutex);
+    mbedtls_platform_zeroize(s_pendingWifi.password.data(), s_pendingWifi.password.size());
+    s_pendingWifi = wifi;
+    mbedtls_platform_zeroize(wifi.password.data(), wifi.password.size());
+    if (s_wifiSwitch == nullptr &&
+        xTaskCreate(switchWifi, "wifi_switch", kWifiSwitchStack, nullptr, kWifiSwitchPriority, &s_wifiSwitch) != pdPASS) {
+        s_wifiSwitch = nullptr;
+        return rpc::fail("internal", "the Wi-Fi configuration is stored, but the board cannot switch now: restart it");
     }
     return rpc::ok();
 }
