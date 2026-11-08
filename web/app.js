@@ -2432,7 +2432,7 @@ async function viewSecurity(view) {
   const next = h('input', {
     type: 'password',
     required: true,
-    minlength: '10',
+    minlength: '12',
     maxlength: '128',
     autocomplete: 'new-password',
   });
@@ -2443,7 +2443,7 @@ async function viewSecurity(view) {
     'form',
     { class: 'stack', 'aria-label': 'Change password' },
     field('Current password', current),
-    field('New password', next, 'At least 10 characters. Other sessions are signed out.'),
+    field('New password', next, 'At least 12 characters. Other sessions are signed out.'),
     field('Repeat new password', repeat),
     passwordError,
     h('div', { class: 'row' }, change),

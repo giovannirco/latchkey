@@ -752,8 +752,8 @@ class Mock:
             raise invalid("current and new are required")
         if not hmac.compare_digest(current.encode(), self.password.encode()):
             raise invalid("the current password is wrong")
-        if not 10 <= len(new) <= 128:
-            raise invalid("the new password needs 10 to 128 characters")
+        if not 12 <= len(new) <= 128:
+            raise invalid("the new password needs 12 to 128 characters")
         with self.lock:
             self.password = new
             ended = {token for token in self.sessions if token != ctx.token}

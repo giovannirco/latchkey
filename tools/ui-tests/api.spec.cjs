@@ -32,6 +32,14 @@ test('login sets an HttpOnly SameSite=Strict session cookie and never returns a 
   expect(list.result.locks.map((lock) => lock.name)).toEqual(['Front door', 'Shed']);
 });
 
+test('changing the password needs 12 characters, like the board', async ({ request }) => {
+  await signIn(request);
+  const short = await (await rpc(request, 'auth.changePassword', { current: PASSWORD, new: 'eleven char' })).json();
+  expect(short.error.code).toBe('invalid_argument');
+  const enough = await (await rpc(request, 'auth.changePassword', { current: PASSWORD, new: 'twelve chars' })).json();
+  expect(enough).toEqual({ id: 7, result: {} });
+});
+
 test('rpc refuses other content types and foreign origins', async ({ request }) => {
   await signIn(request);
   const text = await request.post('/api/rpc', {
