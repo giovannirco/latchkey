@@ -9,7 +9,7 @@
 namespace latchkey_util {
 
 inline constexpr size_t kFingerprintDigestSize = 32;
-inline constexpr uint8_t kTlsIdentityVersion = 1;
+inline constexpr uint8_t kTlsIdentityVersion = 2;
 
 struct CertificateValidity {
     std::string notBefore;
@@ -21,7 +21,7 @@ struct TlsIdentity {
     std::vector<uint8_t> key;
 };
 
-CertificateValidity certificateValidity(int64_t utcSeconds);
+CertificateValidity certificateValidity();
 
 std::string formatFingerprint(const uint8_t (&digest)[kFingerprintDigestSize]);
 

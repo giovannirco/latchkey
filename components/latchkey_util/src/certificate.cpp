@@ -1,10 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "latchkey_util/certificate.h"
 
-#include <cstdio>
 #include <utility>
-
-#include "latchkey_util/tz.h"
 
 namespace latchkey_util {
 
@@ -12,43 +9,13 @@ namespace {
 
 constexpr size_t kIdentityHeaderSize = 3;
 constexpr size_t kMaxCertificateSize = 0xFFFF;
-constexpr size_t kStampDigits = 14;
-constexpr int kValidityYears = 10;
+constexpr const char* kNotBefore = "20240101000000";
+constexpr const char* kNoWellDefinedExpiration = "99991231235959";
 constexpr char kHexDigits[] = "0123456789ABCDEF";
 
-std::string x509Time(int64_t utcSeconds) {
-    std::string digits;
-    for (char c : localTimestamp(utcSeconds, 0)) {
-        if (digits.size() == kStampDigits) {
-            break;
-        }
-        if (c >= '0' && c <= '9') {
-            digits += c;
-        }
-    }
-    return digits;
 }
 
-std::string yearsLater(const std::string& stamp, int years) {
-    int year = 0;
-    for (size_t i = 0; i < 4; ++i) {
-        year = year * 10 + (stamp[i] - '0');
-    }
-    char prefix[12];
-    std::snprintf(prefix, sizeof(prefix), "%04d", year + years);
-    std::string later = prefix + stamp.substr(4);
-    if (later.compare(4, 4, "0229") == 0) {
-        later.replace(4, 4, "0228");
-    }
-    return later;
-}
-
-}
-
-CertificateValidity certificateValidity(int64_t utcSeconds) {
-    const std::string notBefore = x509Time(utcSeconds);
-    return CertificateValidity{notBefore, yearsLater(notBefore, kValidityYears)};
-}
+CertificateValidity certificateValidity() { return CertificateValidity{kNotBefore, kNoWellDefinedExpiration}; }
 
 std::string formatFingerprint(const uint8_t (&digest)[kFingerprintDigestSize]) {
     std::string text;

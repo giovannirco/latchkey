@@ -14,7 +14,6 @@
 #include "psa/crypto.h"
 
 #include "board.h"
-#include "clock.h"
 #include "store.h"
 
 namespace certs {
@@ -83,8 +82,7 @@ bool newKey(mbedtls_pk_context& key) {
 bool writeCertificate(mbedtls_pk_context& key, uint32_t ipv4, std::vector<uint8_t>& buffer,
                       std::vector<uint8_t>& out) {
     const std::string name = std::string("CN=") + board::name();
-    const latchkey_util::CertificateValidity validity =
-        latchkey_util::certificateValidity(wallclock::synced() ? wallclock::utcSeconds() : wallclock::kMinUtc);
+    const latchkey_util::CertificateValidity validity = latchkey_util::certificateValidity();
     uint8_t serial[kSerialSize];
     esp_fill_random(serial, sizeof(serial));
     serial[0] = static_cast<uint8_t>((serial[0] & 0x3F) | 0x40);
