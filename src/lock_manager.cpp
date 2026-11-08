@@ -406,8 +406,10 @@ rpc::Reply failure(Status status, uint8_t lockError) {
         case Status::BadCrc:
             return rpc::fail("bad_crc", "the lock sent a damaged answer");
         case Status::LockError: {
-            const std::string message = std::string("the lock refused the command: ") + ttlock::lockErrorName(lockError);
-            return rpc::fail("lock_error", message.c_str());
+            char message[80];
+            std::snprintf(message, sizeof(message), "the lock refused the command: %s (0x%02x)",
+                          ttlock::lockErrorName(lockError), lockError);
+            return rpc::fail("lock_error", message);
         }
         case Status::Unsupported:
             return rpc::fail("unsupported", "the lock does not support that");
