@@ -69,6 +69,7 @@ def test_info_reports_identity(console: Console, fresh: list[str]) -> None:
     assert info["time"] == {"utc": None, "synced": False}
     assert info["timezone"] == "UTC0"
     assert info["localTime"] is None
+    assert info["certFingerprint"] is None
 
 
 def test_bluetooth_comes_up_idle(console: Console, fresh: list[str]) -> None:

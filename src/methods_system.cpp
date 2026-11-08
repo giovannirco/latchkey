@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <cstring>
 #include <mutex>
+#include <optional>
 #include <string>
 #include <utility>
 
@@ -23,6 +24,7 @@
 #include "auth.h"
 #include "ble_central.h"
 #include "board.h"
+#include "certs.h"
 #include "clock.h"
 #include "console.h"
 #include "latchkey_util/ipv4.h"
@@ -209,6 +211,12 @@ rpc::Reply info(const cJSON*, const rpc::Context&) {
         cJSON_AddNullToObject(result, "localTime");
     }
     cJSON_AddBoolToObject(time, "synced", synced);
+    const std::optional<std::string> fingerprint = certs::fingerprint();
+    if (fingerprint.has_value()) {
+        cJSON_AddStringToObject(result, "certFingerprint", fingerprint->c_str());
+    } else {
+        cJSON_AddNullToObject(result, "certFingerprint");
+    }
     cJSON* button = cJSON_AddObjectToObject(result, "button");
     cJSON_AddNumberToObject(button, "gpio", board::buttonGpio());
     cJSON_AddBoolToObject(button, "pressed", board::buttonPressed());

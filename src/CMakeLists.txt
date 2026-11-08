@@ -5,6 +5,7 @@ idf_component_register(
         "auth.cpp"
         "ble_central.cpp"
         "board.cpp"
+        "certs.cpp"
         "clock.cpp"
         "console.cpp"
         "events.cpp"
