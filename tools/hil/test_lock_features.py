@@ -7,7 +7,8 @@ The lock belongs to its owner. The suite never clears a list and never factory-r
 the passcodes it created, and checks at the end that the lock kept its name. Codes stay in Private values and
 only comparisons are asserted, so no code reaches the output. Changing the keypad admin passcode runs only with
 --allow-admin-passcode-change and puts the original code back afterwards. Enrolment runs without a finger or a
-card at the lock, so it must end with a timeout.
+card at the lock, so it must end by itself: the lock ends a fingerprint enrolment on its own, while a card
+enrolment ends when the board stops waiting.
 """
 
 from __future__ import annotations
@@ -28,6 +29,7 @@ from owner import Private, PrivateBytes, hide
 DOCUMENTATION_MAC = "00:00:5E:00:53:99"
 LOCK_TIMEOUT_S = 90.0
 ENROL_TIMEOUT_S = 120.0
+ENROL_LIMIT_S = 20.0
 SETTLE_S = 60.0
 NAME_PREFIX = "HIL "
 PASSCODE_ID = re.compile(r"[0-9a-f]{12}")
@@ -195,7 +197,7 @@ def test_cyclic_passcodes_are_refused_without_a_frame(console: Console, held: di
 def test_the_passcode_list_has_ids_and_never_codes(console: Console, held: dict[str, Any], lock_mac: str) -> None:
     entries = passcodes(console, lock_mac)
     for entry in entries:
-        assert set(entry) == PASSCODE_KEYS
+        assert set(entry) in (PASSCODE_KEYS, PASSCODE_KEYS | {"admin"})
         assert PASSCODE_ID.fullmatch(entry["id"])
         assert entry["type"] in PASSCODE_TYPES
         assert isinstance(entry["managed"], bool)
@@ -203,7 +205,12 @@ def test_the_passcode_list_has_ids_and_never_codes(console: Console, held: dict[
     types = Counter(entry["type"] for entry in entries)
     managed = sum(entry["managed"] for entry in entries)
     named = sum(bool(entry["name"]) for entry in entries)
-    print(f"passcode list: {len(entries)} entries {dict(types)}, {managed} managed, {named} named", file=sys.stderr)
+    admin = sum(entry.get("admin", False) for entry in entries)
+    print(
+        f"passcode list: {len(entries)} entries {dict(types)}, {managed} managed, {named} named, "
+        f"{admin} equal to the admin passcode",
+        file=sys.stderr,
+    )
 
 
 def test_a_passcode_is_added_listed_changed_and_deleted(
@@ -347,6 +354,18 @@ def test_the_admin_passcode_must_be_four_to_nine_digits(console: Console, held: 
     assert frames(console) == before
 
 
+def test_the_admin_passcode_can_be_set_to_the_code_it_has(
+    console: Console, held: dict[str, Any], lock_mac: str, admin: dict[str, Any]
+) -> None:
+    if admin.get("source") != "lock" or admin.get("matches") is not True:
+        pytest.skip("the lock's admin passcode could not be read back")
+    same = {"lock": lock_mac, "code": admin["code"]}
+    assert console.call("lock.adminPasscode.set", same, timeout=LOCK_TIMEOUT_S) == {}
+    read = console.call("lock.adminPasscode.get", {"lock": lock_mac}, timeout=LOCK_TIMEOUT_S)
+    kept = (read["code"] == admin["code"], read["source"], read["matchesBoard"])
+    assert kept == (True, "lock", True)
+
+
 def test_the_admin_passcode_changes_and_comes_back(
     console: Console, held: dict[str, Any], lock_mac: str, admin: dict[str, Any], allow_admin_passcode_change: bool
 ) -> None:
@@ -382,22 +401,28 @@ def test_the_admin_passcode_changes_and_comes_back(
 @pytest.mark.parametrize(
     ("method", "kind", "total"), [("lock.fingerprints.enroll", "fingerprint", 4), ("lock.cards.enroll", "card", 1)]
 )
-def test_an_enrolment_without_a_finger_or_card_ends_with_a_timeout(
+def test_an_enrolment_without_a_finger_or_card_ends_by_itself(
     console: Console, held: dict[str, Any], lock_mac: str, method: str, kind: str, total: int
 ) -> None:
     console.events.clear()
     started = time.monotonic()
     reply = console.request(method, {"lock": lock_mac, "name": NAME_PREFIX + kind}, timeout=ENROL_TIMEOUT_S)
     elapsed = time.monotonic() - started
-    assert reply.get("error", {}).get("code") == "timeout", reply
+    error = reply.get("error", {})
+    timed_out = error.get("code") == "timeout"
+    ended_by_lock = error.get("code") == "lock_error" and error.get("message", "").startswith(
+        f"the lock ended the {kind} enrolment after 0 of {total} scans"
+    )
+    assert timed_out or ended_by_lock, reply
+    assert elapsed < ENROL_LIMIT_S
     progress = events_for(console, "enroll.progress", lock_mac)
     assert progress, "no enroll.progress event arrived"
     assert progress[0] == {"lock": lock_mac, "kind": kind, "stage": "waiting", "scans": 0, "total": total}
     assert all(event["stage"] == "waiting" for event in progress)
     waited, refused = settle(console, lock_mac)
     print(
-        f"{kind} enrolment ended with a timeout after {elapsed:.1f} s; lock.status answered {waited:.1f} s later "
-        f"after {len(refused)} refusals {refused}",
+        f"{kind} enrolment ended after {elapsed:.1f} s: {error['code']}, {error['message']}; lock.status answered "
+        f"{waited:.1f} s later after {len(refused)} refusals {refused}",
         file=sys.stderr,
     )
 

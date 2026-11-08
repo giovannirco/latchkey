@@ -307,6 +307,7 @@ def test_serial_only_methods_are_forbidden_from_the_web(relay: Relay, session: L
         ("system.time.set", {"utc": int(time.time())}),
         ("system.setup", {}),
         ("system.log.set", {"tag": "rpc", "level": "info"}),
+        ("lock.adminPasscode.raw", {"lock": DOCUMENTATION_MAC}),
     ):
         assert rpc(relay, method, params, session.cookie)["error"]["code"] == "forbidden"
 
@@ -407,6 +408,17 @@ def test_a_held_lock_answers_a_job_over_https(
     assert abs(synced["result"]["time"] - time.time()) <= 15
 
 
+def test_a_held_lock_lists_its_passcodes_over_https(
+    console: Console, relay: Relay, session: Login, origin: str, lock_mac: str
+) -> None:
+    if not any(lock["id"] == lock_mac for lock in console.call("locks.list")["locks"]):
+        pytest.skip("this board holds no keys for the lock")
+    listed = job_outcome(job_run(relay, session, origin, "lock.passcodes.list", {"lock": lock_mac}, LOCK_JOB_S))
+    entries = listed["result"]["passcodes"]
+    assert isinstance(entries, list)
+    assert all("code" not in entry for entry in entries)
+
+
 def test_button_methods_wait_for_the_board_button(console: Console, relay: Relay, session: Login, origin: str) -> None:
     result = job_run(relay, session, origin, "locks.pair", {"mac": DOCUMENTATION_MAC, "name": "Bench"}, 45)
     required = events_named(result, "confirm.required")
@@ -432,6 +444,18 @@ def test_button_methods_check_their_parameters_before_the_press(
     entries = console.call("audit.list", {"limit": 5})["entries"]
     reset = next(entry for entry in entries if entry["method"] == "lock.factoryReset")
     assert (reset["source"], reset["target"], reset["result"]) == ("web", DOCUMENTATION_MAC, "not_paired")
+
+
+def test_admin_passcode_methods_check_the_lock_before_the_press(relay: Relay, session: Login, origin: str) -> None:
+    for method in ("lock.adminPasscode.get", "lock.adminPasscode.set"):
+        result = job_run(relay, session, origin, method, {"lock": DOCUMENTATION_MAC}, 20)
+        assert job_outcome(result)["error"]["code"] == "not_paired"
+        assert events_named(result, "confirm.required") == []
+    chosen = job_run(relay, session, origin, "lock.adminPasscode.set", {"lock": DOCUMENTATION_MAC, "code": "12"}, 20)
+    pairing = job_run(relay, session, origin, "locks.pair", {"mac": DOCUMENTATION_MAC, "adminPasscode": "12a4"}, 20)
+    for result in (chosen, pairing):
+        assert job_outcome(result)["error"]["code"] == "invalid_argument"
+        assert events_named(result, "confirm.required") == []
 
 
 def test_ending_the_session_ends_its_button_wait(
