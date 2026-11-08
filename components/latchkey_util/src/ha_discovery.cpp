@@ -6,27 +6,56 @@
 #include <initializer_list>
 #include <utility>
 
+#include "latchkey_util/ble_adv.h"
+
 namespace latchkey_util {
 
 namespace {
 
 constexpr char kHexDigits[] = "0123456789abcdef";
-constexpr char kTopicRoot[] = "latchkey/";
+constexpr char kTopicRoot[] = "latchkey";
 constexpr char kIdPrefix[] = "latchkey_";
+constexpr char kBoardPrefix[] = "latchkey-";
+constexpr char kCommandLevel[] = "set";
+constexpr char kConfigLevel[] = "config";
+constexpr size_t kLockIdSize = 2 * kBleAddressSize;
 constexpr uint8_t kFirstPrintable = 0x20;
 
-bool isId(std::string_view id) {
-    if (id.empty()) {
+struct Entity {
+    std::string_view component;
+    std::string_view suffix;
+};
+
+constexpr Entity kLockEntity{"lock", ""};
+constexpr Entity kBatteryEntity{"sensor", "battery"};
+constexpr Entity kLastEventEntity{"sensor", "last_event"};
+constexpr Entity kLinkEntity{"binary_sensor", "link"};
+constexpr Entity kAlertEntity{"event", "unlock_alert"};
+constexpr Entity kEntities[] = {kLockEntity, kBatteryEntity, kLastEventEntity, kLinkEntity, kAlertEntity};
+
+bool isLockId(std::string_view id) {
+    if (id.size() != kLockIdSize) {
         return false;
     }
     for (char c : id) {
-        const bool allowed =
-            (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_' || c == '-';
-        if (!allowed) {
+        if (!((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f'))) {
             return false;
         }
     }
     return true;
+}
+
+std::vector<std::string_view> levels(std::string_view topic) {
+    std::vector<std::string_view> parts;
+    size_t start = 0;
+    while (true) {
+        const size_t slash = topic.find('/', start);
+        parts.push_back(topic.substr(start, slash == std::string_view::npos ? std::string_view::npos : slash - start));
+        if (slash == std::string_view::npos) {
+            return parts;
+        }
+        start = slash + 1;
+    }
 }
 
 bool inRange(uint8_t byte, uint8_t low, uint8_t high) { return byte >= low && byte <= high; }
@@ -182,6 +211,16 @@ std::string joined(std::initializer_list<std::string_view> parts) {
     return out;
 }
 
+std::string objectIdOf(std::string_view lock, std::string_view suffix) {
+    return suffix.empty() ? std::string(lock) : joined({lock, "_", suffix});
+}
+
+std::string configTopic(std::string_view prefix, const Entity& kind, std::string_view board, std::string_view lock) {
+    return joined({prefix, "/", kind.component, "/", board, "/", objectIdOf(lock, kind.suffix), "/", kConfigLevel});
+}
+
+int nibble(char digit) { return digit <= '9' ? digit - '0' : digit - 'a' + 10; }
+
 class Discovery {
 public:
     Discovery(const HaLock& lock, const HaLockTopics& topics) : lock_(lock), topics_(topics) {}
@@ -206,18 +245,16 @@ public:
         return entity;
     }
 
-    bool add(std::string_view component, std::string_view objectId, const JsonObject& config,
-             std::vector<MqttMessage>& out) const {
+    bool add(const Entity& kind, const JsonObject& config, std::vector<MqttMessage>& out) const {
         MqttMessage message;
-        message.topic = joined({lock_.discoveryPrefix, "/", component, "/", lock_.board, "/", objectId, "/config"});
+        message.topic = configTopic(lock_.discoveryPrefix, kind, lock_.board, lock_.lock);
+        message.retain = true;
         if (!config.finish(message.payload)) {
             return false;
         }
         out.push_back(std::move(message));
         return true;
     }
-
-    std::string objectId(std::string_view suffix) const { return joined({lock_.lock, "_", suffix}); }
 
 private:
     const HaLock& lock_;
@@ -226,15 +263,65 @@ private:
 
 }
 
-bool haLockTopics(std::string_view board, std::string_view lock, HaLockTopics& out) {
-    if (!isId(board) || !isId(lock)) {
+bool isHaId(std::string_view id) {
+    if (id.empty()) {
         return false;
     }
-    const std::string base = joined({kTopicRoot, board, "/", lock, "/"});
+    for (char c : id) {
+        const bool allowed =
+            (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_' || c == '-';
+        if (!allowed) {
+            return false;
+        }
+    }
+    return true;
+}
+
+std::string haBoardId(const uint8_t (&mac)[6]) {
+    std::string id(kBoardPrefix);
+    for (size_t i = 3; i < 6; ++i) {
+        id += kHexDigits[mac[i] >> 4];
+        id += kHexDigits[mac[i] & 0x0F];
+    }
+    return id;
+}
+
+bool haLockId(std::string_view mac, std::string& out) {
+    uint8_t address[kBleAddressSize];
+    if (!parseBleAddress(mac, address)) {
+        return false;
+    }
+    std::string id;
+    for (size_t i = kBleAddressSize; i > 0; --i) {
+        id += kHexDigits[address[i - 1] >> 4];
+        id += kHexDigits[address[i - 1] & 0x0F];
+    }
+    out = std::move(id);
+    return true;
+}
+
+bool haLockMac(std::string_view lock, std::string& out) {
+    if (!isLockId(lock)) {
+        return false;
+    }
+    uint8_t address[kBleAddressSize];
+    for (size_t octet = 0; octet < kBleAddressSize; ++octet) {
+        address[kBleAddressSize - 1 - octet] =
+            static_cast<uint8_t>(nibble(lock[2 * octet]) << 4 | nibble(lock[2 * octet + 1]));
+    }
+    out = formatBleAddress(address);
+    return true;
+}
+
+bool haLockTopics(std::string_view board, std::string_view lock, HaLockTopics& out) {
+    if (!isHaId(board) || !isHaId(lock)) {
+        return false;
+    }
+    const std::string base = joined({kTopicRoot, "/", board, "/", lock, "/"});
     HaLockTopics topics;
-    topics.availability = joined({kTopicRoot, board, "/availability"});
+    topics.availability = joined({kTopicRoot, "/", board, "/availability"});
     topics.state = base + "state";
-    topics.command = base + "set";
+    topics.command = base + kCommandLevel;
     topics.battery = base + "battery";
     topics.lastEvent = base + "last_event";
     topics.link = base + "link";
@@ -245,7 +332,7 @@ bool haLockTopics(std::string_view board, std::string_view lock, HaLockTopics& o
 
 bool haDiscovery(const HaLock& lock, std::vector<MqttMessage>& out) {
     HaLockTopics topics;
-    if (!isId(lock.discoveryPrefix) || lock.name.empty() || !haLockTopics(lock.board, lock.lock, topics)) {
+    if (!isHaId(lock.discoveryPrefix) || lock.name.empty() || !haLockTopics(lock.board, lock.lock, topics)) {
         return false;
     }
     const Discovery discovery(lock, topics);
@@ -273,16 +360,60 @@ bool haDiscovery(const HaLock& lock, std::vector<MqttMessage>& out) {
     JsonObject alert = discovery.entity("Unlock alert", "unlock_alert");
     alert.text("state_topic", topics.alert).textList("event_types", kHaUnexpectedUnlock);
     std::vector<MqttMessage> messages;
-    const bool built = discovery.add("lock", lock.lock, lockEntity, messages) &&
-                       discovery.add("sensor", discovery.objectId("battery"), battery, messages) &&
-                       discovery.add("sensor", discovery.objectId("last_event"), lastEvent, messages) &&
-                       discovery.add("binary_sensor", discovery.objectId("link"), link, messages) &&
-                       discovery.add("event", discovery.objectId("unlock_alert"), alert, messages);
+    const bool built = discovery.add(kLockEntity, lockEntity, messages) &&
+                       discovery.add(kBatteryEntity, battery, messages) &&
+                       discovery.add(kLastEventEntity, lastEvent, messages) &&
+                       discovery.add(kLinkEntity, link, messages) && discovery.add(kAlertEntity, alert, messages);
     if (!built) {
         return false;
     }
     out = std::move(messages);
     return true;
+}
+
+bool haRemoval(std::string_view discoveryPrefix, std::string_view board, std::string_view lock,
+               std::vector<MqttMessage>& out) {
+    HaLockTopics topics;
+    if (!isHaId(discoveryPrefix) || !haLockTopics(board, lock, topics)) {
+        return false;
+    }
+    std::vector<MqttMessage> messages;
+    for (const Entity& kind : kEntities) {
+        messages.push_back(MqttMessage{configTopic(discoveryPrefix, kind, board, lock), "", true});
+    }
+    for (const std::string* topic : {&topics.state, &topics.battery, &topics.lastEvent, &topics.link}) {
+        messages.push_back(MqttMessage{*topic, "", true});
+    }
+    out = std::move(messages);
+    return true;
+}
+
+std::optional<std::string> haConfigLock(std::string_view topic, std::string_view discoveryPrefix,
+                                        std::string_view board) {
+    const std::vector<std::string_view> parts = levels(topic);
+    if (parts.size() != 5 || parts[0] != discoveryPrefix || parts[2] != board || parts[4] != kConfigLevel) {
+        return std::nullopt;
+    }
+    const std::string_view objectId = parts[3];
+    const std::string_view lock = objectId.substr(0, objectId.find('_'));
+    if (!isLockId(lock)) {
+        return std::nullopt;
+    }
+    for (const Entity& kind : kEntities) {
+        if (parts[1] == kind.component && objectId == objectIdOf(lock, kind.suffix)) {
+            return std::string(lock);
+        }
+    }
+    return std::nullopt;
+}
+
+std::optional<std::string> haCommandLock(std::string_view topic, std::string_view board) {
+    const std::vector<std::string_view> parts = levels(topic);
+    if (parts.size() != 4 || parts[0] != kTopicRoot || parts[1] != board || parts[3] != kCommandLevel ||
+        !isLockId(parts[2])) {
+        return std::nullopt;
+    }
+    return std::string(parts[2]);
 }
 
 }
