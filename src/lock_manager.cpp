@@ -28,6 +28,7 @@
 #include "latchkey_util/ble_adv.h"
 #include "latchkey_util/job_queue.h"
 #include "latchkey_util/pair_verdict.h"
+#include "latchkey_util/repeat_filter.h"
 #include "store.h"
 #include "ttlock/advert.h"
 #include "ttlock/errors.h"
@@ -56,6 +57,7 @@ constexpr uint32_t kConnectTimeoutMs = 10000;
 constexpr int kConnectAttempts = 3;
 constexpr uint32_t kConnectRetryMs = 2000;
 constexpr uint32_t kScanRetryMs = 500;
+constexpr uint32_t kRepeatWindowMs = 2000;
 constexpr TickType_t kNotReadyDelay = pdMS_TO_TICKS(100);
 constexpr ttlock::LockVersion kV3Frames{5, 3, 1, 1, 1};
 
@@ -91,6 +93,7 @@ struct Live {
     std::string eventAction;
     std::string eventMethod;
     int64_t eventTime = 0;
+    latchkey_util::RepeatFilter recent{kRepeatWindowMs};
     bool timeSyncTried = false;
     bool warnedUnpaired = false;
 };
@@ -451,6 +454,7 @@ void noteEvent(const std::string& mac, const char* action, const char* method) {
             lock->live.eventAction = action;
             lock->live.eventMethod = method != nullptr ? method : "";
             lock->live.eventTime = time;
+            lock->live.recent.note(action, nowMs());
         }
     }
     cJSON* data = cJSON_CreateObject();
@@ -463,12 +467,23 @@ void noteEvent(const std::string& mac, const char* action, const char* method) {
     events::publish("lock.event", data);
 }
 
+bool repeatsLastEvent(const std::string& mac, const char* action) {
+    std::lock_guard<std::mutex> guard(s_mutex);
+    const Lock* lock = findLocked(mac);
+    return lock != nullptr && lock->live.recent.repeats(action, nowMs());
+}
+
 void onPush(const std::string& mac, const ttlock::LockEvent& event) {
     ESP_LOGD(TAG, "push 0x%02x status %u with %u data bytes", event.command, event.status,
              static_cast<unsigned>(event.data.size()));
     if (event.state != LockState::Unknown) {
         noteState(mac, event.state, event.battery, false);
-        noteEvent(mac, event.state == LockState::Locked ? "lock" : "unlock", nullptr);
+        const char* action = event.state == LockState::Locked ? "lock" : "unlock";
+        if (repeatsLastEvent(mac, action)) {
+            ESP_LOGD(TAG, "dropped a pushed %s that repeats the event just sent", action);
+            return;
+        }
+        noteEvent(mac, action, nullptr);
         return;
     }
     noteState(mac, LockState::Unknown, event.battery, false);
