@@ -196,15 +196,12 @@ def ws_step(host: str, step: dict) -> dict:
         if step.get("tls", True):
             sock = tls_context().wrap_socket(raw)
         key = base64.b64encode(os.urandom(16)).decode()
-        lines = [
-            f"GET {step['path']} HTTP/1.1",
-            f"Host: {host}",
-            "Upgrade: websocket",
-            "Connection: Upgrade",
-            f"Sec-WebSocket-Key: {key}",
-            "Sec-WebSocket-Version: 13",
-        ]
-        lines += [f"{name}: {value}" for name, value in step.get("headers", {}).items()]
+        extra = step.get("headers", {})
+        lines = [f"GET {step['path']} HTTP/1.1"]
+        if not any(name.lower() == "host" for name in extra):
+            lines.append(f"Host: {host}")
+        lines += ["Upgrade: websocket", "Connection: Upgrade", f"Sec-WebSocket-Key: {key}", "Sec-WebSocket-Version: 13"]
+        lines += [f"{name}: {value}" for name, value in extra.items()]
         sock.sendall(("\r\n".join(lines) + "\r\n\r\n").encode())
         head = read_head(sock).decode("latin-1").split("\r\n")
         result["status"] = int(head[0].split(" ")[1])
