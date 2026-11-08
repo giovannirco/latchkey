@@ -26,7 +26,8 @@ In progress: the Bluetooth link and lock manager on the board, the web UI served
 ## Security model
 
 - The board is claimed only over its USB serial console, which counts as physical presence.
-- The web needs the owner password (PBKDF2-HMAC-SHA256) and a TOTP code; destructive actions from the web also need a press of the board's button (in progress).
+- Web login with the owner password (PBKDF2-HMAC-SHA256) and a TOTP code (in progress).
+- Destructive actions from the web also need a press of the board's button (in progress).
 - HTTPS with a certificate the board generates, whose fingerprint you check once (in progress).
 - An audit log of every action, never containing secrets.
 - Hardening (in progress): a random admin passcode on the lock, unknown passcodes removed, the lock's reset button disabled only after an encrypted backup of its keys.
