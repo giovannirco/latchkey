@@ -15,6 +15,8 @@ public:
 
     void refreshed(int64_t nowMs);
 
+    int64_t dueAtMs() const;
+
 private:
     int64_t intervalMs_;
     int64_t retryMs_;

@@ -11,4 +11,6 @@ void PollSchedule::attempted(int64_t nowMs, bool answered) { nextMs_ = nowMs + (
 
 void PollSchedule::refreshed(int64_t nowMs) { nextMs_ = nowMs + intervalMs_; }
 
+int64_t PollSchedule::dueAtMs() const { return nextMs_; }
+
 }
