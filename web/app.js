@@ -9,6 +9,15 @@ const TOAST_MS = 6000;
 const ERROR_TOAST_MS = 12000;
 const SVG_NS = 'http://www.w3.org/2000/svg';
 const FIRMWARE_MAGIC = 0xe9;
+const LOG_REFRESH_MS = 3000;
+const LOG_KEEP = 500;
+const LOG_LEVELS = [
+  ['verbose', 'All lines'],
+  ['debug', 'Debug and more severe'],
+  ['info', 'Info and more severe'],
+  ['warn', 'Warnings and errors'],
+  ['error', 'Errors only'],
+];
 
 const ERROR_TEXT = {
   unauthorized: 'Your session ended. Sign in again.',
@@ -269,6 +278,7 @@ function duration(seconds) {
 }
 
 const pad = (value) => String(value).padStart(2, '0');
+const clockTime = new Intl.DateTimeFormat(undefined, { hour: '2-digit', minute: '2-digit', second: '2-digit' });
 
 function toLocalInput(seconds) {
   const d = new Date(seconds * 1000);
@@ -2757,29 +2767,307 @@ async function viewSecurity(view) {
   });
 }
 
+function levelSelect(value) {
+  const select = h(
+    'select',
+    null,
+    LOG_LEVELS.map(([level, text]) => h('option', { value: level }, text)),
+  );
+  select.value = value;
+  return select;
+}
+
+function logTime(line) {
+  if (typeof line.utcMs !== 'number') return `${(line.uptimeMs / 1000).toFixed(1)} s after start`;
+  const when = new Date(line.utcMs);
+  return `${clockTime.format(when)}.${String(when.getMilliseconds()).padStart(3, '0')}`;
+}
+
+function logLineText(line) {
+  const when = typeof line.utcMs === 'number' ? new Date(line.utcMs).toISOString() : `+${line.uptimeMs}ms`;
+  return `${when} ${line.level} ${line.tag ? `${line.tag}: ` : ''}${line.message}`;
+}
+
+function logsSection() {
+  const copy = h('button', { class: 'button small', type: 'button' }, 'Copy');
+  const part = section('Logs', 'list', [copy]);
+  const level = levelSelect('info');
+  const auto = h('input', { type: 'checkbox', checked: true });
+  const status = h('p', { class: 'muted small', 'aria-live': 'polite' });
+  const note = h('p', { class: 'hint', hidden: true });
+  const rows = h('tbody');
+  let lines = [];
+  let next = null;
+  let timer = 0;
+  let busy = false;
+  let again = false;
+  let generation = 0;
+
+  const row = (line) =>
+    h(
+      'tr',
+      null,
+      h('td', { class: 'nowrap' }, logTime(line)),
+      h('td', { class: `log-level log-${line.level}` }, line.level),
+      h('td', null, line.tag || '—'),
+      h('td', { class: 'log-message' }, line.message),
+    );
+
+  async function pull(since) {
+    const fresh = [];
+    let missed = 0;
+    let cursor = since;
+    for (;;) {
+      const params = cursor === null ? { level: level.value } : { level: level.value, since: cursor };
+      const page = await rpc('system.logs', params);
+      if (cursor !== null && page.next < cursor) return null;
+      fresh.push(...page.lines);
+      missed += page.missed || 0;
+      cursor = page.next;
+      if (!page.more) return { fresh, missed, next: cursor };
+    }
+  }
+
+  async function refresh() {
+    if (busy) {
+      again = true;
+      return;
+    }
+    busy = true;
+    const mine = generation;
+    try {
+      let result = await pull(next);
+      if (result === null) {
+        lines = [];
+        result = await pull(null);
+      }
+      if (mine !== generation) return;
+      lines = [...lines, ...result.fresh].slice(-LOG_KEEP);
+      next = result.next;
+      rows.replaceChildren(...[...lines].reverse().map(row));
+      status.textContent = lines.length ? '' : 'No lines at this level yet.';
+      if (result.missed) {
+        note.hidden = false;
+        note.textContent = `${result.missed} lines were overwritten on the board before this page could show them.`;
+      }
+    } catch (failure) {
+      if (failure.code !== 'unauthorized') status.textContent = `Cannot refresh the lines: ${errorText(failure)}`;
+    } finally {
+      busy = false;
+      if (again) {
+        again = false;
+        refresh();
+      }
+    }
+  }
+
+  function schedule() {
+    clearTimeout(timer);
+    if (!auto.checked) return;
+    timer = setTimeout(async () => {
+      if (!document.hidden) await refresh();
+      schedule();
+    }, LOG_REFRESH_MS);
+  }
+
+  level.addEventListener('change', () => {
+    generation += 1;
+    lines = [];
+    next = null;
+    note.hidden = true;
+    rows.replaceChildren();
+    refresh();
+  });
+  auto.addEventListener('change', () => {
+    if (auto.checked) refresh();
+    schedule();
+  });
+  copy.addEventListener('click', async () => {
+    try {
+      await navigator.clipboard.writeText(`${lines.map(logLineText).join('\n')}\n`);
+      toast(`Copied ${lines.length} lines`);
+    } catch {
+      toastError(new Error('The browser did not allow copying. Select the lines and copy them by hand.'));
+    }
+  });
+  cleanups.push(() => {
+    clearTimeout(timer);
+    generation += 1;
+  });
+
+  part.body.append(
+    h('div', { class: 'row log-controls' }, field('Show', level), checkField('Refresh every few seconds', auto)),
+    status,
+    h(
+      'div',
+      { class: 'table-wrap log-wrap' },
+      h(
+        'table',
+        { class: 'log-table' },
+        h('caption', { class: 'visually-hidden' }, 'Recent log lines'),
+        h(
+          'thead',
+          null,
+          h(
+            'tr',
+            null,
+            ['Time', 'Level', 'Tag', 'Message'].map((text) => h('th', { scope: 'col' }, text)),
+          ),
+        ),
+        rows,
+      ),
+    ),
+    note,
+    h(
+      'p',
+      { class: 'hint' },
+      'The board keeps its latest log lines in memory until it restarts, newest first here. Secrets never appear in them.',
+    ),
+  );
+  return {
+    el: part.el,
+    start: async () => {
+      await refresh();
+      schedule();
+    },
+  };
+}
+
+async function remoteLogging(part) {
+  const settings = await rpc('system.syslog.get');
+  const enabled = h('input', { type: 'checkbox', checked: settings.enabled });
+  const host = h('input', {
+    type: 'text',
+    maxlength: '64',
+    value: settings.host || '',
+    autocomplete: 'off',
+    spellcheck: 'false',
+  });
+  const port = h('input', { type: 'number', min: '1', max: '65535', value: String(settings.port || 514) });
+  const transport = h('select', null, h('option', { value: 'udp' }, 'UDP'), h('option', { value: 'tcp' }, 'TCP'));
+  transport.value = settings.transport || 'udp';
+  const appName = h('input', {
+    type: 'text',
+    maxlength: '48',
+    value: settings.appName || 'latchkey',
+    autocomplete: 'off',
+    spellcheck: 'false',
+  });
+  const level = levelSelect(settings.level || 'info');
+  const save = h('button', { class: 'button small primary', type: 'submit' }, 'Save remote logging');
+  const status = h('p', { class: 'muted small', 'aria-live': 'polite' });
+  const show = (view) => {
+    const where = `${view.host}:${view.port} over ${view.transport.toUpperCase()}`;
+    const errors = view.errors ? `, ${view.errors} errors so far` : '';
+    status.textContent = !view.enabled
+      ? 'Remote logging is off.'
+      : view.connected
+        ? `Sending to ${where}: ${view.sent} lines sent, ${view.dropped} dropped.`
+        : `Not connected to ${where} yet${errors}.`;
+  };
+  show(settings);
+  const form = h(
+    'form',
+    { class: 'stack', 'aria-label': 'Remote logging' },
+    checkField('Send log lines to a syslog collector', enabled),
+    h(
+      'div',
+      { class: 'field-group' },
+      field('Collector host', host),
+      field('Port', port),
+      field('Transport', transport),
+      field('App name', appName),
+      field('Lines to send', level),
+    ),
+    h('div', { class: 'row' }, save),
+  );
+  form.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    const params = {
+      enabled: enabled.checked,
+      host: host.value.trim(),
+      port: Number(port.value),
+      transport: transport.value,
+      appName: appName.value.trim(),
+      level: level.value,
+    };
+    try {
+      show(await pending(save, () => rpc('system.syslog.set', params)));
+      toast('Remote logging saved');
+    } catch (failure) {
+      toastError(failure);
+    }
+  });
+  part.body.replaceChildren(
+    h(
+      'p',
+      { class: 'hint' },
+      'Off by default. The board sends each log line as RFC 5424 syslog over plain UDP or TCP, so anyone on the network path can read them: use a collector on your own network. On the classic ESP32, UDP needs less memory.',
+    ),
+    status,
+    form,
+  );
+}
+
 async function viewSystem(view) {
   heading(view, 'System');
   const board = section('Board', 'chip');
   const wifi = section('Wi-Fi', 'wifi');
   const ota = section('Firmware update', 'upload');
   const mqtt = section('Home Assistant (MQTT)', 'wifi');
+  const remote = section('Remote logging (syslog)', 'upload');
+  const logs = logsSection();
   const restart = section('Restart', 'refresh');
   const danger = section('Danger zone', 'alert', [], 'danger-zone');
 
   const ssid = h('input', { type: 'text', maxlength: '32', required: true, autocomplete: 'off', spellcheck: 'false' });
   const wifiPassword = h('input', { type: 'password', maxlength: '63', autocomplete: 'new-password' });
   const saveWifi = h('button', { class: 'button small primary', type: 'submit' }, 'Save Wi-Fi');
+  const addressInput = () =>
+    h('input', {
+      type: 'text',
+      inputmode: 'decimal',
+      maxlength: '15',
+      required: true,
+      autocomplete: 'off',
+      spellcheck: 'false',
+    });
+  const address = addressInput();
+  const gateway = addressInput();
+  const netmask = addressInput();
+  const dns = addressInput();
   const wifiForm = h(
     'form',
     { class: 'stack', 'aria-label': 'Wi-Fi' },
     field('Network name (SSID)', ssid),
     field('Password', wifiPassword, 'Leave empty for an open network. The board never shows a saved password.'),
+    h(
+      'div',
+      { class: 'field-group' },
+      field('IP address', address),
+      field('Gateway', gateway),
+      field('Netmask', netmask),
+      field('DNS server', dns),
+    ),
+    h(
+      'p',
+      { class: 'hint' },
+      'The board keeps a fixed address on your network. If you change it, open the board at its new address.',
+    ),
     h('div', { class: 'row' }, saveWifi),
   );
   wifiForm.addEventListener('submit', async (event) => {
     event.preventDefault();
+    const params = {
+      ssid: ssid.value.trim(),
+      password: wifiPassword.value,
+      ip: address.value.trim(),
+      gateway: gateway.value.trim(),
+      netmask: netmask.value.trim(),
+      dns: dns.value.trim(),
+    };
     try {
-      await pending(saveWifi, () => rpc('system.wifi.set', { ssid: ssid.value.trim(), password: wifiPassword.value }));
+      await pending(saveWifi, () => rpc('system.wifi.set', params));
       wifiPassword.value = '';
       toast(`The board is joining ${ssid.value.trim()}`, { detail: 'If its address changes, open the new one.' });
     } catch (failure) {
@@ -2879,8 +3167,11 @@ async function viewSystem(view) {
     h('div', { class: 'grid' }, board.el, wifi.el),
     ota.el,
     mqtt.el,
+    remote.el,
+    logs.el,
     h('div', { class: 'grid' }, restart.el, danger.el),
   );
+  logs.start();
   await load(board.body, async () => {
     const info = await rpc('system.info');
     state.info = info;
@@ -2888,6 +3179,14 @@ async function viewSystem(view) {
     const clock = info.time || {};
     const net = info.wifi || {};
     if (!ssid.value) ssid.value = net.ssid || '';
+    for (const [input, value] of [
+      [address, net.ip],
+      [gateway, net.gateway],
+      [netmask, net.netmask],
+      [dns, net.dns],
+    ]) {
+      if (!input.value) input.value = value || '';
+    }
     board.body.replaceChildren(
       facts([
         ['Firmware', info.firmware],
@@ -2973,6 +3272,7 @@ async function viewSystem(view) {
       form,
     );
   });
+  await load(remote.body, () => remoteLogging(remote));
 }
 
 function sendFirmware(file, progress, onSent) {
