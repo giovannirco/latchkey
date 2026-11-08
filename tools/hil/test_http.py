@@ -12,10 +12,12 @@ confirmation test runs.
 
 from __future__ import annotations
 
+import base64
 import gzip
 import json
 import re
 import sys
+import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -41,6 +43,9 @@ MIN_FREE_HEAP = 30_000
 TOTP_STEP_S = 30
 SAFE_STEP_WINDOW = (2.0, 24.0)
 LOCK_JOB_S = 150
+VALUE_HEAVY_REQUESTS = 12
+STALLED_HANDSHAKE_LIMIT_MS = 7000
+SECURITY_HEADERS = ("content-security-policy", "x-frame-options", "referrer-policy", "x-content-type-options")
 seen_tokens: list[str] = []
 
 
@@ -112,6 +117,42 @@ def events_named(result: dict[str, Any], name: str) -> list[dict[str, Any]]:
     return [event.get("data", {}) for event in result.get("events", []) if event.get("event") == name]
 
 
+def der_items(data: bytes, offset: int, end: int) -> list[tuple[int, int, int]]:
+    items = []
+    while offset < end:
+        tag = data[offset]
+        size = data[offset + 1]
+        start = offset + 2
+        if size & 0x80:
+            count = size & 0x7F
+            size = int.from_bytes(data[start : start + count], "big")
+            start += count
+        items.append((tag, start, start + size))
+        offset = start + size
+    return items
+
+
+def validity(der: bytes) -> tuple[str, str]:
+    _, start, end = der_items(der, 0, len(der))[0]
+    _, start, end = der_items(der, start, end)[0]
+    fields = der_items(der, start, end)
+    window = fields[4] if fields[0][0] == 0xA0 else fields[3]
+    times = der_items(der, window[1], window[2])
+    texts = [der[begin:finish].decode() for _, begin, finish in times]
+    return tuple("20" + text if tag == 0x17 else text for (tag, _, _), text in zip(times, texts))
+
+
+def secure_headers_present(result: dict[str, Any], policy: str) -> bool:
+    expected = {
+        "content-security-policy": policy,
+        "x-frame-options": "DENY",
+        "referrer-policy": "no-referrer",
+        "x-content-type-options": "nosniff",
+        "cache-control": "no-store",
+    }
+    return all(header(result, name) == value for name, value in expected.items())
+
+
 @pytest.fixture(scope="module")
 def relay(secrets: dict[str, Any], board_settings: dict[str, Any]) -> Relay:
     settings = secrets.get("hil_relay")
@@ -149,6 +190,12 @@ def session(relay: Relay, codes: Codes, secrets: dict[str, Any]) -> Login:
     return login(relay, codes, secrets)
 
 
+def test_the_certificate_has_no_expiry_date(relay: Relay, codes: Codes) -> None:
+    page = relay.step({"type": "http", "path": "/"})
+    assert page.get("status") == 200, page.get("error")
+    assert validity(base64.b64decode(page["certificate_b64"])) == ("20240101000000Z", "99991231235959Z")
+
+
 def test_https_answers_with_the_board_certificate(console: Console, relay: Relay, codes: Codes) -> None:
     expected = console.call("system.info")["certFingerprint"]
     assert re.fullmatch(r"([0-9A-F]{2}:){31}[0-9A-F]{2}", expected)
@@ -161,31 +208,37 @@ def test_https_answers_with_the_board_certificate(console: Console, relay: Relay
 
 
 def test_port_80_only_redirects_to_https(relay: Relay, origin: str) -> None:
+    policy = build_web.header_policy(WEB_DIR)
     for path in ("/", "/api/rpc"):
         redirect = relay.step({"type": "http", "tls": False, "path": path})
         assert redirect.get("status") == 301, redirect.get("error")
         same = header(redirect, "location") == f"{origin}/"
         assert same, "the redirect does not point at the board's HTTPS root"
-        assert header(redirect, "x-frame-options") == "DENY"
+        assert secure_headers_present(redirect, policy)
 
 
-def test_every_response_carries_the_security_headers(relay: Relay, codes: Codes) -> None:
+def test_every_response_carries_the_security_headers(relay: Relay, codes: Codes, session: Login) -> None:
     policy = build_web.header_policy(WEB_DIR)
     assert "frame-ancestors 'none'" in policy
-    page, api, missing, wrong_method = relay.run(
+    page, api, missing, wrong_method, foreign, plain, large, no_upgrade = relay.run(
         [
             {"type": "http", "path": "/"},
             rpc_step("system.info"),
             {"type": "http", "path": "/no/such/page"},
             {"type": "http", "method": "POST", "path": "/", "body": ""},
+            rpc_step("system.info", cookie=session.cookie, headers={"Origin": FOREIGN_ORIGIN}),
+            rpc_step("system.info", cookie=session.cookie, headers={"Content-Type": "text/plain"}),
+            rpc_step("system.info", {"pad": "x" * 9000}, session.cookie),
+            {"type": "http", "path": "/api/events", "headers": {"Cookie": session.cookie}},
         ]
     )
-    for result in (page, api, missing, wrong_method):
-        assert header(result, "content-security-policy") == policy
-        assert header(result, "x-frame-options") == "DENY"
-        assert header(result, "referrer-policy") == "no-referrer"
-        assert header(result, "x-content-type-options") == "nosniff"
-        assert header(result, "cache-control") == "no-store"
+    for result in (page, api, missing, wrong_method, foreign, plain, large, no_upgrade):
+        assert secure_headers_present(result, policy)
+    for result in (api, missing, wrong_method, foreign, plain, large, no_upgrade):
+        assert header(result, "content-type") == "application/json"
+    assert [result["status"] for result in (foreign, plain, large, no_upgrade)] == [403, 415, 413, 426]
+    assert header(no_upgrade, "upgrade") == "websocket"
+    assert json_body(no_upgrade)["error"]["code"] == "upgrade_required"
     assert header(page, "content-encoding") == "gzip"
     assert header(page, "content-type").startswith("text/html")
     assert header(api, "content-type") == "application/json"
@@ -267,7 +320,25 @@ def test_events_need_a_session(relay: Relay, session: Login, origin: str) -> Non
         ]
     )
     for result in (bare, bogus, foreign):
-        assert result.get("status") != 101
+        assert result.get("status") is None
+        assert result.get("closed") is True
+        assert result.get("error") == "closed by the board"
+
+
+def test_host_and_origin_must_name_the_board(relay: Relay, session: Login, origin: str) -> None:
+    rebind = "rebind.attacker.example"
+    default_port, foreign_host, foreign_events = relay.run(
+        [
+            rpc_step("system.info", cookie=session.cookie, headers={"Origin": f"{origin}:443"}),
+            rpc_step("system.info", cookie=session.cookie, headers={"Host": rebind}),
+            {"type": "ws", "path": "/api/events", "headers": {"Host": rebind, "Cookie": session.cookie}},
+        ]
+    )
+    assert "result" in json_body(default_port)
+    assert foreign_host["status"] == 403
+    assert json_body(foreign_host)["error"]["code"] == "forbidden"
+    assert foreign_events.get("closed") is True
+    assert foreign_events.get("status") is None
 
 
 def test_events_arrive_with_the_session(relay: Relay, session: Login, origin: str) -> None:
@@ -349,6 +420,99 @@ def test_button_methods_wait_for_the_board_button(console: Console, relay: Relay
     assert (entry["method"], entry["source"], entry["result"]) == ("locks.pair", "web", "confirm_timeout")
 
 
+def test_button_methods_check_their_parameters_before_the_press(
+    console: Console, relay: Relay, session: Login, origin: str
+) -> None:
+    unknown = job_run(relay, session, origin, "lock.factoryReset", {"lock": DOCUMENTATION_MAC}, 20)
+    assert job_outcome(unknown)["error"]["code"] == "not_paired"
+    malformed = job_run(relay, session, origin, "locks.pair", {"mac": "not-a-mac"}, 20)
+    assert job_outcome(malformed)["error"]["code"] == "invalid_argument"
+    for result in (unknown, malformed):
+        assert events_named(result, "confirm.required") == []
+    entries = console.call("audit.list", {"limit": 5})["entries"]
+    reset = next(entry for entry in entries if entry["method"] == "lock.factoryReset")
+    assert (reset["source"], reset["target"], reset["result"]) == ("web", DOCUMENTATION_MAC, "not_paired")
+
+
+def test_ending_the_session_ends_its_button_wait(
+    relay: Relay, codes: Codes, secrets: dict[str, Any], session: Login, origin: str
+) -> None:
+    other = login(relay, codes, secrets)
+    pair = rpc_step("locks.pair", {"mac": DOCUMENTATION_MAC, "name": "Bench"}, other.cookie)
+    result = relay.step(
+        {
+            "type": "ws",
+            "path": "/api/events",
+            "headers": {"Origin": origin, "Cookie": session.cookie},
+            "steps": [
+                pair,
+                pair,
+                {"type": "sleep", "seconds": 2},
+                rpc_step("auth.revoke", {"id": other.reply["result"]["session"]["id"]}, session.cookie),
+            ],
+            "until": {"event": "audit.appended", "match": {"method": "locks.pair", "result": "unauthorized"}},
+            "collect_s": 25,
+        },
+        timeout_s=90,
+    )
+    assert result.get("status") == 101, result.get("error")
+    first, second, _, revoke = result["steps"]
+    assert isinstance(json_body(first)["result"]["job"], str)
+    assert json_body(second)["error"]["code"] == "busy"
+    assert json_body(revoke) == {"id": 1, "result": {}}
+    assert events_named(result, "confirm.required") == [{"action": "locks.pair", "timeoutMs": CONFIRM_TIMEOUT_MS}]
+    assert events_named(result, "confirm.result") == [{"action": "locks.pair", "confirmed": False}]
+    ended = [
+        event
+        for event in result["events"]
+        if event.get("event") == "audit.appended" and event["data"].get("result") == "unauthorized"
+    ]
+    assert len(ended) == 1
+    assert ended[0]["data"]["method"] == "locks.pair"
+    assert ended[0]["at_ms"] - revoke["started_ms"] < 10_000
+
+
+def test_revoking_a_session_closes_its_event_socket(
+    console: Console, relay: Relay, codes: Codes, secrets: dict[str, Any], session: Login, origin: str
+) -> None:
+    other = login(relay, codes, secrets)
+    web = relay.step(
+        {
+            "type": "ws",
+            "path": "/api/events",
+            "headers": {"Origin": origin, "Cookie": other.cookie},
+            "steps": [rpc_step("auth.revoke", {"id": other.reply["result"]["session"]["id"]}, session.cookie)],
+            "collect_s": 8,
+        }
+    )
+    assert web.get("status") == 101, web.get("error")
+    assert web["closed"] is True
+    third = login(relay, codes, secrets)
+    holder: dict[str, Any] = {}
+
+    def hold() -> None:
+        holder["result"] = relay.step(
+            {
+                "type": "ws",
+                "path": "/api/events",
+                "headers": {"Origin": origin, "Cookie": third.cookie},
+                "steps": [{"type": "sleep", "seconds": 25}],
+                "collect_s": 0,
+            },
+            timeout_s=90,
+        )
+
+    thread = threading.Thread(target=hold)
+    thread.start()
+    time.sleep(12)
+    assert console.call("auth.revoke", {"id": third.reply["result"]["session"]["id"]}) == {}
+    thread.join()
+    serial = holder["result"]
+    assert serial.get("status") == 101, serial.get("error")
+    assert serial["closed"] is True
+    assert serial["closed_after_ms"] < 24_000
+
+
 def test_logout_clears_the_cookie_and_closes_the_events(
     relay: Relay, codes: Codes, secrets: dict[str, Any], origin: str
 ) -> None:
@@ -405,6 +569,33 @@ def test_a_password_change_keeps_only_the_callers_session(
         if changed:
             console.call("auth.changePassword", {"current": OTHER_PASSWORD, "new": password}, timeout=30.0)
     assert "result" in rpc(relay, "system.info", {}, session.cookie)
+
+
+def test_a_value_heavy_request_is_refused_before_parsing(console: Console, relay: Relay, codes: Codes) -> None:
+    payload = "[" + ",".join("0" for _ in range(4095)) + "]"
+    assert len(payload) <= 8192
+    heavy = {
+        "type": "http",
+        "method": "POST",
+        "path": "/api/rpc",
+        "headers": {"Content-Type": "application/json"},
+        "body": payload,
+    }
+    results = relay.run([heavy] * VALUE_HEAVY_REQUESTS, timeout_s=150)
+    for result in results:
+        assert result.get("status") == 200, result.get("error")
+        assert json_body(result)["error"] == {"code": "bad_request", "message": "request has too many values"}
+    heap = console.call("system.info")["heap"]
+    print(f"after {VALUE_HEAVY_REQUESTS} value-heavy requests: heap {heap}", file=sys.stderr)
+    assert heap["minFree"] >= MIN_FREE_HEAP
+    serial = console.request_raw("[" + ",".join("0" for _ in range(1000)) + "]")
+    assert serial["error"] == {"code": "bad_request", "message": "request has too many values"}
+
+
+def test_a_stalled_handshake_is_dropped_within_seconds(relay: Relay, codes: Codes) -> None:
+    result = relay.step({"type": "stall", "timeout_s": 30}, timeout_s=90)
+    assert result.get("closed") is True, result.get("error")
+    assert result["closed_after_ms"] <= STALLED_HANDSHAKE_LIMIT_MS
 
 
 def test_heap_holds_with_one_tls_session_and_events(relay: Relay, session: Login, origin: str) -> None:

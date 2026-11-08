@@ -7,10 +7,12 @@ self-signed certificate and reports its SHA-256 fingerprint, and never prints th
 
 Step types:
 - http: method, path, headers, body (text), tls (default true), port, timeout_s; reports status, headers,
-  body_b64, fingerprint, elapsed_ms;
-- ws: path, headers, tls, steps (http or sleep steps run while the socket is open), until ({"event", "job_from"}:
-  stop at that event, for job.done the one whose job id the nested step at index job_from replied with),
-  collect_s; reports status, headers, events, steps, closed (the board closed the socket);
+  body_b64, fingerprint and certificate_b64 (the peer certificate, DER), elapsed_ms;
+- ws: path, headers, tls, steps (http or sleep steps run while the socket is open, each with started_ms), until
+  ({"event", "job_from", "match"}: stop at that event, for job.done the one whose job id the nested step at index
+  job_from replied with, and only if its data has the fields in match), collect_s; reports status, headers, events
+  (each with at_ms), steps, closed and closed_after_ms (the board closed the socket);
+- stall: port, timeout_s: opens a TCP connection, sends nothing and reports closed_after_ms, when the board closes it;
 - sleep: seconds.
 """
 
@@ -68,7 +70,9 @@ def http_step(host: str, step: dict) -> dict:
             headers=step.get("headers", {}),
         )
         if tls:
-            result["fingerprint"] = fingerprint(connection.sock.getpeercert(binary_form=True))
+            der = connection.sock.getpeercert(binary_form=True)
+            result["fingerprint"] = fingerprint(der)
+            result["certificate_b64"] = base64.b64encode(der).decode()
         response = connection.getresponse()
         payload = response.read()
         result.update(
@@ -139,6 +143,15 @@ class EventReader:
         self.sock = sock
         self.events: list = []
         self.closed = False
+        self.opened = time.monotonic()
+        self.closed_after_ms: int | None = None
+
+    def since_open(self) -> int:
+        return round((time.monotonic() - self.opened) * 1000)
+
+    def close_now(self) -> None:
+        self.closed = True
+        self.closed_after_ms = self.since_open()
 
     def drain(self, seconds: float, stop) -> bool:
         deadline = time.monotonic() + seconds
@@ -152,10 +165,10 @@ class EventReader:
             except (socket.timeout, TimeoutError):
                 return False
             except (Closed, ConnectionError, ssl.SSLError):
-                self.closed = True
+                self.close_now()
                 return False
             if opcode == 0x8:
-                self.closed = True
+                self.close_now()
                 return False
             if opcode != 0x1:
                 continue
@@ -163,6 +176,7 @@ class EventReader:
                 event = json.loads(payload)
             except ValueError:
                 event = {"unparsed": payload.decode("utf-8", "replace")}
+            event["at_ms"] = self.since_open()
             self.events.append(event)
             if stop(event):
                 return True
@@ -202,19 +216,27 @@ def ws_step(host: str, step: dict) -> dict:
         reader = EventReader(sock)
         reader.drain(step.get("settle_s", 0.5), lambda event: False)
         for nested in step.get("steps", []):
+            started = reader.since_open()
             if nested["type"] == "sleep":
                 reader.drain(nested["seconds"], lambda event: False)
-                result["steps"].append({})
+                outcome: dict = {}
             else:
-                result["steps"].append(http_step(host, nested))
+                outcome = http_step(host, nested)
                 reader.drain(0.2, lambda event: False)
+            outcome["started_ms"] = started
+            result["steps"].append(outcome)
         until = step.get("until")
         if until is not None:
             wanted = job_id(result["steps"][until["job_from"]]) if "job_from" in until else None
+            fields = until.get("match", {})
 
             def stop(event: dict) -> bool:
                 data = event.get("data") or {}
-                return event.get("event") == until["event"] and (wanted is None or data.get("job") == wanted)
+                return (
+                    event.get("event") == until["event"]
+                    and (wanted is None or data.get("job") == wanted)
+                    and all(data.get(key) == value for key, value in fields.items())
+                )
 
             if not any(stop(event) for event in reader.events):
                 reader.drain(step.get("collect_s", 10), stop)
@@ -222,6 +244,7 @@ def ws_step(host: str, step: dict) -> dict:
             reader.drain(step.get("collect_s", 0), lambda event: False)
         result["events"] = reader.events
         result["closed"] = reader.closed
+        result["closed_after_ms"] = reader.closed_after_ms
         if not reader.closed:
             sock.sendall(masked_frame(0x8, struct.pack("!H", 1000)))
     except Closed:
@@ -235,11 +258,31 @@ def ws_step(host: str, step: dict) -> dict:
     return result
 
 
+def stall_step(host: str, step: dict) -> dict:
+    started = time.monotonic()
+    result: dict = {"closed": False}
+    try:
+        with socket.create_connection((host, step.get("port", 443)), timeout=5) as sock:
+            sock.settimeout(step.get("timeout_s", 30))
+            try:
+                result["closed"] = sock.recv(1) == b""
+            except (socket.timeout, TimeoutError):
+                result["closed"] = False
+            except ConnectionError:
+                result["closed"] = True
+    except OSError as err:
+        result["error"] = describe(err)
+    result["closed_after_ms"] = round((time.monotonic() - started) * 1000)
+    return result
+
+
 def run_step(host: str, step: dict) -> dict:
     if step["type"] == "http":
         return http_step(host, step)
     if step["type"] == "ws":
         return ws_step(host, step)
+    if step["type"] == "stall":
+        return stall_step(host, step)
     if step["type"] == "sleep":
         time.sleep(step["seconds"])
         return {}

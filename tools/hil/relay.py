@@ -8,8 +8,8 @@ standard input on such a host, with `{timeout}` replaced by a time limit in seco
 
 Each run sends relay_runner.py and the plan on that standard input, never on a command line. The command may
 print the runner's JSON directly or wrapped the way a QEMU guest agent reports a process (exitcode, out-data,
-err-data). Response bodies come back base64-encoded; Set-Cookie values are wrapped so that they print as
-<private>.
+err-data). Response bodies come back base64-encoded; Set-Cookie values and the peer certificate (it names the
+board's address) are wrapped so that they print as <private>.
 """
 
 from __future__ import annotations
@@ -72,6 +72,8 @@ def private_cookies(result: dict[str, Any]) -> dict[str, Any]:
             [name.strip(), Private(value.strip()) if name.strip().lower() == "set-cookie" else value.strip()]
             for name, value in result["headers"]
         ]
+    if "certificate_b64" in result:
+        result["certificate_b64"] = Private(result["certificate_b64"])
     if "steps" in result:
         result["steps"] = [private_cookies(step) for step in result["steps"]]
     return result
