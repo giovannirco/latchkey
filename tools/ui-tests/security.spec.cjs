@@ -1,5 +1,25 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-const { test, expect, mock, login, settled, lockCard } = require('./support.cjs');
+const { test, expect, mock, login, settled, lockCard, SHED } = require('./support.cjs');
+
+const HOLD_MS = 2000;
+const ACTIONS_AFTER_SIGN_IN = [
+  'auth.login',
+  'auth.login',
+  'locks.pair',
+  'lock.harden',
+  'keys.export',
+  'locks.pair',
+  'auth.login',
+  'system.setup',
+];
+const SHED_PAIRED = {
+  seq: 6,
+  time: Math.floor(Date.now() / 1000) - 86400,
+  source: 'web',
+  method: 'locks.pair',
+  target: SHED,
+  result: 'ok',
+};
 
 async function fingerprint(request) {
   await request.post('/api/rpc', {
@@ -7,6 +27,32 @@ async function fingerprint(request) {
   });
   const response = await request.post('/api/rpc', { data: { id: 2, method: 'system.info', params: {} } });
   return (await response.json()).result.certFingerprint;
+}
+
+function isAuditList(request) {
+  return request.url().endsWith('/api/rpc') && request.postDataJSON().method === 'audit.list';
+}
+
+async function holdAuditList(page, request, trigger) {
+  const listing = page.waitForRequest(isAuditList);
+  await mock(request, { delay: { method: 'audit.list', ms: HOLD_MS } });
+  await trigger();
+  await listing;
+}
+
+function announce(request, ...entries) {
+  return mock(request, { emit: entries.map((data) => ({ event: 'audit.appended', data })) });
+}
+
+async function unlockShed(page) {
+  const response = await page.request.post('/api/rpc', {
+    data: { id: 1, method: 'lock.unlock', params: { lock: SHED } },
+  });
+  expect((await response.json()).result.state).toBe('unlocked');
+}
+
+function auditActions(page) {
+  return page.getByRole('table', { name: 'Audit log' }).locator('tbody td:nth-child(3)');
 }
 
 test('the security page shows the board certificate fingerprint', async ({ page, request }) => {
@@ -46,6 +92,36 @@ test('the audit log lists actions and grows live', async ({ page, request }) => 
   const first = audit.locator('tbody tr').first();
   await expect(first).toContainText('system.reboot');
   await expect(first).toContainText('serial');
+});
+
+test('entries announced while the audit log loads are listed once, newest first', async ({ page, request }) => {
+  await login(page);
+  await holdAuditList(page, request, () => page.getByRole('link', { name: 'Security', exact: true }).click());
+  await announce(request, SHED_PAIRED);
+  await unlockShed(page);
+  await settled(page);
+  await expect(auditActions(page)).toHaveText(['lock.unlock', ...ACTIONS_AFTER_SIGN_IN]);
+});
+
+test('a live audit entry that is already listed is not added again', async ({ page, request }) => {
+  await login(page, '#/security');
+  const reboot = {
+    seq: 9,
+    time: Math.floor(Date.now() / 1000),
+    source: 'serial',
+    method: 'system.reboot',
+    result: 'ok',
+  };
+  await announce(request, SHED_PAIRED, reboot);
+  await expect(auditActions(page)).toHaveText(['system.reboot', ...ACTIONS_AFTER_SIGN_IN]);
+});
+
+test('after the event socket reconnects, the audit log lists each entry once', async ({ page, request }) => {
+  await login(page, '#/security');
+  await holdAuditList(page, request, () => mock(request, { dropSockets: true }));
+  await unlockShed(page);
+  await settled(page);
+  await expect(auditActions(page)).toHaveText(['lock.unlock', ...ACTIONS_AFTER_SIGN_IN]);
 });
 
 test('changing the password checks the repeat and reports success', async ({ page }) => {
