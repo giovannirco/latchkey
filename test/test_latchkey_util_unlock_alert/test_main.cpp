@@ -178,16 +178,27 @@ static void test_remote_unlocks_need_a_remote_action() {
 static void test_keypad_fingerprint_card_and_key_unlocks_are_reported_not_alerts() {
     const std::vector<UnlockFinding> findings =
         classify({entry(4, localAt(2)), entry(20, localAt(3)), entry(17, localAt(4)), entry(27, localAt(5)),
-                  entry(92, localAt(6)), entry(29, localAt(7))},
+                  entry(92, localAt(6)), entry(19, localAt(7))},
                  {});
     const UnlockMethod methods[] = {UnlockMethod::Passcode, UnlockMethod::Fingerprint, UnlockMethod::Card,
-                                    UnlockMethod::MechanicalKey, UnlockMethod::Passcode, UnlockMethod::Forced};
+                                    UnlockMethod::MechanicalKey, UnlockMethod::Passcode, UnlockMethod::Wristband};
     for (size_t i = 0; i < findings.size(); ++i) {
         TEST_ASSERT_EQUAL(methods[i], findings[i].method);
         TEST_ASSERT_EQUAL(UnlockVerdict::Reported, findings[i].verdict);
     }
     assertVerdicts({UnlockVerdict::Reported, UnlockVerdict::Alert},
                    classify({entry(4, localAt(2)), entry(1, localAt(3))}, {sent(kTwoPm + 900, kTwoPm + 905)}));
+}
+
+static void test_a_forced_open_entry_is_always_an_alert() {
+    const std::vector<UnlockFinding> alone = classify({entry(29, localAt(2))}, {});
+    TEST_ASSERT_EQUAL(UnlockMethod::Forced, alone[0].method);
+    TEST_ASSERT_EQUAL(UnlockVerdict::Alert, alone[0].verdict);
+    assertVerdicts({UnlockVerdict::Alert, UnlockVerdict::Latchkey},
+                   classify({entry(29, localAt(2)), entry(1, localAt(3))}, {sent(kTwoPm, kTwoPm + 5)}));
+    assertVerdicts({UnlockVerdict::Alert},
+                   classify({entry(29, localAt(2))}, {sent(kTwoPm, kTwoPm + 5, UnlockMethod::Forced)}));
+    assertVerdicts({UnlockVerdict::Alert}, classify({entry(29, LockTime{2025, 13, 7, 11, 0, 0})}, {}));
 }
 
 static void test_entries_that_are_not_unlocks() {
@@ -238,6 +249,7 @@ int main() {
     RUN_TEST(test_a_record_id_that_differs_from_the_log_alerts_even_inside_the_window);
     RUN_TEST(test_remote_unlocks_need_a_remote_action);
     RUN_TEST(test_keypad_fingerprint_card_and_key_unlocks_are_reported_not_alerts);
+    RUN_TEST(test_a_forced_open_entry_is_always_an_alert);
     RUN_TEST(test_entries_that_are_not_unlocks);
     RUN_TEST(test_lock_times_are_read_with_the_lock_offset);
     RUN_TEST(test_an_entry_time_that_cannot_exist_is_never_explained);

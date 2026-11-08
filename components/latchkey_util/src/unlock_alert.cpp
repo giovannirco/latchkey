@@ -152,6 +152,10 @@ std::vector<UnlockFinding> classifyUnlocks(const std::vector<ttlock::LogEntry>& 
         if (method == UnlockMethod::None) {
             continue;
         }
+        if (method == UnlockMethod::Forced) {
+            findings[i].verdict = UnlockVerdict::Alert;
+            continue;
+        }
         if (!needsExplaining(method)) {
             findings[i].verdict = UnlockVerdict::Reported;
             continue;
