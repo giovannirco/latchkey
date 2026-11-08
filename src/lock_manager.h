@@ -34,6 +34,25 @@ rpc::Reply featureMask(const std::string& mac, uint64_t& out);
 
 rpc::Reply runOnLock(const std::string& mac, const char* action, LockWork work);
 
+esp_err_t loadLabels(const std::string& mac, store::labels::Kind kind, latchkey_util::LabelTable& out);
+
+esp_err_t saveLabels(const std::string& mac, store::labels::Kind kind, const latchkey_util::LabelTable& table);
+
+bool labelsFit(const std::string& mac, store::labels::Kind kind, const latchkey_util::LabelTable& table);
+
+struct AdminPasscodeCopy {
+    std::string code;
+    bool confirmed = false;
+
+    ~AdminPasscodeCopy();
+};
+
+bool stageAdminPasscode(const std::string& mac, const std::string& candidate, AdminPasscodeCopy& previous);
+
+bool confirmAdminPasscode(const std::string& mac);
+
+bool restoreAdminPasscode(const std::string& mac, const AdminPasscodeCopy& previous);
+
 bool storeAdminPasscode(const std::string& mac, const std::string& code);
 
 rpc::Reply rename(const std::string& mac, const std::string& name);

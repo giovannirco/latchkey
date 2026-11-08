@@ -269,6 +269,16 @@ bool exists(std::string_view mac) {
     return findLocked(mac) != nullptr;
 }
 
+bool storedFeatures(std::string_view mac, uint64_t& out) {
+    std::lock_guard<std::mutex> guard(s_mutex);
+    const Lock* lock = findLocked(mac);
+    if (lock == nullptr) {
+        return false;
+    }
+    out = lock->record.features;
+    return true;
+}
+
 esp_err_t persist(const Record& record) {
     std::lock_guard<std::mutex> guard(s_mutex);
     if (s_erased) {
@@ -314,11 +324,11 @@ esp_err_t eraseDescriptions(const std::string& mac) {
 
 esp_err_t removeRecord(std::string_view mac) {
     const std::string key(mac);
+    std::lock_guard<std::mutex> guard(s_mutex);
     esp_err_t error = eraseDescriptions(key);
     if (error != ESP_OK) {
         return error;
     }
-    std::lock_guard<std::mutex> guard(s_mutex);
     error = store::locks::erase(key.c_str());
     if (error != ESP_OK) {
         return error;
@@ -950,6 +960,20 @@ struct SeedStore {
     ~SeedStore() { mbedtls_platform_zeroize(&table, sizeof(table)); }
 };
 
+struct SeedsWipe {
+    ttlock::PairResult& result;
+
+    ~SeedsWipe() { mbedtls_platform_zeroize(result.passcodeSeeds.data(), sizeof(result.passcodeSeeds)); }
+};
+
+esp_err_t saveSeeds(const std::string& mac, const latchkey_util::SeedTable& table) {
+    std::lock_guard<std::mutex> guard(s_mutex);
+    if (findLocked(mac) == nullptr || s_erased) {
+        return ESP_ERR_NOT_FOUND;
+    }
+    return store::seeds::save(mac.c_str(), table);
+}
+
 std::string pairingWarning(bool keysCopyFailed, bool seedsLost) {
     std::string warning;
     if (keysCopyFailed) {
@@ -957,7 +981,8 @@ std::string pairingWarning(bool keysCopyFailed, bool seedsLost) {
     }
     if (seedsLost) {
         warning += warning.empty() ? "" : ". ";
-        warning += "the offline-code seed table the lock was sent could not be stored";
+        warning += "the offline-code seed table the lock was sent could not be stored, so offline codes will not work "
+                   "for this pairing";
     }
     return warning;
 }
@@ -1093,9 +1118,11 @@ void runPair(Job& job) {
     options.adminPasscode = job.adminPasscode;
     options.persistSeeds = [&job, &seeds](uint16_t year,
                                           const std::array<ttlock::CodeSecret, ttlock::kCodeSecretCount>& table) {
-        seeds.table = latchkey_util::SeedTable{year, false, table};
+        seeds.table.year = year;
+        seeds.table.confirmed = false;
+        seeds.table.seeds = table;
         seeds.taken = true;
-        const esp_err_t error = store::seeds::save(job.mac.c_str(), seeds.table);
+        const esp_err_t error = saveSeeds(job.mac, seeds.table);
         seeds.stored = error == ESP_OK;
         if (seeds.stored) {
             ESP_LOGI(TAG, "offline-code seed table stored");
@@ -1106,6 +1133,7 @@ void runPair(Job& job) {
     ttlock::LockKeys keys;
     keys.mac = job.mac;
     ttlock::PairResult result;
+    const SeedsWipe wipeSeeds{result};
     size_t mismatchesBefore = session->lockTypeMismatches();
     Status paired = session->pair(frames, options, keys, persistEarly, result);
     bool mismatched =
@@ -1140,7 +1168,7 @@ void runPair(Job& job) {
         }
         if (seeds.stored && result.passcodeSeedsConfirmed) {
             seeds.table.confirmed = true;
-            const esp_err_t confirmed = store::seeds::save(job.mac.c_str(), seeds.table);
+            const esp_err_t confirmed = saveSeeds(job.mac, seeds.table);
             if (confirmed != ESP_OK) {
                 ESP_LOGE(TAG, "cannot mark the offline-code seed table as taken: %s", esp_err_to_name(confirmed));
             }
@@ -1382,22 +1410,41 @@ bool record(const std::string& mac, Record& out) {
 }
 
 rpc::Reply featureMask(const std::string& mac, uint64_t& out) {
-    Record stored;
-    if (!record(mac, stored)) {
+    uint64_t mask = 0;
+    if (!storedFeatures(mac, mask)) {
         return notPaired();
     }
-    if (stored.features == 0) {
+    if (mask == 0) {
         rpc::Reply read = submit(Kind::Features, mac, {}, 0);
         if (!read.error.empty()) {
             return read;
         }
-        if (!record(mac, stored)) {
+        if (!storedFeatures(mac, mask)) {
             return notPaired();
         }
     }
-    out = stored.features;
-    mbedtls_platform_zeroize(&stored, sizeof(stored));
+    out = mask;
     return rpc::ok();
+}
+
+esp_err_t loadLabels(const std::string& mac, store::labels::Kind kind, latchkey_util::LabelTable& out) {
+    std::lock_guard<std::mutex> guard(s_mutex);
+    if (findLocked(mac) == nullptr || s_erased) {
+        return ESP_ERR_NOT_FOUND;
+    }
+    return store::labels::load(mac.c_str(), kind, out);
+}
+
+esp_err_t saveLabels(const std::string& mac, store::labels::Kind kind, const latchkey_util::LabelTable& table) {
+    std::lock_guard<std::mutex> guard(s_mutex);
+    if (findLocked(mac) == nullptr || s_erased) {
+        return ESP_ERR_NOT_FOUND;
+    }
+    return store::labels::save(mac.c_str(), kind, table);
+}
+
+bool labelsFit(const std::string& mac, store::labels::Kind kind, const latchkey_util::LabelTable& table) {
+    return store::labels::fits(mac.c_str(), kind, table);
 }
 
 rpc::Reply runOnLock(const std::string& mac, const char* action, LockWork work) {
@@ -1416,6 +1463,32 @@ bool storeAdminPasscode(const std::string& mac, const std::string& code) {
     return updateRecord(mac, [&code](Record& stored) {
         copyText(stored.adminPasscode, code);
         stored.flags |= store::locks::kFlagAdminPasscodeConfirmed;
+    });
+}
+
+AdminPasscodeCopy::~AdminPasscodeCopy() { mbedtls_platform_zeroize(code.data(), code.size()); }
+
+bool stageAdminPasscode(const std::string& mac, const std::string& candidate, AdminPasscodeCopy& previous) {
+    return updateRecord(mac, [&candidate, &previous](Record& stored) {
+        previous.code.assign(stored.adminPasscode);
+        previous.confirmed = (stored.flags & store::locks::kFlagAdminPasscodeConfirmed) != 0;
+        copyText(stored.adminPasscode, candidate);
+        stored.flags &= static_cast<uint8_t>(~store::locks::kFlagAdminPasscodeConfirmed);
+    });
+}
+
+bool confirmAdminPasscode(const std::string& mac) {
+    return updateRecord(mac, [](Record& stored) { stored.flags |= store::locks::kFlagAdminPasscodeConfirmed; });
+}
+
+bool restoreAdminPasscode(const std::string& mac, const AdminPasscodeCopy& previous) {
+    return updateRecord(mac, [&previous](Record& stored) {
+        copyText(stored.adminPasscode, previous.code);
+        if (previous.confirmed) {
+            stored.flags |= store::locks::kFlagAdminPasscodeConfirmed;
+        } else {
+            stored.flags &= static_cast<uint8_t>(~store::locks::kFlagAdminPasscodeConfirmed);
+        }
     });
 }
 
