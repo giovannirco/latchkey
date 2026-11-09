@@ -26,8 +26,8 @@ lock.log.fetch answers {"entries", "last", "more"}: without "since" the newest 1
 up to 16 entries after that record number, with "more" when others follow. The board reads the log in the
 background and sends lock.alert {"lock", "method", "time", "seq", "type"} for an unlock from an app it
 did not make, or a forced opening; tests emit one with the emit hook. Switch writes refuse with
-unverified before any radio traffic or board-button wait. Turning the reset button off without a
-key backup refuses first with backup_required.
+unverified before any radio traffic or board-button wait. Turning the reset button off refuses first
+with backup_required, with or without a key backup.
 
 lock.alerts.list answers {alerts, warnings}; lock.alerts.ack {lock, through} acknowledges displayed
 ids without removing later arrivals. These two methods do not use Bluetooth or run as jobs.
@@ -1468,7 +1468,7 @@ class Mock:
     def lock_reset_button_set(self, ctx: Context, params: dict) -> dict:
         lock = self.get_lock(params)
         enabled = bool_param(params, "enabled")
-        if not enabled and not lock["backedUp"]:
+        if not enabled:
             raise RpcError(
                 "backup_required", "export this lock's keys with keys.export before turning its reset button off"
             )
