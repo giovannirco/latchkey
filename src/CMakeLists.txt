@@ -4,6 +4,7 @@ idf_component_register(
         "access_requests.cpp"
         "audit.cpp"
         "auth.cpp"
+        "backup_crypto.cpp"
         "ble_central.cpp"
         "board.cpp"
         "certs.cpp"
