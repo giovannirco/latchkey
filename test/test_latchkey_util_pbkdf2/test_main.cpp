@@ -7,13 +7,14 @@
 #include <string>
 #include <vector>
 
+#include "../reference/allocation_failure.h"
 #include "../reference/hmac_sha256.h"
 #include "latchkey_util/hmac_sha256.h"
 #include "latchkey_util/pbkdf2.h"
 
-void setUp() {}
+void setUp() { allocation_failure::reset(); }
 
-void tearDown() {}
+void tearDown() { allocation_failure::resume(); }
 
 static std::string hex(const uint8_t* data, size_t length) {
     static const char kDigits[] = "0123456789abcdef";
@@ -158,6 +159,34 @@ static void test_bad_parameters_are_refused_before_any_hmac() {
     TEST_ASSERT_EQUAL_UINT(0, counter.yieldsAt.size());
 }
 
+static void test_scratch_allocation_failure_wipes_output_before_any_hmac() {
+    Counter counter;
+    uint8_t out[32];
+    std::memset(out, 0xEE, sizeof(out));
+    const auto hmac = hmacUnder("Password", counter);
+    const auto yield = yieldInto(counter);
+    const size_t before = allocation_failure::live();
+    allocation_failure::failNext();
+    const bool derived = latchkey_util::pbkdf2HmacSha256(hmac, bytesOf("salt"), 4, 2, 1000, yield, out, sizeof(out));
+    allocation_failure::resume();
+    TEST_ASSERT_FALSE(derived);
+    TEST_ASSERT_EQUAL_UINT(1, allocation_failure::attempts);
+    TEST_ASSERT_EQUAL_UINT(before, allocation_failure::live());
+    TEST_ASSERT_EQUAL_UINT(0, counter.hmacCalls);
+    for (uint8_t byte : out) TEST_ASSERT_EQUAL_UINT8(0, byte);
+}
+
+static void test_salt_size_overflow_is_rejected_without_allocation_or_hmac() {
+    Counter counter;
+    uint8_t out[32];
+    std::memset(out, 0xEE, sizeof(out));
+    TEST_ASSERT_FALSE(latchkey_util::pbkdf2HmacSha256(hmacUnder("Password", counter), bytesOf("salt"), SIZE_MAX,
+                                                     2, 1000, yieldInto(counter), out, sizeof(out)));
+    TEST_ASSERT_EQUAL_UINT(0, allocation_failure::attempts);
+    TEST_ASSERT_EQUAL_UINT(0, counter.hmacCalls);
+    for (uint8_t byte : out) TEST_ASSERT_EQUAL_UINT8(0, byte);
+}
+
 int main() {
     UNITY_BEGIN();
     RUN_TEST(test_reference_sha256_matches_fips_180_4);
@@ -168,5 +197,7 @@ int main() {
     RUN_TEST(test_output_lengths_off_the_block_size_take_the_stream_prefix);
     RUN_TEST(test_a_failing_hmac_stops_and_wipes_the_output);
     RUN_TEST(test_bad_parameters_are_refused_before_any_hmac);
+    RUN_TEST(test_scratch_allocation_failure_wipes_output_before_any_hmac);
+    RUN_TEST(test_salt_size_overflow_is_rejected_without_allocation_or_hmac);
     return UNITY_END();
 }

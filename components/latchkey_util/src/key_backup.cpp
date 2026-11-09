@@ -2,7 +2,6 @@
 #include "latchkey_util/key_backup.h"
 
 #include <algorithm>
-#include <cstdlib>
 #include <cstring>
 #include <new>
 #include <utility>
@@ -80,9 +79,8 @@ public:
     bool number(T& out, size_t size = sizeof(T)) {
         std::span<const uint8_t> field;
         if (!take(size, field)) return false;
-        uint64_t value = 0;
-        for (const uint8_t byte : field) value = (value << 8) | byte;
-        out = static_cast<T>(value);
+        out = T{};
+        for (const uint8_t& byte : field) out = static_cast<T>((static_cast<uint64_t>(out) << 8) | byte);
         return true;
     }
 
@@ -114,7 +112,8 @@ public:
         size_ += bytes.size();
     }
 
-    void number(uint64_t value, size_t size = 1) {
+    template <typename T>
+    void number(const T& value, size_t size = 1) {
         if (data_ != nullptr) {
             for (size_t i = 0; i < size; ++i) {
                 data_[size_ + i] = static_cast<uint8_t>(value >> (8 * (size - 1 - i)));
@@ -277,7 +276,7 @@ SensitiveBuffer& SensitiveBuffer::operator=(SensitiveBuffer&& other) noexcept {
 bool SensitiveBuffer::allocate(size_t size, size_t capacity) {
     if (capacity == 0) capacity = size;
     if (size > capacity || capacity > kMaxBackupEnvelope) return false;
-    uint8_t* data = capacity == 0 ? nullptr : static_cast<uint8_t*>(std::calloc(capacity, 1));
+    uint8_t* data = capacity == 0 ? nullptr : new (std::nothrow) uint8_t[capacity]{};
     if (capacity != 0 && data == nullptr) return false;
     clear();
     data_ = data;
@@ -295,7 +294,7 @@ bool SensitiveBuffer::resize(size_t size) {
 
 void SensitiveBuffer::clear() {
     wipe(data_, capacity_);
-    std::free(data_);
+    delete[] data_;
     data_ = nullptr;
     size_ = capacity_ = 0;
 }

@@ -9,6 +9,7 @@
 #include <vector>
 
 #include "../reference/aes256_gcm.h"
+#include "../reference/allocation_failure.h"
 #include "../reference/hmac_sha256.h"
 #include "latchkey_util/key_backup.h"
 #include "latchkey_util/label_table.h"
@@ -17,8 +18,8 @@
 
 using namespace latchkey_util;
 
-void setUp() {}
-void tearDown() {}
+void setUp() { allocation_failure::reset(); }
+void tearDown() { allocation_failure::resume(); }
 
 static const std::array<uint8_t, 16> kKey{0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15};
 static const std::array<uint8_t, 2> kEmptyLabels{1, 0};
@@ -522,6 +523,84 @@ static void test_passphrases_preserve_valid_utf8_ascii_controls() {
     TEST_ASSERT_EQUAL_MEMORY(kPlaintext.data(), opened.data(), opened.size());
 }
 
+static void test_encode_allocation_failure_preserves_previous_output() {
+    const auto lock = lockView();
+    auto out = copyBytes(reinterpret_cast<const uint8_t*>("keep"), 4);
+    const auto* pointer = out.data();
+    const size_t before = allocation_failure::live();
+    allocation_failure::failNext();
+    const auto status = encodeBackup({&lock, 1}, out);
+    allocation_failure::resume();
+    TEST_ASSERT_EQUAL_INT(static_cast<int>(BackupStatus::NoMemory), static_cast<int>(status));
+    TEST_ASSERT_EQUAL_UINT(1, allocation_failure::attempts);
+    TEST_ASSERT_EQUAL_UINT(before, allocation_failure::live());
+    TEST_ASSERT_EQUAL_PTR(pointer, out.data());
+    TEST_ASSERT_EQUAL_UINT(4, out.size());
+    TEST_ASSERT_EQUAL_MEMORY("keep", out.data(), 4);
+}
+
+static void test_decode_allocation_failure_wipes_input_and_preserves_existing_views() {
+    DecodedBackup out;
+    TEST_ASSERT_EQUAL_INT(static_cast<int>(BackupStatus::Ok), static_cast<int>(decodeBackup(encode(lockView()), out)));
+    const auto* key = out.locks()[0].aesKey.data();
+    const size_t before = allocation_failure::live();
+    auto input = encode(lockView());
+    allocation_failure::expectWiped(input.data(), input.capacity());
+    allocation_failure::failNext();
+    const auto status = decodeBackup(std::move(input), out);
+    allocation_failure::resume();
+    TEST_ASSERT_EQUAL_INT(static_cast<int>(BackupStatus::NoMemory), static_cast<int>(status));
+    TEST_ASSERT_EQUAL_UINT(1, allocation_failure::attempts);
+    TEST_ASSERT_EQUAL_UINT(before, allocation_failure::live());
+    TEST_ASSERT_EQUAL_UINT(1, allocation_failure::checkedWipes);
+    TEST_ASSERT_TRUE(allocation_failure::wiped);
+    TEST_ASSERT_NULL(input.data());
+    TEST_ASSERT_EQUAL_UINT(1, out.locks().size());
+    TEST_ASSERT_EQUAL_PTR(key, out.locks()[0].aesKey.data());
+    TEST_ASSERT_EQUAL_MEMORY(kKey.data(), key, kKey.size());
+}
+
+static void test_seal_expansion_failure_wipes_input_without_replacing_output() {
+    ReferenceCrypto crypto;
+    auto out = copyBytes(reinterpret_cast<const uint8_t*>("keep"), 4);
+    const size_t before = allocation_failure::live();
+    auto input = copyBytes(reinterpret_cast<const uint8_t*>(kPlaintext.data()), kPlaintext.size());
+    allocation_failure::expectWiped(input.data(), input.capacity());
+    allocation_failure::failNext();
+    const auto status = sealBackup(std::move(input), kPassword, crypto, out);
+    allocation_failure::resume();
+    TEST_ASSERT_EQUAL_INT(static_cast<int>(BackupStatus::NoMemory), static_cast<int>(status));
+    TEST_ASSERT_EQUAL_UINT(1, allocation_failure::attempts);
+    TEST_ASSERT_EQUAL_UINT(before, allocation_failure::live());
+    TEST_ASSERT_EQUAL_UINT(1, allocation_failure::checkedWipes);
+    TEST_ASSERT_TRUE(allocation_failure::wiped);
+    TEST_ASSERT_NULL(input.data());
+    TEST_ASSERT_EQUAL_UINT(0, crypto.randomCalls);
+    TEST_ASSERT_EQUAL_UINT(0, crypto.derivations);
+    TEST_ASSERT_EQUAL_UINT(4, out.size());
+    TEST_ASSERT_EQUAL_MEMORY("keep", out.data(), 4);
+}
+
+static void test_kdf_allocation_failure_wipes_plaintext_without_publishing_an_envelope() {
+    ReferenceCrypto crypto;
+    auto out = copyBytes(reinterpret_cast<const uint8_t*>("keep"), 4);
+    const size_t before = allocation_failure::live();
+    auto input = plaintext();
+    allocation_failure::expectWiped(input.data(), input.capacity());
+    allocation_failure::failNext();
+    const auto status = sealBackup(std::move(input), kPassword, crypto, out);
+    allocation_failure::resume();
+    TEST_ASSERT_EQUAL_INT(static_cast<int>(BackupStatus::CryptoFailed), static_cast<int>(status));
+    TEST_ASSERT_EQUAL_UINT(1, allocation_failure::attempts);
+    TEST_ASSERT_EQUAL_UINT(before, allocation_failure::live());
+    TEST_ASSERT_EQUAL_UINT(1, allocation_failure::checkedWipes);
+    TEST_ASSERT_TRUE(allocation_failure::wiped);
+    TEST_ASSERT_EQUAL_UINT(1, crypto.derivations);
+    TEST_ASSERT_EQUAL_UINT(0, crypto.seals);
+    TEST_ASSERT_EQUAL_UINT(4, out.size());
+    TEST_ASSERT_EQUAL_MEMORY("keep", out.data(), 4);
+}
+
 int main() {
     UNITY_BEGIN();
     RUN_TEST(test_full_record_roundtrip_and_move_owned_views);
@@ -539,5 +618,9 @@ int main() {
     RUN_TEST(test_wrong_password_and_header_ciphertext_tag_tampering_return_no_plaintext);
     RUN_TEST(test_crypto_failures_are_atomic_and_passphrases_are_bounded_utf8);
     RUN_TEST(test_passphrases_preserve_valid_utf8_ascii_controls);
+    RUN_TEST(test_encode_allocation_failure_preserves_previous_output);
+    RUN_TEST(test_decode_allocation_failure_wipes_input_and_preserves_existing_views);
+    RUN_TEST(test_seal_expansion_failure_wipes_input_without_replacing_output);
+    RUN_TEST(test_kdf_allocation_failure_wipes_plaintext_without_publishing_an_envelope);
     return UNITY_END();
 }
