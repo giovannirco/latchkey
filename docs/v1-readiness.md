@@ -1,7 +1,7 @@
 <!-- SPDX-License-Identifier: GPL-3.0-or-later -->
 # v1.0.0 readiness
 
-As of 2026-11-09 UTC, v0.4.0 is the latest published release. v1.0.0 is not ready to tag. The current development pass covers the web UI, development tools and documentation; firmware development, flashing and device writes are excluded. This does not waive the remaining release requirements.
+As of 2026-11-09 UTC, v0.4.0 is the latest published release. v1.0.0 is not ready to tag. The owner deferred OTA and its hardware checks beyond v1.0.0. The current development pass covers the web UI, development tools and documentation; firmware development, flashing and device writes remain excluded while the scope of backup and hardening is being clarified.
 
 ## Release requirements
 
@@ -11,11 +11,22 @@ As of 2026-11-09 UTC, v0.4.0 is the latest published release. v1.0.0 is not read
 | Logging, syslog and Wi-Fi form | Released in [v0.4.0](https://github.com/giovannirco/latchkey/releases/tag/v0.4.0); [#18](https://github.com/giovannirco/latchkey/issues/18) closed. |
 | Encrypted backup, hardening and two-board restore | [#19](https://github.com/giovannirco/latchkey/issues/19) has a design, no board implementation. Browser mock success is not evidence of backup or recovery on hardware. Requires firmware work outside this pass. |
 | Switch write layout | [#20](https://github.com/giovannirco/latchkey/issues/20) remains unverified. Writes stay refused; proving the layout requires the owner at the lock and separate device work. |
-| Board web updates and rollback | [#23](https://github.com/giovannirco/latchkey/issues/23) remains on the unmerged `feat/ota` branch. The upload heap budget and review remain open. Excluded from this pass. |
-| Update, rollback and key preservation on hardware | [#24](https://github.com/giovannirco/latchkey/issues/24) remains open and needs the owner's button press. Excluded from this pass. |
+| Board web updates and rollback | Deferred beyond v1.0.0 by the owner. [#23](https://github.com/giovannirco/latchkey/issues/23) remains on the unmerged `feat/ota` branch; the upload heap budget and review remain open. |
+| Update, rollback and key preservation on hardware | Deferred beyond v1.0.0 with OTA. [#24](https://github.com/giovannirco/latchkey/issues/24) remains open and needs the owner's button press. |
 | Review follow-ups | [#21](https://github.com/giovannirco/latchkey/issues/21) remains open; firmware findings are not resolved by browser changes. |
 | Passage reliability | v0.4.0 includes the longer acknowledgement wait. The separate post-acknowledgement readback disconnect in [#31](https://github.com/giovannirco/latchkey/issues/31) remains untraced. No new hardware proof in this pass. |
 | Final review and acceptance | [#25](https://github.com/giovannirco/latchkey/issues/25) remains open. A browser review does not replace whole-branch review, board acceptance or a two-board restore. |
+
+## Remaining feature coverage
+
+The original goal of covering the lock's supported app features is broader than the implemented board API:
+
+- Encrypted backup/import and hardening have browser mock flows but no board methods. Backup must preserve keys, labels and seed tables; hardening still needs a preview, step results, persisted state and recovery protections.
+- Reset-button, privacy-lock and tamper-alert reads work. Writes remain refused until their layout is verified on hardware. Full hardening depends on the reset-button verification.
+- Weekly/cyclic passcodes can be listed and deleted, but cannot be created or edited. The weekly-window command layout is missing; fingerprint and card schedules already work.
+- The remote-unlock/gateway switch exists in the protocol core but is not exposed through the board API or UI. Reported hotel and accessory bits also do not imply implemented controls. See [protocol coverage](protocol.md).
+
+Offline guest-code generation, metrics, MQTT TLS, button discovery and wireless keypad/key-fob support remain unscheduled in [#22](https://github.com/giovannirco/latchkey/issues/22). That list is not an approved v1.0.0 commitment. Weekly passcodes appear there too, although they were included in the original feature scope; their release scope still needs an explicit decision.
 
 ## Browser corrections
 
