@@ -35,6 +35,8 @@ rpc::Reply featureMask(const std::string& mac, uint64_t& out);
 
 rpc::Reply runOnLock(const std::string& mac, const char* action, LockWork work);
 
+rpc::Reply failure(ttlock::Status status, uint8_t lockError);
+
 esp_err_t loadLabels(const std::string& mac, store::labels::Kind kind, latchkey_util::LabelTable& out);
 
 esp_err_t saveLabels(const std::string& mac, store::labels::Kind kind, const latchkey_util::LabelTable& table);

@@ -413,6 +413,15 @@ static void test_a_cut_line_ends_the_pieces_before_it() {
     TEST_ASSERT_EQUAL_STRING("I (12) b: after\n", joined.lines[1].c_str());
 }
 
+static void test_a_new_ring_wipes_what_its_storage_held_before() {
+    std::vector<uint8_t> storage(256, 0xA5);
+    const LogRing ring(storage.data(), storage.size());
+    for (const uint8_t byte : storage) {
+        TEST_ASSERT_EQUAL_HEX8(0, byte);
+    }
+    TEST_ASSERT_EQUAL_UINT32(0, ring.count());
+}
+
 int main() {
     UNITY_BEGIN();
     RUN_TEST(test_a_line_the_console_cut_does_not_swallow_the_next_one);
@@ -432,6 +441,7 @@ int main() {
     RUN_TEST(test_level_names_round_trip);
     RUN_TEST(test_a_threshold_passes_its_level_and_the_more_severe_ones);
     RUN_TEST(test_a_cut_never_splits_a_utf8_sequence);
+    RUN_TEST(test_a_new_ring_wipes_what_its_storage_held_before);
     RUN_TEST(test_the_ring_returns_what_was_appended);
     RUN_TEST(test_a_full_ring_drops_the_oldest_lines_first);
     RUN_TEST(test_lines_survive_the_wrap_of_the_storage_intact);

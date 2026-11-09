@@ -35,6 +35,12 @@ def pytest_addoption(parser: pytest.Parser) -> None:
         help="let the lock suite factory-reset the paired lock",
     )
     parser.addoption(
+        "--allow-lock-writes",
+        action="store_true",
+        default=False,
+        help="let the lock settings suite change auto-lock, sound and passage mode and put them back",
+    )
+    parser.addoption(
         "--allow-admin-passcode-change",
         action="store_true",
         default=False,
@@ -89,6 +95,11 @@ def touch_file(request: pytest.FixtureRequest) -> Path | None:
 @pytest.fixture(scope="session")
 def allow_lock_reset(request: pytest.FixtureRequest) -> bool:
     return bool(request.config.getoption("--allow-lock-reset"))
+
+
+@pytest.fixture(scope="session")
+def allow_lock_writes(request: pytest.FixtureRequest) -> bool:
+    return bool(request.config.getoption("--allow-lock-writes"))
 
 
 @pytest.fixture(scope="session")

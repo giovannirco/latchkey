@@ -26,11 +26,13 @@ lock.log.fetch answers {"entries", "last", "more"}: without "since" the newest 1
 up to 16 entries after that record number, with "more" when others follow. The board reads the log in the
 background and sends lock.alert {"lock", "method", "time", "seq", "type"} for an unlock from an app it
 did not make, or a forced opening; tests emit one with the emit hook. Switch writes refuse with
-unverified before any radio traffic or board-button wait. Turning the reset button off without a
-key backup refuses first with backup_required.
+unverified before any radio traffic or board-button wait. Turning the reset button off refuses first
+with backup_required, with or without a key backup.
 
 lock.alerts.list answers {alerts, warnings}; lock.alerts.ack {lock, through} acknowledges displayed
-ids without removing later arrivals. These two methods do not use Bluetooth or run as jobs.
+ids without removing later arrivals. An alert's kind is unexpected_unlock, or a stored warning:
+watch_state_unreadable (the log cursor was lost) or alerts_unreadable (the stored alerts could not be
+read, so the board started a new list). These two methods do not use Bluetooth or run as jobs.
 locks.list includes alertCount and warnings; system.info includes warnings grouped by lock.
 
 Test hooks used by tools/ui-tests/:
@@ -38,8 +40,10 @@ Test hooks used by tools/ui-tests/:
 - POST /__mock/control  {"reset": true} restores the demo state; other keys: "confirm" ("auto" or
   "never"), "confirmDelayMs", "confirmTimeoutMs", "latencyMs", "jobReplyDelayMs", "timeSynced",
   "expireSessions", "dropSockets" (closes every event socket), "setLock" {"id", fields} (changes a
-  lock without an event), "failNext" {"method", "code", "message"}, "warnNext" {"method", "warning"}
-  (adds a warning to the next result), "delay" {"method", "ms"} (holds the next reply), "scanExtra"
+  lock without an event), "failNext" {"method", "code", "message"}, "failPassageAdd" {"after",
+  "code", "message"} (the next lock.passage.add stores that many new windows, then fails like the
+  board: with "after" above 0 the error carries "added" and its message says how many were added),
+  "warnNext" {"method", "warning"} (adds a warning to the next result), "delay" {"method", "ms"} (holds the next reply), "scanExtra"
   [devices], "emit" [{"event", "data"}], "logLines" [{"level", "tag", "message"}] (adds lines to the
   board's log);
 - GET /__mock/calls     every RPC since the last reset, with secret parameters replaced by "***";
@@ -364,6 +368,10 @@ def summary(lock: dict) -> dict:
     result = {key: copy.deepcopy(lock[key]) for key in keys}
     result["alertCount"] = len(lock["alerts"])
     result["warnings"] = list(lock["warnings"])
+    if any(alert["kind"] == "alerts_unreadable" for alert in lock["alerts"]):
+        result["warnings"].append(
+            "The stored alerts could not be read and were cleared; alerts raised before then are lost."
+        )
     if any(alert["kind"] == "watch_state_unreadable" for alert in lock["alerts"]):
         result["warnings"].append(
             "The saved operation-log cursor could not be read. Monitoring restarted; some events may have been missed."
@@ -568,6 +576,7 @@ class Mock:
             self.failures = 0
             self.blocked_until = 0.0
             self.fail_next: dict[str, RpcError] = {}
+            self.fail_passage_add: dict[str, Any] | None = None
             self.warn_next: dict[str, str] = {}
             self.delay_next: dict[str, float] = {}
             self.calls: list[dict] = []
@@ -824,6 +833,8 @@ class Mock:
             if "failNext" in body:
                 failure = body["failNext"]
                 self.fail_next[failure["method"]] = RpcError(failure["code"], failure.get("message", failure["code"]))
+            if "failPassageAdd" in body:
+                self.fail_passage_add = dict(body["failPassageAdd"])
             if "scanExtra" in body:
                 self.nearby.extend(dict(device) for device in body["scanExtra"])
             for line in body.get("logLines", []):
@@ -1214,11 +1225,26 @@ class Mock:
         if not isinstance(days, list) or not days:
             raise invalid("days lists 0 (every day) or weekdays 1 to 7")
         entries = [self._passage_entry(params, day) for day in days]
+        with self.lock:
+            stop, self.fail_passage_add = self.fail_passage_add, None
         with self.radio():
+            added = 0
             for entry in entries:
-                if entry not in lock["passage"]:
-                    lock["passage"].append(entry)
+                if entry in lock["passage"]:
+                    continue
+                if stop and added == stop["after"]:
+                    raise self._passage_add_stopped(stop, added)
+                lock["passage"].append(entry)
+                added += 1
         return {"modes": copy.deepcopy(lock["passage"])}
+
+    @staticmethod
+    def _passage_add_stopped(stop: dict, added: int) -> RpcError:
+        message = stop.get("message", stop["code"])
+        if not added:
+            return RpcError(stop["code"], message)
+        noun = "passage window was" if added == 1 else "passage windows were"
+        return RpcError(stop["code"], f"{message}; {added} {noun} added before that", added=added)
 
     @rpc("lock.passage.delete", feature="passage_mode", job=True)
     def lock_passage_delete(self, ctx: Context, params: dict) -> dict:
@@ -1468,7 +1494,7 @@ class Mock:
     def lock_reset_button_set(self, ctx: Context, params: dict) -> dict:
         lock = self.get_lock(params)
         enabled = bool_param(params, "enabled")
-        if not enabled and not lock["backedUp"]:
+        if not enabled:
             raise RpcError(
                 "backup_required", "export this lock's keys with keys.export before turning its reset button off"
             )

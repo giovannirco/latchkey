@@ -124,7 +124,6 @@ struct Live {
     latchkey_util::LogWatch watch{kUnlocksKept, kUnlockKeepSeconds};
     latchkey_util::WatchSchedule schedule{kWatchIntervalMs, kWatchRetryMs, kWatchGapMs};
     latchkey_util::LockAlerts alerts;
-    bool alertsReadable = true;
     bool alertWriteFailed = false;
     bool watchReadFailed = false;
     bool watchWriteFailed = false;
@@ -388,18 +387,33 @@ void addOptionalString(cJSON* object, const char* key, const char* value) {
     }
 }
 
+bool holdsAlertOf(const Live& live, latchkey_util::LockAlertKind kind) {
+    return std::any_of(live.alerts.entries().begin(), live.alerts.entries().end(),
+                       [kind](const latchkey_util::LockAlert& alert) { return alert.kind == kind; });
+}
+
+const char* alertKindName(latchkey_util::LockAlertKind kind) {
+    switch (kind) {
+        case latchkey_util::LockAlertKind::UnexpectedUnlock:
+            return "unexpected_unlock";
+        case latchkey_util::LockAlertKind::WatchStateUnreadable:
+            return "watch_state_unreadable";
+        case latchkey_util::LockAlertKind::AlertsUnreadable:
+            return "alerts_unreadable";
+    }
+    return "unexpected_unlock";
+}
+
 cJSON* lockWarnings(const Live& live) {
     cJSON* warnings = cJSON_CreateArray();
-    if (!live.alertsReadable) {
-        cJSON_AddItemToArray(warnings, cJSON_CreateString("Recent alerts could not be read from storage."));
+    if (holdsAlertOf(live, latchkey_util::LockAlertKind::AlertsUnreadable)) {
+        cJSON_AddItemToArray(warnings, cJSON_CreateString(
+            "The stored alerts could not be read and were cleared; alerts raised before then are lost."));
     }
     if (live.alertWriteFailed) {
         cJSON_AddItemToArray(warnings, cJSON_CreateString("Recent alerts could not be saved; log monitoring will retry."));
     }
-    if (live.watchReadFailed || std::any_of(live.alerts.entries().begin(), live.alerts.entries().end(),
-                                           [](const latchkey_util::LockAlert& alert) {
-                                               return alert.kind == latchkey_util::LockAlertKind::WatchStateUnreadable;
-                                           })) {
+    if (live.watchReadFailed || holdsAlertOf(live, latchkey_util::LockAlertKind::WatchStateUnreadable)) {
         cJSON_AddItemToArray(warnings, cJSON_CreateString(
             "The saved operation-log cursor could not be read. Monitoring restarted; some events may have been missed."));
     }
@@ -417,8 +431,7 @@ cJSON* alertsJson(const Live& live) {
         const auto& alert = alerts[i - 1];
         cJSON* entry = cJSON_CreateObject();
         cJSON_AddNumberToObject(entry, "id", alert.id);
-        cJSON_AddStringToObject(entry, "kind", alert.kind == latchkey_util::LockAlertKind::UnexpectedUnlock
-                                                    ? "unexpected_unlock" : "watch_state_unreadable");
+        cJSON_AddStringToObject(entry, "kind", alertKindName(alert.kind));
         addOptionalNumber(entry, "time", alert.time > 0, alert.time);
         cJSON_AddStringToObject(entry, "method", latchkey_util::toString(alert.method));
         cJSON_AddNumberToObject(entry, "seq", alert.seq);
@@ -480,40 +493,6 @@ cJSON* featuresJson(uint64_t mask) {
 }
 
 rpc::Reply notPaired() { return rpc::fail("not_paired", "the board has no keys for this lock"); }
-
-rpc::Reply failure(Status status, uint8_t lockError) {
-    switch (status) {
-        case Status::Timeout:
-            return rpc::fail("timeout", "the lock did not answer");
-        case Status::Disconnected:
-            return rpc::fail("disconnected", "the Bluetooth link to the lock dropped");
-        case Status::BadResponse:
-            return rpc::fail("bad_response", "the lock sent an answer the board could not read");
-        case Status::BadCrc:
-            return rpc::fail("bad_crc", "the lock sent a damaged answer");
-        case Status::LockError: {
-            char message[80];
-            std::snprintf(message, sizeof(message), "the lock refused the command: %s (0x%02x)",
-                          ttlock::lockErrorName(lockError), lockError);
-            return rpc::fail("lock_error", message);
-        }
-        case Status::Unsupported:
-            return rpc::fail("unsupported", "the lock does not support that");
-        case Status::NotPaired:
-            return notPaired();
-        case Status::PairIncomplete:
-            return rpc::fail("pair_incomplete", "pairing stopped before it finished");
-        case Status::Busy:
-            return rpc::fail("busy", "the lock is busy");
-        case Status::InvalidArgument:
-            return rpc::fail("invalid_argument", "the lock cannot take that value");
-        case Status::TimeUnsynced:
-            return rpc::fail("time_unsynced", "the board clock is not set yet");
-        case Status::Ok:
-            break;
-    }
-    return rpc::fail("internal", "unexpected lock status");
-}
 
 bool breaksLink(Status status) {
     return status == Status::Timeout || status == Status::Disconnected || status == Status::BadResponse ||
@@ -783,9 +762,6 @@ void saveWatch(Lock& lock, const latchkey_util::WatchState& state) {
     const bool persisted = latchkey_util::persistWatchState(state, [&lock] {
         if (!lock.live.watchReadFailed) {
             return true;
-        }
-        if (!lock.live.alertsReadable) {
-            return false;
         }
         if (!lock.live.alertWriteFailed) {
             return true;
@@ -1708,6 +1684,40 @@ rpc::Reply submitFor(Kind kind, const std::string& mac) {
 
 }
 
+rpc::Reply failure(Status status, uint8_t lockError) {
+    switch (status) {
+        case Status::Timeout:
+            return rpc::fail("timeout", "the lock did not answer");
+        case Status::Disconnected:
+            return rpc::fail("disconnected", "the Bluetooth link to the lock dropped");
+        case Status::BadResponse:
+            return rpc::fail("bad_response", "the lock sent an answer the board could not read");
+        case Status::BadCrc:
+            return rpc::fail("bad_crc", "the lock sent a damaged answer");
+        case Status::LockError: {
+            char message[80];
+            std::snprintf(message, sizeof(message), "the lock refused the command: %s (0x%02x)",
+                          ttlock::lockErrorName(lockError), lockError);
+            return rpc::fail("lock_error", message);
+        }
+        case Status::Unsupported:
+            return rpc::fail("unsupported", "the lock does not support that");
+        case Status::NotPaired:
+            return notPaired();
+        case Status::PairIncomplete:
+            return rpc::fail("pair_incomplete", "pairing stopped before it finished");
+        case Status::Busy:
+            return rpc::fail("busy", "the lock is busy");
+        case Status::InvalidArgument:
+            return rpc::fail("invalid_argument", "the lock cannot take that value");
+        case Status::TimeUnsynced:
+            return rpc::fail("time_unsynced", "the board clock is not set yet");
+        case Status::Ok:
+            break;
+    }
+    return rpc::fail("internal", "unexpected lock status");
+}
+
 void start() {
     std::vector<Record> records;
     const esp_err_t error = store::locks::list(records);
@@ -1723,21 +1733,25 @@ void start() {
         const int64_t nowMs = monotonicMs();
         for (const Record& record : records) {
             Lock lock{record, Live{}};
+            bool alertsChanged = false;
             const esp_err_t alertRead = store::alerts::load(record.mac, lock.live.alerts);
-            lock.live.alertsReadable = alertRead == ESP_OK;
             if (alertRead != ESP_OK) {
-                ESP_LOGE(TAG, "cannot read the recent alerts of %s: %s", record.mac, esp_err_to_name(alertRead));
+                ESP_LOGE(TAG, "cannot read the recent alerts of %s: %s; starting a new list", record.mac,
+                         esp_err_to_name(alertRead));
+                lock.live.alerts = latchkey_util::LockAlerts::lost();
+                alertsChanged = true;
             }
             const esp_err_t read = store::watch::load(record.mac, lock.live.watch.state());
             if (read != ESP_OK) {
                 lock.live.watchReadFailed = true;
                 ESP_LOGE(TAG, "cannot read where the log of %s was read up to: %s", record.mac, esp_err_to_name(read));
-                if (lock.live.alertsReadable) {
-                    latchkey_util::LockAlert warning;
-                    warning.kind = latchkey_util::LockAlertKind::WatchStateUnreadable;
-                    lock.live.alerts.add(warning);
-                    lock.live.alertWriteFailed = store::alerts::save(record.mac, lock.live.alerts) != ESP_OK;
-                }
+                latchkey_util::LockAlert warning;
+                warning.kind = latchkey_util::LockAlertKind::WatchStateUnreadable;
+                lock.live.alerts.add(warning);
+                alertsChanged = true;
+            }
+            if (alertsChanged) {
+                lock.live.alertWriteFailed = store::alerts::save(record.mac, lock.live.alerts) != ESP_OK;
             }
             lock.live.schedule.begin(s_locks.size(), nowMs, kWatchFirstMs, kWatchSpreadMs);
             s_locks.push_back(std::move(lock));
@@ -1940,7 +1954,7 @@ esp_err_t rememberAlert(const std::string& mac, const latchkey_util::LockAlert& 
     added = false;
     std::lock_guard<std::mutex> guard(s_mutex);
     Lock* lock = findLocked(mac);
-    if (lock == nullptr || s_erased || !lock->live.alertsReadable) {
+    if (lock == nullptr || s_erased) {
         return ESP_ERR_INVALID_STATE;
     }
     latchkey_util::LockAlerts changed = lock->live.alerts;
@@ -1951,12 +1965,10 @@ esp_err_t rememberAlert(const std::string& mac, const latchkey_util::LockAlert& 
     if (!fresh && !lock->live.alertWriteFailed) {
         return ESP_OK;
     }
+    lock->live.alerts = changed;
+    added = fresh;
     const esp_err_t error = store::alerts::save(mac.c_str(), changed);
     lock->live.alertWriteFailed = error != ESP_OK;
-    if (error == ESP_OK) {
-        lock->live.alerts = changed;
-        added = fresh;
-    }
     return error;
 }
 
@@ -1965,9 +1977,6 @@ rpc::Reply alerts(const std::string& mac) {
     const Lock* lock = findLocked(mac);
     if (lock == nullptr) {
         return notPaired();
-    }
-    if (!lock->live.alertsReadable) {
-        return rpc::fail("internal", "the board cannot read the stored alerts for this lock");
     }
     return rpc::ok(alertsJson(lock->live));
 }
@@ -1981,9 +1990,6 @@ rpc::Reply acknowledgeAlerts(const std::string& mac, uint32_t through) {
         if (lock == nullptr) {
             return notPaired();
         }
-        if (!lock->live.alertsReadable) {
-            return rpc::fail("internal", "the board cannot read the stored alerts for this lock");
-        }
         latchkey_util::LockAlerts changed = lock->live.alerts;
         if (!changed.acknowledge(through)) {
             return rpc::fail("invalid_argument", "through must identify an alert already issued for this lock");
@@ -1996,10 +2002,7 @@ rpc::Reply acknowledgeAlerts(const std::string& mac, uint32_t through) {
             }
             lock->live.alerts = changed;
         }
-        lock->live.watchReadFailed = std::any_of(changed.entries().begin(), changed.entries().end(),
-                                                [](const latchkey_util::LockAlert& alert) {
-                                                    return alert.kind == latchkey_util::LockAlertKind::WatchStateUnreadable;
-                                                });
+        lock->live.watchReadFailed = holdsAlertOf(lock->live, latchkey_util::LockAlertKind::WatchStateUnreadable);
         remaining = changed.entries().size();
         reply = rpc::ok(alertsJson(lock->live));
     }

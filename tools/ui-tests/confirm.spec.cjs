@@ -64,7 +64,9 @@ test('a confirmed press shows the confirmation then the result', async ({ page }
   await expect(secret).toBeHidden();
 });
 
-test('unverified switch writes refuse before a button prompt even with a backup', async ({ page }) => {
+test('switch writes refuse before a button prompt, and turning the reset button off always asks for a backup', async ({
+  page,
+}) => {
   await login(page);
   await openLock(page, 'Front door', 'Settings');
   const reset = page.getByRole('switch', { name: 'Physical reset button' });
@@ -100,7 +102,7 @@ test('unverified switch writes refuse before a button prompt even with a backup'
             )?.data.error?.code;
           }, result),
         )
-        .toBe('unverified');
+        .toBe(method === 'lock.resetButton.set' && !enabled ? 'backup_required' : 'unverified');
     }
   }
   expect(

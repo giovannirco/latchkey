@@ -136,4 +136,14 @@ std::string autolockJson(const ttlock::AutoLockSetting& setting) {
     return out;
 }
 
+std::string passageAddStopped(std::string_view failure, size_t added) {
+    std::string message(failure);
+    if (added == 0) {
+        return message;
+    }
+    message += "; " + std::to_string(added);
+    message += added == 1 ? " passage window was added before that" : " passage windows were added before that";
+    return message;
+}
+
 }
