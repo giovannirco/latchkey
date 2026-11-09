@@ -23,13 +23,12 @@ struct BackupKey {
     ~BackupKey() { wipe(bytes.data(), bytes.size()); }
 };
 
-bool validText(std::string_view text, size_t maxBytes, size_t maxPoints = SIZE_MAX) {
+bool validUtf8(std::string_view text, size_t maxBytes, size_t maxPoints = SIZE_MAX) {
     if (text.size() > maxBytes) return false;
     size_t points = 0;
     for (size_t at = 0; at < text.size(); ++points) {
         const auto first = static_cast<uint8_t>(text[at++]);
         if (first < 0x80) {
-            if (first < 0x20 || first == 0x7F) return false;
             continue;
         }
         uint32_t value = 0;
@@ -59,6 +58,11 @@ bool validText(std::string_view text, size_t maxBytes, size_t maxPoints = SIZE_M
         if (value < minimum || value > 0x10FFFF || (value >= 0xD800 && value <= 0xDFFF)) return false;
     }
     return points <= maxPoints;
+}
+
+bool validText(std::string_view text, size_t maxBytes, size_t maxPoints = SIZE_MAX) {
+    return validUtf8(text, maxBytes, maxPoints) &&
+           std::none_of(text.begin(), text.end(), [](unsigned char byte) { return byte < 0x20 || byte == 0x7F; });
 }
 
 class Reader {
@@ -394,7 +398,7 @@ bool parseBackupHeader(std::span<const uint8_t> bytes, BackupHeader& out) {
 
 BackupStatus sealBackup(SensitiveBuffer plaintext, std::string_view password, BackupCrypto& crypto,
                          SensitiveBuffer& out) {
-    if (plaintext.size() < 2 || password.size() < 12 || !validText(password, 128)) return BackupStatus::Invalid;
+    if (plaintext.size() < 2 || password.size() < 12 || !validUtf8(password, 128)) return BackupStatus::Invalid;
     if (plaintext.size() > kMaxBackupPlaintext) return BackupStatus::TooLarge;
     const size_t plainSize = plaintext.size();
     const size_t envelopeSize = kBackupHeaderSize + plainSize + kBackupTagSize;
@@ -423,7 +427,7 @@ BackupStatus sealBackup(SensitiveBuffer plaintext, std::string_view password, Ba
 BackupStatus openBackup(SensitiveBuffer envelope, std::string_view password, BackupCrypto& crypto,
                          SensitiveBuffer& out) {
     if (envelope.size() < kBackupHeaderSize + kBackupTagSize + 2 || envelope.size() > kMaxBackupEnvelope ||
-        password.size() < 12 || !validText(password, 128)) return BackupStatus::Invalid;
+        password.size() < 12 || !validUtf8(password, 128)) return BackupStatus::Invalid;
     BackupHeader header;
     if (!parseBackupHeader({envelope.data(), kBackupHeaderSize}, header)) return BackupStatus::Invalid;
     BackupKey key;

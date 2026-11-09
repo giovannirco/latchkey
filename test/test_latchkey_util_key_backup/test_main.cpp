@@ -507,6 +507,21 @@ static void test_crypto_failures_are_atomic_and_passphrases_are_bounded_utf8() {
     TEST_ASSERT_EQUAL_UINT(0, unused.derivations);
 }
 
+static void test_passphrases_preserve_valid_utf8_ascii_controls() {
+    std::string password = "backup passphrase\n\t\r";
+    password.push_back('\0');
+    password.push_back('\x7F');
+    ReferenceCrypto crypto;
+    SensitiveBuffer sealed;
+    TEST_ASSERT_EQUAL_INT(static_cast<int>(BackupStatus::Ok),
+                          static_cast<int>(sealBackup(plaintext(), password, crypto, sealed)));
+    SensitiveBuffer opened;
+    TEST_ASSERT_EQUAL_INT(static_cast<int>(BackupStatus::Ok),
+                          static_cast<int>(openBackup(std::move(sealed), password, crypto, opened)));
+    TEST_ASSERT_EQUAL_UINT(kPlaintext.size(), opened.size());
+    TEST_ASSERT_EQUAL_MEMORY(kPlaintext.data(), opened.data(), opened.size());
+}
+
 int main() {
     UNITY_BEGIN();
     RUN_TEST(test_full_record_roundtrip_and_move_owned_views);
@@ -523,5 +538,6 @@ int main() {
     RUN_TEST(test_unsupported_headers_and_sizes_fail_before_derivation);
     RUN_TEST(test_wrong_password_and_header_ciphertext_tag_tampering_return_no_plaintext);
     RUN_TEST(test_crypto_failures_are_atomic_and_passphrases_are_bounded_utf8);
+    RUN_TEST(test_passphrases_preserve_valid_utf8_ascii_controls);
     return UNITY_END();
 }
