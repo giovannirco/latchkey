@@ -9,7 +9,7 @@ Notable changes to Latchkey, in the format of [Keep a Changelog](https://keepach
 
 - Lock settings from the board, each checked against the lock's feature bits before any Bluetooth: `lock.autolock.get`/`set`, `lock.passage.list`/`add`/`delete`/`clear` (weekly windows in the lock's local time), `lock.sound.get`/`set`, `lock.resetButton.get`, `lock.privacyLock.get` and `lock.tamperAlert.get`. All three switches are read-only until their write layout is verified on hardware; writes refuse with `unverified` before any Bluetooth frame or button prompt. Turning the reset button off without a key backup refuses first with `backup_required`.
 - The lock's operation log: `lock.log.fetch` reads new records from a cursor the board keeps per lock in NVS (found by bisection the first time) and answers the newest entries, or those after `since`, as `{entries, last, more}`; passcodes the lock records in its log never leave the board.
-- Unlock alerts: the board reads each lock's log after the connections it makes anyway, and about every six hours otherwise, and raises `lock.alert {lock, method, time, seq, type}` with an audit entry (source `board`) for every unlock from an app it did not make and every forced opening. The web UI shows a notice that stays until dismissed.
+- Unlock alerts: the board reads each lock's log after the connections it makes anyway, and about every six hours otherwise, and raises `lock.alert {lock, method, time, seq, type}` with an audit entry (source `board`) for every unlock from an app it did not make and every forced opening. The newest eight unacknowledged alerts per lock survive a restart in NVS and appear in the dashboard badge and lock page; `lock.alerts.list` and `lock.alerts.ack {through}` leave later arrivals unread. Live notices stay until dismissed.
 - The lock's clock follows the board's time zone: the board sets it again after a time-zone change or a daylight-saving change, and once a day against drift.
 - Web UI: reset button, privacy lock and tamper alert shown read-only, features the board does not use listed apart, and the log reads on until it has every new entry.
 - `tools/hil/test_lock_settings.py` and `tools/hil/test_lock_log.py`, run on the owner's lock.
@@ -19,6 +19,9 @@ Notable changes to Latchkey, in the format of [Keep a Changelog](https://keepach
 - The remote unlock control is gone from the web UI and the mock: the board does not implement it, and the lock's `config_gateway_unlock` bit is listed as reported but not used.
 
 ### Fixed
+
+- A corrupt operation-log cursor raises a persistent monitoring warning, also in `system.info.warnings`; dedicated log connections skip locks without a recent advertisement.
+- Reloading a lock-detail page waits for its event socket before issuing job-based requests, so fast results are received.
 
 - Unlock alerts match the lock's returned record id before using a time window, and each log page advances its cursor and consumes matching unlocks together.
 - Clock changes wait until the log backlog is read. Routine clock corrections preserve the preceding UTC offset, and old records across the most recent offset change keep their original times without raising duplicate alerts.

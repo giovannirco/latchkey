@@ -41,8 +41,34 @@ rpc::Reply logFetch(const cJSON* params, const rpc::Context&) {
     return lock_access::withTarget(lock_manager::readLog(mac, since), mac);
 }
 
+rpc::Reply alertsList(const cJSON* params, const rpc::Context&) {
+    std::string mac;
+    if (!lock_access::readLock(params, mac)) {
+        return lock_access::invalid(lock_access::kLockMessage);
+    }
+    return lock_access::withTarget(lock_manager::alerts(mac), mac);
 }
 
-void registerLog() { rpc::registerMethod("lock.log.fetch", {.audited = false, .job = true}, logFetch); }
+rpc::Reply alertsAcknowledge(const cJSON* params, const rpc::Context&) {
+    std::string mac;
+    if (!lock_access::readLock(params, mac)) {
+        return lock_access::invalid(lock_access::kLockMessage);
+    }
+    const cJSON* through = lock_access::member(params, "through");
+    if (!cJSON_IsNumber(through) || !std::isfinite(through->valuedouble) ||
+        std::floor(through->valuedouble) != through->valuedouble || through->valuedouble < 0 ||
+        through->valuedouble > UINT32_MAX) {
+        return lock_access::invalid("through must be an alert id from 0 to 4294967295");
+    }
+    return lock_access::withTarget(lock_manager::acknowledgeAlerts(mac, static_cast<uint32_t>(through->valuedouble)), mac);
+}
+
+}
+
+void registerLog() {
+    rpc::registerMethod("lock.log.fetch", {.audited = false, .job = true}, logFetch);
+    rpc::registerMethod("lock.alerts.list", {.audited = false}, alertsList);
+    rpc::registerMethod("lock.alerts.ack", {}, alertsAcknowledge);
+}
 
 }

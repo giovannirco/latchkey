@@ -4,7 +4,7 @@ const { test, expect, calls, login, openLock, openTab, SHED } = require('./suppo
 const GATED = /^lock\.(fingerprints|cards|passage|sound|resetButton|privacyLock|tamperAlert)\./;
 
 async function headings(page) {
-  return page.locator('#main h2').allInnerTexts();
+  return page.locator('#main .panel h2').allInnerTexts();
 }
 
 test('controls for features a lock does not report are hidden', async ({ page, request }) => {

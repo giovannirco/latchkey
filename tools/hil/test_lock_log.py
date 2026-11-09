@@ -63,7 +63,9 @@ def check_page(page: dict[str, Any]) -> None:
 
 
 def alerts(console: Console, mac: str) -> list[dict[str, Any]]:
-    return [event["data"] for event in console.events if event["event"] == "lock.alert" and event["data"]["lock"] == mac]
+    return [
+        event["data"] for event in console.events if event["event"] == "lock.alert" and event["data"]["lock"] == mac
+    ]
 
 
 def wait_line(console: Console, pattern: re.Pattern[str], since: int, timeout: float) -> re.Match[str]:
@@ -122,7 +124,24 @@ def test_the_log_shows_the_newest_entries_then_only_newer_ones(
         assert older["entries"] and all(since < entry["seq"] <= since + SHOWN_SLOTS for entry in older["entries"])
         assert older["more"]
     types = Counter(entry["type"] for entry in page["entries"])
-    print(f"log: newest {len(page['entries'])} entries up to record {page['last']}, types {dict(types)}", file=sys.stderr)
+    print(
+        f"log: newest {len(page['entries'])} entries up to record {page['last']}, types {dict(types)}", file=sys.stderr
+    )
+
+
+def test_recent_alerts_are_readable_and_a_zero_acknowledgement_keeps_them(
+    console: Console, held: dict[str, Any], lock_mac: str
+) -> None:
+    before = console.call("lock.alerts.list", {"lock": lock_mac})
+    assert set(before) == {"alerts", "warnings"}
+    ids = [alert["id"] for alert in before["alerts"]]
+    assert ids == sorted(set(ids), reverse=True)
+    assert all(isinstance(warning, str) for warning in before["warnings"])
+    assert console.call("lock.alerts.ack", {"lock": lock_mac, "through": 0}) == before
+    assert stored(console, lock_mac)["alertCount"] == len(ids)
+    for through in (-1, 1.5, True, "1", 2**32):
+        assert code_of(console, "lock.alerts.ack", {"lock": lock_mac, "through": through}) == "invalid_argument"
+    assert console.call("lock.alerts.list", {"lock": lock_mac}) == before
 
 
 def test_an_unlock_by_the_board_raises_no_alert(console: Console, held: dict[str, Any], lock_mac: str) -> None:

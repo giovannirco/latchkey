@@ -60,7 +60,9 @@ test('features the board does not use are listed apart', async ({ page }) => {
 test('an unlock alert shows a notice that stays until it is dismissed', async ({ page, request }) => {
   await login(page);
   const time = Math.floor(Date.now() / 1000) - 120;
-  await mock(request, { emit: [{ event: 'lock.alert', data: { lock: FRONT_DOOR, method: 'app', time, seq: 41 } }] });
+  await mock(request, {
+    emit: [{ event: 'lock.alert', data: { lock: FRONT_DOOR, method: 'app', time, seq: 41, type: 1 } }],
+  });
   const notice = page.locator('#toasts .toast-alarm');
   await expect(notice).toContainText('Front door was unlocked from the app, and not by Latchkey');
   await page.waitForTimeout(7000);
@@ -68,7 +70,9 @@ test('an unlock alert shows a notice that stays until it is dismissed', async ({
   await notice.getByRole('button', { name: 'Dismiss' }).click();
   await expect(notice).toHaveCount(0);
 
-  await mock(request, { emit: [{ event: 'lock.alert', data: { lock: FRONT_DOOR, method: 'forced', time, seq: 42 } }] });
+  await mock(request, {
+    emit: [{ event: 'lock.alert', data: { lock: FRONT_DOOR, method: 'forced', time, seq: 42, type: 29 } }],
+  });
   await expect(page.locator('#toasts .toast-alarm')).toContainText('Front door was forced open');
 });
 
@@ -86,4 +90,92 @@ test('the log shows the newest entries and reads on until it has every new one',
   await expect(rows).toHaveCount(36);
   const fetched = (await calls(request)).filter((call) => call.method === 'lock.log.fetch').map((call) => call.params);
   expect(fetched).toEqual([{ lock: FRONT_DOOR }, { lock: FRONT_DOOR, since: 30 }, { lock: FRONT_DOOR, since: 46 }]);
+});
+
+test('an alert raised with no browser open stays visible until acknowledged', async ({ page, request }) => {
+  const time = Math.floor(Date.now() / 1000) - 120;
+  await mock(request, {
+    emit: [{ event: 'lock.alert', data: { lock: FRONT_DOOR, method: 'app', time, seq: 41, type: 1 } }],
+  });
+  await login(page);
+  await expect(page.getByRole('article', { name: 'Front door' })).toContainText('1 alert');
+  await openLock(page, 'Front door');
+  const alerts = page.getByRole('region', { name: 'Alerts', exact: true });
+  await expect(alerts).toContainText('unlocked from the app');
+  await page.reload();
+  await expect(page.getByRole('region', { name: 'Alerts', exact: true })).toContainText('unlocked from the app');
+  await page.getByRole('button', { name: 'Acknowledge alerts' }).click();
+  await expect(page.getByRole('region', { name: 'Alerts', exact: true })).toContainText('No unacknowledged alerts');
+  await page.reload();
+  await expect(page.getByRole('region', { name: 'Alerts', exact: true })).toContainText('No unacknowledged alerts');
+  expect((await calls(request)).filter((call) => call.method === 'lock.alerts.ack')).toEqual([
+    { method: 'lock.alerts.ack', params: { lock: FRONT_DOOR, through: 1 } },
+  ]);
+});
+
+test('an unreadable watch state is a monitoring warning without an unlock alarm', async ({ page, request }) => {
+  await mock(request, {
+    setLock: {
+      id: FRONT_DOOR,
+      alertNext: 2,
+      alerts: [{ id: 1, kind: 'watch_state_unreadable', time: null, method: 'none', seq: 0, type: 0 }],
+    },
+  });
+  await login(page);
+  await expect(page.getByRole('article', { name: 'Front door' })).toContainText('Monitoring warning');
+  await openLock(page, 'Front door');
+  await expect(page.getByRole('region', { name: 'Alerts', exact: true })).toContainText(
+    'some events may have been missed',
+  );
+  await expect(page.locator('#toasts .toast-alarm')).toHaveCount(0);
+  await page.getByRole('button', { name: 'Acknowledge alerts' }).click();
+  await expect(page.getByRole('region', { name: 'Alerts', exact: true })).toContainText('No unacknowledged alerts');
+});
+
+test('an older alert-list response cannot restore an acknowledged badge', async ({ page, request }) => {
+  const time = Math.floor(Date.now() / 1000);
+  await mock(request, {
+    emit: [{ event: 'lock.alert', data: { lock: FRONT_DOOR, method: 'app', time, seq: 41, type: 1 } }],
+  });
+  await login(page);
+  let held;
+  let intercepted = false;
+  await page.route('**/api/rpc', async (route) => {
+    if (route.request().postDataJSON().method === 'lock.alerts.list' && !intercepted) {
+      intercepted = true;
+      held = route;
+      return;
+    }
+    await route.continue();
+  });
+  await mock(request, {
+    emit: [{ event: 'lock.alert', data: { lock: FRONT_DOOR, method: 'app', time, seq: 42, type: 1 } }],
+  });
+  await expect.poll(() => Boolean(held)).toBe(true);
+  await page.evaluate(async (lock) => {
+    await fetch('/api/rpc', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id: 999, method: 'lock.alerts.ack', params: { lock, through: 2 } }),
+    });
+  }, FRONT_DOOR);
+  const badge = page
+    .getByRole('article', { name: 'Front door' })
+    .locator('.badge')
+    .filter({ hasText: /^\d+ alerts?$/ });
+  await expect(badge).toBeHidden();
+  const finished = page.waitForResponse(
+    (response) => response.request().postDataJSON()?.id === held.request().postDataJSON().id,
+  );
+  await held.fulfill({
+    json: { id: held.request().postDataJSON().id, result: { alerts: [{ id: 1 }, { id: 2 }], warnings: [] } },
+  });
+  await (await finished).finished();
+  await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+  await expect(
+    page
+      .getByRole('article', { name: 'Front door' })
+      .locator('.badge')
+      .filter({ hasText: /^\d+ alerts?$/ }),
+  ).toBeHidden();
 });

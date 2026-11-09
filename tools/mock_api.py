@@ -29,6 +29,10 @@ did not make, or a forced opening; tests emit one with the emit hook. Switch wri
 unverified before any radio traffic or board-button wait. Turning the reset button off without a
 key backup refuses first with backup_required.
 
+lock.alerts.list answers {alerts, warnings}; lock.alerts.ack {lock, through} acknowledges displayed
+ids without removing later arrivals. These two methods do not use Bluetooth or run as jobs.
+locks.list includes alertCount and warnings; system.info includes warnings grouped by lock.
+
 Test hooks used by tools/ui-tests/:
 
 - POST /__mock/control  {"reset": true} restores the demo state; other keys: "confirm" ("auto" or
@@ -315,7 +319,14 @@ def public_passcode(entry: dict) -> dict:
 
 def summary(lock: dict) -> dict:
     keys = ("id", "mac", "name", "model", "state", "battery", "rssi", "lastSeen", "lastEvent", "hardened", "backedUp")
-    return {key: copy.deepcopy(lock[key]) for key in keys}
+    result = {key: copy.deepcopy(lock[key]) for key in keys}
+    result["alertCount"] = len(lock["alerts"])
+    result["warnings"] = list(lock["warnings"])
+    if any(alert["kind"] == "watch_state_unreadable" for alert in lock["alerts"]):
+        result["warnings"].append(
+            "The saved operation-log cursor could not be read. Monitoring restarted; some events may have been missed."
+        )
+    return result
 
 
 def advert_name(lock: dict) -> str:
@@ -407,6 +418,8 @@ def demo_locks() -> list[dict]:
             stamp, [(5 * day, LOG_POWER_ON, 40), (3600, LOG_PASSCODE_UNLOCK, 34), (3000, LOG_KEY_UNLOCK, 34)]
         ),
     }
+    for lock in (front, shed):
+        lock.update(alerts=[], alertNext=1, warnings=[])
     return [front, shed]
 
 
@@ -447,6 +460,9 @@ def new_lock(mac: str, name: str, admin_passcode: str) -> dict:
         "cards": [],
         "passage": [],
         "log": demo_log(stamp, [(5, LOG_POWER_ON, 100)]),
+        "alerts": [],
+        "alertNext": 1,
+        "warnings": [],
     }
 
 
@@ -555,6 +571,15 @@ class Mock:
     def emit(self, event: str, data: Any, generation: int | None = None, tokens: set[str | None] | None = None) -> None:
         if generation is not None and generation != self.generation:
             return
+        if event == "lock.alert":
+            with self.lock:
+                lock = self.locks[data["lock"]]
+                alert = {"kind": "unexpected_unlock", **{key: data[key] for key in ("time", "method", "seq", "type")}}
+                if any(all(held[key] == value for key, value in alert.items()) for held in lock["alerts"]):
+                    return
+                lock["alerts"].append({"id": lock["alertNext"], **alert})
+                lock["alertNext"] += 1
+                lock["alerts"] = lock["alerts"][-8:]
         self.events.publish(event, data, tokens)
 
     def wait(self, seconds: float, generation: int) -> bool:
@@ -727,6 +752,12 @@ class Mock:
     @rpc("system.info", audited=False)
     def system_info(self, ctx: Context, params: dict) -> dict:
         synced = self.config.time_synced
+        with self.lock:
+            warnings = [
+                {"lock": lock["id"], "warnings": summary(lock)["warnings"]}
+                for lock in self.locks.values()
+                if summary(lock)["warnings"]
+            ]
         return {
             "firmware": "0.1.0",
             "board": "esp32s3-atom",
@@ -739,6 +770,7 @@ class Mock:
             "localTime": time.strftime("%Y-%m-%dT%H:%M:%S+00:00", time.gmtime()) if synced else None,
             "wifi": dict(self.wifi),
             "certFingerprint": CERT_FINGERPRINT,
+            "warnings": warnings,
         }
 
     @rpc("system.setup", session=False, audited=False)
@@ -1224,6 +1256,26 @@ class Mock:
         with self.radio():
             lock["sound"] = {"enabled": enabled, "volume": volume}
         return {**lock["sound"], "levels": 5}
+
+    @rpc("lock.alerts.list", audited=False)
+    def lock_alerts_list(self, ctx: Context, params: dict) -> dict:
+        lock = self.get_lock(params)
+        with self.lock:
+            return {"alerts": copy.deepcopy(list(reversed(lock["alerts"]))), "warnings": summary(lock)["warnings"]}
+
+    @rpc("lock.alerts.ack")
+    def lock_alerts_ack(self, ctx: Context, params: dict) -> dict:
+        through = int_param(params, "through", lo=0, hi=2**32 - 1)
+        if through is None:
+            raise invalid("through must be an alert id")
+        lock = self.get_lock(params)
+        with self.lock:
+            if through >= lock["alertNext"]:
+                raise invalid("through must identify an alert already issued for this lock")
+            lock["alerts"] = [alert for alert in lock["alerts"] if alert["id"] > through]
+            count = len(lock["alerts"])
+        self.emit("lock.alerts.changed", {"lock": lock["id"], "alertCount": count})
+        return self.lock_alerts_list(ctx, params)
 
     @rpc("lock.resetButton.get", feature="reset_button", audited=False, job=True)
     def lock_reset_button_get(self, ctx: Context, params: dict) -> dict:
