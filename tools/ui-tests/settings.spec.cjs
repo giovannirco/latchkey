@@ -132,6 +132,26 @@ test('an unreadable watch state is a monitoring warning without an unlock alarm'
   await expect(page.getByRole('region', { name: 'Alerts', exact: true })).toContainText('No unacknowledged alerts');
 });
 
+test('an alert table the board could not read is a warning without an unlock alarm', async ({ page, request }) => {
+  await mock(request, {
+    setLock: {
+      id: FRONT_DOOR,
+      alertNext: 2,
+      alerts: [{ id: 1, kind: 'alerts_unreadable', time: null, method: 'none', seq: 0, type: 0 }],
+    },
+  });
+  await login(page);
+  await expect(page.getByRole('article', { name: 'Front door' })).toContainText('Monitoring warning');
+  await openLock(page, 'Front door');
+  const alerts = page.getByRole('region', { name: 'Alerts', exact: true });
+  await expect(alerts).toContainText('The stored alerts could not be read and were cleared');
+  await expect(alerts.getByRole('listitem')).toHaveText(['Alerts stored before this could not be read and are lost.']);
+  await expect(page.locator('#toasts .toast-alarm')).toHaveCount(0);
+  await page.getByRole('button', { name: 'Acknowledge alerts' }).click();
+  await expect(alerts).toContainText('No unacknowledged alerts');
+  await expect(alerts).not.toContainText('could not be read');
+});
+
 test('an older alert-list response cannot restore an acknowledged badge', async ({ page, request }) => {
   const time = Math.floor(Date.now() / 1000);
   await mock(request, {

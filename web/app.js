@@ -594,6 +594,11 @@ function toast(message, { error = false, warning = false, alarm = false, detail 
   if (!warning && !alarm) setTimeout(() => item.remove(), error ? ERROR_TOAST_MS : TOAST_MS);
 }
 
+const STORED_WARNING_TEXT = {
+  watch_state_unreadable: 'The saved operation-log cursor could not be read. Some events may have been missed.',
+  alerts_unreadable: 'Alerts stored before this could not be read and are lost.',
+};
+
 function alertText(data) {
   const lock = state.locks.find((item) => item.id === data.lock);
   const name = lock ? lock.name : data.lock;
@@ -1724,9 +1729,8 @@ async function renderAlerts(view, lock) {
               h(
                 'li',
                 null,
-                alert.kind === 'watch_state_unreadable'
-                  ? 'The saved operation-log cursor could not be read. Some events may have been missed.'
-                  : `${alertText({ ...alert, lock: lock.id })} - ${formatTime(alert.time)}`,
+                STORED_WARNING_TEXT[alert.kind] ||
+                  `${alertText({ ...alert, lock: lock.id })} - ${formatTime(alert.time)}`,
               ),
             ),
           )

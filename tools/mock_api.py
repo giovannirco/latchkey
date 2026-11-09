@@ -30,7 +30,9 @@ unverified before any radio traffic or board-button wait. Turning the reset butt
 with backup_required, with or without a key backup.
 
 lock.alerts.list answers {alerts, warnings}; lock.alerts.ack {lock, through} acknowledges displayed
-ids without removing later arrivals. These two methods do not use Bluetooth or run as jobs.
+ids without removing later arrivals. An alert's kind is unexpected_unlock, or a stored warning:
+watch_state_unreadable (the log cursor was lost) or alerts_unreadable (the stored alerts could not be
+read, so the board started a new list). These two methods do not use Bluetooth or run as jobs.
 locks.list includes alertCount and warnings; system.info includes warnings grouped by lock.
 
 Test hooks used by tools/ui-tests/:
@@ -364,6 +366,10 @@ def summary(lock: dict) -> dict:
     result = {key: copy.deepcopy(lock[key]) for key in keys}
     result["alertCount"] = len(lock["alerts"])
     result["warnings"] = list(lock["warnings"])
+    if any(alert["kind"] == "alerts_unreadable" for alert in lock["alerts"]):
+        result["warnings"].append(
+            "The stored alerts could not be read and were cleared; alerts raised before then are lost."
+        )
     if any(alert["kind"] == "watch_state_unreadable" for alert in lock["alerts"]):
         result["warnings"].append(
             "The saved operation-log cursor could not be read. Monitoring restarted; some events may have been missed."
