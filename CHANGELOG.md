@@ -9,6 +9,7 @@ Notable changes to Latchkey, in the format of [Keep a Changelog](https://keepach
 
 - Web requests keep their timeout until the response body finishes, so a stalled reply cannot leave an action waiting indefinitely.
 - The web UI refuses malformed or mismatched RPC success replies instead of reporting an action as successful without a valid result.
+- Signing out clears pending and cached browser jobs; responses from an earlier session cannot reopen secret dialogs or end a later session.
 
 ## [0.4.0] - 2026-11-09
 

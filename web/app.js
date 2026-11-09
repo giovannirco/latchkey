@@ -21,6 +21,7 @@ const LOG_LEVELS = [
 ];
 
 const ERROR_TEXT = {
+  session_changed: 'The session that started this action ended. Check its result before retrying.',
   unauthorized: 'Your session ended. Sign in again.',
   rate_limited: 'Too many attempts. Wait a moment and try again.',
   time_unsynced:
@@ -233,6 +234,7 @@ let cleanups = [];
 let renderSeq = 0;
 let uidSeq = 0;
 let rpcSeq = 0;
+let sessionEpoch = 0;
 
 const uid = (prefix) => `${prefix}-${++uidSeq}`;
 
@@ -353,6 +355,7 @@ function timeoutFor(method) {
 }
 
 async function call(method, params = {}) {
+  const sentSession = sessionEpoch;
   const id = ++rpcSeq;
   const budget = timeoutFor(method);
   const started = Date.now();
@@ -382,6 +385,7 @@ async function call(method, params = {}) {
   } finally {
     clearTimeout(timer);
   }
+  if (sentSession !== sessionEpoch) throw new ApiError('session_changed');
   if (body && body.error) throw apiError(body.error);
   if (!response.ok) throw new ApiError('http', `HTTP ${response.status}`);
   if (!body || body.id !== id || !body.result || typeof body.result !== 'object' || Array.isArray(body.result)) {
@@ -395,15 +399,18 @@ async function call(method, params = {}) {
 }
 
 async function rpc(method, params) {
+  const sentSession = sessionEpoch;
   try {
     const result = await call(method, params);
+    if (sentSession !== sessionEpoch) throw new ApiError('session_changed');
     showWarning(result);
     return result;
   } catch (failure) {
+    if (sentSession !== sessionEpoch) throw new ApiError('session_changed');
     if (failure.code === 'unauthorized' && state.authed) sessionLost();
     throw failure;
   } finally {
-    boardButton.settle(method);
+    if (sentSession === sessionEpoch) boardButton.settle(method);
   }
 }
 
@@ -466,7 +473,9 @@ const events = (() => {
       if (opened) notify('reopen');
       opened = true;
     });
-    current.addEventListener('message', dispatch);
+    current.addEventListener('message', (message) => {
+      if (socket === current) dispatch(message);
+    });
     current.addEventListener('close', () => {
       if (socket !== current) return;
       socket = null;
@@ -564,6 +573,15 @@ const jobs = (() => {
 
   return {
     epoch: () => epoch,
+    reset() {
+      epoch += 1;
+      early.clear();
+      for (const waiter of waiting.values()) {
+        clearTimeout(waiter.timer);
+        waiter.reject(new ApiError('session_changed'));
+      }
+      waiting.clear();
+    },
     wait(id, timeoutMs, sentEpoch) {
       const done = early.get(id);
       if (done) {
@@ -1038,6 +1056,12 @@ function loginErrorText(failure) {
 }
 
 function showLogin(message) {
+  sessionEpoch += 1;
+  renderSeq += 1;
+  state.authed = false;
+  state.info = null;
+  state.locks = [];
+  jobs.reset();
   for (const fn of cleanups.splice(0)) fn();
   closeDialogs();
   const error = h('p', { class: 'form-error', role: 'alert', hidden: true });
