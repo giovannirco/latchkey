@@ -19,6 +19,11 @@ Notable changes to Latchkey, in the format of [Keep a Changelog](https://keepach
 - Lower task-stack allocation leaves more heap available for concurrent Bluetooth, MQTT, syslog and HTTPS.
 - HTTPS releases temporary startup credentials and completed-handshake allocations, and sends large responses in smaller TLS records.
 - Passage-window additions wait up to ten seconds for the lock's acknowledgement; authentication and other commands keep their five-second waits. Slow acknowledgements no longer trigger an early timeout, and writes are never resent.
+- A passage-window addition that fails after storing some of its windows says how many it added, in its message and as `added` in the error. After any failed addition the web UI reads the lock's windows again and says that some may have been added, so it shows what the lock really holds.
+- A lock whose stored alerts cannot be read keeps being monitored: the board starts a new alert list holding a persistent warning (kind `alerts_unreadable`, in `locks.list`, `lock.alerts.list`, `system.info` and the web UI, never sent as `lock.alert`) until it is acknowledged, saves over the unreadable table, and keeps reading the log and setting the lock's clock. It used to refuse every alert, stop log monitoring and clock sync, and clear only with `locks.forget`.
+- A new unlock alert is announced (event, audit entry, MQTT) even when it cannot be saved; its log page is still retried until the save succeeds, without announcing it again.
+- The log ring is wiped at every start. On the classic ESP32 it lives in RTC memory, where earlier lines used to stay readable in memory across a restart or a factory reset.
+- `lock.resetButton.set` from the web answers its refusal even while another request runs, where it could answer `busy`.
 
 ## [0.3.0] - 2026-11-09
 
