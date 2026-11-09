@@ -688,6 +688,7 @@ def test_heap_holds_with_one_tls_session_and_events(relay: Relay, session: Login
     assert info["ble"]["ready"] is True
     assert heap["minFree"] >= MIN_FREE_HEAP
     assert heap["largestBlock"] > 16_384
+    assert all(free >= 1024 for free in info["stackFree"].values() if free)
 
 
 def test_no_secret_reaches_the_console_or_the_audit(console: Console, secrets: dict[str, Any]) -> None:

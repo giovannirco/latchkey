@@ -16,6 +16,7 @@ Notable changes to Latchkey, in the format of [Keep a Changelog](https://keepach
 - `system.wifi.set` from the web now gets its reply: the board answers first and switches networks a second later, where it used to stop Wi-Fi before the reply left.
 - Repeated Wi-Fi changes release their temporary configuration instead of retaining heap.
 - Leaving System during a log read stops polling, including an unfinished page of results.
+- Lower task-stack allocation leaves more heap available for concurrent Bluetooth, MQTT, syslog and HTTPS.
 
 ## [0.3.0] - 2026-11-09
 

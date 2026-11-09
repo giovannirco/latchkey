@@ -23,7 +23,7 @@ namespace jobs {
 namespace {
 
 constexpr const char* TAG = "jobs";
-constexpr uint32_t kTaskStack = 6144;
+constexpr uint32_t kTaskStack = 5120;
 constexpr UBaseType_t kTaskPriority = 5;
 constexpr size_t kCapacity = 4;
 constexpr TickType_t kIdleWait = pdMS_TO_TICKS(1000);

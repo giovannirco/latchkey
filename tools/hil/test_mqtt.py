@@ -646,6 +646,30 @@ def test_a_lost_broker_is_retried_with_a_growing_wait(
 def test_heap_holds_with_mqtt_connected(
     console: Console, connected: Session, secrets: dict[str, Any], board_settings: dict[str, Any]
 ) -> None:
+    exercise_web_heap(console, secrets, board_settings)
+
+
+def test_heap_holds_with_mqtt_and_syslog_enabled(
+    console: Console, connected: Session, secrets: dict[str, Any], board_settings: dict[str, Any]
+) -> None:
+    target = secrets.get("hil_syslog")
+    if not target:
+        pytest.skip("secrets.local.json has no hil_syslog collector")
+    original = console.call("system.syslog.get")
+    try:
+        console.call(
+            "system.syslog.set",
+            {"enabled": True, "host": target["host"], "port": target["port"], "transport": "udp"},
+        )
+        console.wait_info(lambda state: state["syslog"]["connected"], 15.0, "the syslog sender")
+        exercise_web_heap(console, secrets, board_settings)
+        assert console.call("system.info")["stackFree"]["syslog"] >= MIN_STACK_FREE
+    finally:
+        keys = ("enabled", "host", "port", "transport", "appName", "level")
+        console.call("system.syslog.set", {key: original[key] for key in keys})
+
+
+def exercise_web_heap(console: Console, secrets: dict[str, Any], board_settings: dict[str, Any]) -> None:
     console.call("locks.scan", {"seconds": 10}, timeout=30.0)
     relay_settings = secrets.get("hil_relay")
     if relay_settings:
@@ -666,6 +690,7 @@ def test_heap_holds_with_mqtt_connected(
     assert heap["largestBlock"] > 16_384
     assert stacks["mqtt"] >= MIN_STACK_FREE
     assert stacks["mqttClient"] >= MIN_STACK_FREE
+    assert all(free >= MIN_STACK_FREE for free in stacks.values() if free)
 
 
 def test_a_restart_sends_the_last_will_then_online(console: Console, broker: Broker, connected: Session) -> None:
