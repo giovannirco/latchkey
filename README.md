@@ -5,7 +5,7 @@
 
 Latchkey is firmware for ESP32 boards that takes a TTLock Bluetooth LE smart lock off the TTLock cloud and puts it under one owner's control: the board pairs with the lock by itself, manages what the TTLock app can manage on that lock, and serves an owner-only web UI, with no phone app, TTLock account or computer Bluetooth involved.
 
-Latchkey is in early development; the current release is v0.3.0. Pairing from the board, locking and unlocking, passcodes, fingerprints, IC cards, the keypad's super admin passcode, lock settings and the operation log have been checked on a real lock. Unlock alerts persist until acknowledged, and Home Assistant can drive the lock over MQTT. Logging with syslog shipping and board firmware updates from the web page are being built; hardening and the encrypted key backup come next. The [roadmap](https://github.com/giovannirco/latchkey/issues/26) tracks what is left.
+Latchkey is in early development; the current release is v0.4.0. Pairing from the board, locking and unlocking, passcodes, fingerprints, IC cards, the keypad's super admin passcode, lock settings and the operation log have been checked on a real lock. Unlock alerts persist until acknowledged, Home Assistant can drive the lock over MQTT, and the System page shows recent logs with optional syslog shipping. Board firmware updates from the web page are being built; hardening and the encrypted key backup come next. The [roadmap](https://github.com/giovannirco/latchkey/issues/26) tracks what is left.
 
 ## Why
 

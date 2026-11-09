@@ -5,6 +5,8 @@ Notable changes to Latchkey, in the format of [Keep a Changelog](https://keepach
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-11-09
+
 ### Added
 
 - Recent log lines on the board: every line the USB console prints with `#` (ESP-IDF's and Latchkey's, with lines the Wi-Fi driver writes in pieces joined) goes into a RAM ring with its level, tag and boot time, 6 KiB on the classic ESP32 (in RTC memory, so it costs no heap) and 16 KiB on the ESP32-S3. `system.logs {since?, level?, limit?}` pages through it; a line shaped like a secret is kept only as a notice and counted in `system.info.logs.withheld`.
@@ -24,6 +26,11 @@ Notable changes to Latchkey, in the format of [Keep a Changelog](https://keepach
 - A new unlock alert is announced (event, audit entry, MQTT) even when it cannot be saved; its log page is still retried until the save succeeds, without announcing it again.
 - The log ring is wiped at every start. On the classic ESP32 it lives in RTC memory, where earlier lines used to stay readable in memory across a restart or a factory reset.
 - `lock.resetButton.set` from the web answers its refusal even while another request runs, where it could answer `busy`.
+
+### Known issues
+
+- One classic ESP32 stress run recorded a 27,576-byte minimum heap; later unchanged runs passed the 30 KB check. The earlier low point remains untraced ([#21](https://github.com/giovannirco/latchkey/issues/21)).
+- A passage-window write was acknowledged once and then its readback connection dropped; later hardware checks pass, but that disconnect remains untraced ([#31](https://github.com/giovannirco/latchkey/issues/31)).
 
 ## [0.3.0] - 2026-11-09
 
