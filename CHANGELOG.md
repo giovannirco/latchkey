@@ -5,6 +5,14 @@ Notable changes to Latchkey, in the format of [Keep a Changelog](https://keepach
 
 ## [Unreleased]
 
+### Fixed
+
+- Web requests keep their timeout until the response body finishes, so a stalled reply cannot leave an action waiting indefinitely.
+- The web UI refuses malformed or mismatched RPC success replies instead of reporting an action as successful without a valid result.
+- Signing out clears pending and cached browser jobs; responses from an earlier session cannot reopen secret dialogs or end a later session.
+- A failed event connection after sign-in shows a retry action that uses the existing session instead of leaving the page blank.
+- Passcode guidance describes the tested trailing digits without claiming that digits before the code also work.
+
 ## [0.4.0] - 2026-11-09
 
 ### Added

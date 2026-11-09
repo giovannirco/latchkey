@@ -21,6 +21,7 @@ const LOG_LEVELS = [
 ];
 
 const ERROR_TEXT = {
+  session_changed: 'The session that started this action ended. Check its result before retrying.',
   unauthorized: 'Your session ended. Sign in again.',
   rate_limited: 'Too many attempts. Wait a moment and try again.',
   time_unsynced:
@@ -233,6 +234,7 @@ let cleanups = [];
 let renderSeq = 0;
 let uidSeq = 0;
 let rpcSeq = 0;
+let sessionEpoch = 0;
 
 const uid = (prefix) => `${prefix}-${++uidSeq}`;
 
@@ -353,35 +355,43 @@ function timeoutFor(method) {
 }
 
 async function call(method, params = {}) {
+  const sentSession = sessionEpoch;
+  const id = ++rpcSeq;
   const budget = timeoutFor(method);
   const started = Date.now();
   const sentEpoch = jobs.epoch();
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), budget);
   let response;
+  let body;
   try {
     response = await fetch('/api/rpc', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       credentials: 'same-origin',
       cache: 'no-store',
-      body: JSON.stringify({ id: ++rpcSeq, method, params }),
+      body: JSON.stringify({ id, method, params }),
       signal: controller.signal,
     });
+    try {
+      body = await response.json();
+    } catch (failure) {
+      if (controller.signal.aborted) throw failure;
+      throw new ApiError('http', `HTTP ${response.status}`);
+    }
   } catch (failure) {
-    throw new ApiError(failure.name === 'AbortError' ? 'no_reply' : 'network', failure.message);
+    if (failure instanceof ApiError) throw failure;
+    throw new ApiError(controller.signal.aborted ? 'no_reply' : 'network', failure.message);
   } finally {
     clearTimeout(timer);
   }
-  let body = null;
-  try {
-    body = await response.json();
-  } catch {
-    throw new ApiError('http', `HTTP ${response.status}`);
-  }
+  if (sentSession !== sessionEpoch) throw new ApiError('session_changed');
   if (body && body.error) throw apiError(body.error);
   if (!response.ok) throw new ApiError('http', `HTTP ${response.status}`);
-  const result = (body && body.result) || {};
+  if (!body || body.id !== id || !body.result || typeof body.result !== 'object' || Array.isArray(body.result)) {
+    throw new ApiError('http', 'The board sent an invalid response. Check the result before retrying.');
+  }
+  const result = body.result;
   if (typeof result.job === 'string') {
     return jobs.wait(result.job, Math.max(1000, budget - (Date.now() - started)), sentEpoch);
   }
@@ -389,15 +399,18 @@ async function call(method, params = {}) {
 }
 
 async function rpc(method, params) {
+  const sentSession = sessionEpoch;
   try {
     const result = await call(method, params);
+    if (sentSession !== sessionEpoch) throw new ApiError('session_changed');
     showWarning(result);
     return result;
   } catch (failure) {
+    if (sentSession !== sessionEpoch) throw new ApiError('session_changed');
     if (failure.code === 'unauthorized' && state.authed) sessionLost();
     throw failure;
   } finally {
-    boardButton.settle(method);
+    if (sentSession === sessionEpoch) boardButton.settle(method);
   }
 }
 
@@ -460,7 +473,9 @@ const events = (() => {
       if (opened) notify('reopen');
       opened = true;
     });
-    current.addEventListener('message', dispatch);
+    current.addEventListener('message', (message) => {
+      if (socket === current) dispatch(message);
+    });
     current.addEventListener('close', () => {
       if (socket !== current) return;
       socket = null;
@@ -526,8 +541,12 @@ const jobs = (() => {
     for (const [id, entry] of early) if (entry.at < cutoff) early.delete(id);
   }
 
-  function outcome(data) {
-    return data.error ? Promise.reject(apiError(data.error)) : Promise.resolve(data.result || {});
+  async function outcome(data) {
+    if (data.error) throw apiError(data.error);
+    if (!data.result || typeof data.result !== 'object' || Array.isArray(data.result)) {
+      throw new ApiError('http', 'The board sent an invalid job result. Check the result before retrying.');
+    }
+    return data.result;
   }
 
   events.on('job.done', (data) => {
@@ -554,6 +573,15 @@ const jobs = (() => {
 
   return {
     epoch: () => epoch,
+    reset() {
+      epoch += 1;
+      early.clear();
+      for (const waiter of waiting.values()) {
+        clearTimeout(waiter.timer);
+        waiter.reject(new ApiError('session_changed'));
+      }
+      waiting.clear();
+    },
     wait(id, timeoutMs, sentEpoch) {
       const done = early.get(id);
       if (done) {
@@ -1028,6 +1056,12 @@ function loginErrorText(failure) {
 }
 
 function showLogin(message) {
+  sessionEpoch += 1;
+  renderSeq += 1;
+  state.authed = false;
+  state.info = null;
+  state.locks = [];
+  jobs.reset();
   for (const fn of cleanups.splice(0)) fn();
   closeDialogs();
   const error = h('p', { class: 'form-error', role: 'alert', hidden: true });
@@ -1064,12 +1098,7 @@ function showLogin(message) {
     }
     password.value = '';
     code.value = '';
-    try {
-      await startApp();
-    } catch (failure) {
-      error.textContent = errorText(failure);
-      error.hidden = false;
-    }
+    await boot();
   });
   app.replaceChildren(
     h(
@@ -1980,7 +2009,7 @@ function passcodeSection(lock, has) {
     h(
       'p',
       { class: 'hint' },
-      'The lock opens when a code appears anywhere among the digits typed, so others can hide it in a longer string. Use 7 to 9 digits, and avoid runs like 123456 or one repeated digit.',
+      'A lock may accept a valid code followed by extra digits. Digits before the code have not been verified. Use 7 to 9 digits, and avoid runs like 123456 or one repeated digit.',
     ),
     part.body,
   );
@@ -3527,9 +3556,13 @@ function sendFirmware(file, progress, onSent) {
 }
 
 async function boot() {
+  const startedSession = sessionEpoch;
   try {
     await startApp();
   } catch (failure) {
+    if (startedSession !== sessionEpoch || failure.code === 'session_changed') return;
+    state.authed = false;
+    events.stop();
     if (failure.code === 'unauthorized') {
       showLogin();
       return;

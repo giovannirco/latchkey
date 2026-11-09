@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-const { test, expect, mock, login, PASSWORD, TOTP } = require('./support.cjs');
+const { test, expect, mock, calls, login, PASSWORD, TOTP } = require('./support.cjs');
 
 async function signIn(page, password, code) {
   await page.getByLabel('Password').fill(password);
@@ -88,4 +88,24 @@ test('signing out ends the session on the board', async ({ page }) => {
     return (await response.json()).error.code;
   });
   expect(code).toBe('unauthorized');
+});
+
+test('a failed first event connection can be retried without signing in again', async ({ page, request }) => {
+  await page.addInitScript(() => {
+    const NativeSocket = window.WebSocket;
+    let first = true;
+    window.WebSocket = class extends NativeSocket {
+      constructor(url) {
+        super(first ? `${url}-unavailable` : url);
+        first = false;
+      }
+    };
+  });
+  await page.goto('/');
+  await signIn(page, PASSWORD, TOTP);
+  await expect(page.getByRole('heading', { name: 'Cannot reach the board' })).toBeVisible();
+  await page.getByRole('button', { name: 'Try again' }).click();
+  await expect(page.getByRole('heading', { level: 1, name: 'Locks' })).toBeVisible();
+  await expect(page.locator('#live')).toHaveAttribute('data-live', 'on');
+  expect((await calls(request)).filter((call) => call.method === 'auth.login')).toHaveLength(1);
 });

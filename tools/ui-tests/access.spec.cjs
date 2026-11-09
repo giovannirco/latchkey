@@ -299,11 +299,13 @@ test('the board copy of the super admin passcode is shown when the lock cannot b
   expect((await shown.locator('output').textContent()).trim()).toBe('123456');
 });
 
-test('the passcode page explains that the lock finds a code inside longer digits', async ({ page }) => {
+test('the passcode page limits anti-peeping advice to observed trailing digits', async ({ page }) => {
   await login(page);
   await openLock(page, 'Front door', 'Access');
   const passcodes = page.getByRole('region', { name: 'Passcodes' });
-  await expect(passcodes).toContainText('appears anywhere among the digits typed');
+  await expect(passcodes).toContainText('a valid code followed by extra digits');
+  await expect(passcodes).toContainText('Digits before the code have not been verified');
+  await expect(passcodes).not.toContainText('anywhere among the digits');
   await expect(passcodes).toContainText('Use 7 to 9 digits');
 });
 
