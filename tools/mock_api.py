@@ -40,8 +40,10 @@ Test hooks used by tools/ui-tests/:
 - POST /__mock/control  {"reset": true} restores the demo state; other keys: "confirm" ("auto" or
   "never"), "confirmDelayMs", "confirmTimeoutMs", "latencyMs", "jobReplyDelayMs", "timeSynced",
   "expireSessions", "dropSockets" (closes every event socket), "setLock" {"id", fields} (changes a
-  lock without an event), "failNext" {"method", "code", "message"}, "warnNext" {"method", "warning"}
-  (adds a warning to the next result), "delay" {"method", "ms"} (holds the next reply), "scanExtra"
+  lock without an event), "failNext" {"method", "code", "message"}, "failPassageAdd" {"after",
+  "code", "message"} (the next lock.passage.add stores that many new windows, then fails like the
+  board: with "after" above 0 the error carries "added" and its message says how many were added),
+  "warnNext" {"method", "warning"} (adds a warning to the next result), "delay" {"method", "ms"} (holds the next reply), "scanExtra"
   [devices], "emit" [{"event", "data"}], "logLines" [{"level", "tag", "message"}] (adds lines to the
   board's log);
 - GET /__mock/calls     every RPC since the last reset, with secret parameters replaced by "***";
@@ -574,6 +576,7 @@ class Mock:
             self.failures = 0
             self.blocked_until = 0.0
             self.fail_next: dict[str, RpcError] = {}
+            self.fail_passage_add: dict[str, Any] | None = None
             self.warn_next: dict[str, str] = {}
             self.delay_next: dict[str, float] = {}
             self.calls: list[dict] = []
@@ -830,6 +833,8 @@ class Mock:
             if "failNext" in body:
                 failure = body["failNext"]
                 self.fail_next[failure["method"]] = RpcError(failure["code"], failure.get("message", failure["code"]))
+            if "failPassageAdd" in body:
+                self.fail_passage_add = dict(body["failPassageAdd"])
             if "scanExtra" in body:
                 self.nearby.extend(dict(device) for device in body["scanExtra"])
             for line in body.get("logLines", []):
@@ -1220,11 +1225,26 @@ class Mock:
         if not isinstance(days, list) or not days:
             raise invalid("days lists 0 (every day) or weekdays 1 to 7")
         entries = [self._passage_entry(params, day) for day in days]
+        with self.lock:
+            stop, self.fail_passage_add = self.fail_passage_add, None
         with self.radio():
+            added = 0
             for entry in entries:
-                if entry not in lock["passage"]:
-                    lock["passage"].append(entry)
+                if entry in lock["passage"]:
+                    continue
+                if stop and added == stop["after"]:
+                    raise self._passage_add_stopped(stop, added)
+                lock["passage"].append(entry)
+                added += 1
         return {"modes": copy.deepcopy(lock["passage"])}
+
+    @staticmethod
+    def _passage_add_stopped(stop: dict, added: int) -> RpcError:
+        message = stop.get("message", stop["code"])
+        if not added:
+            return RpcError(stop["code"], message)
+        noun = "passage window was" if added == 1 else "passage windows were"
+        return RpcError(stop["code"], f"{message}; {added} {noun} added before that", added=added)
 
     @rpc("lock.passage.delete", feature="passage_mode", job=True)
     def lock_passage_delete(self, ctx: Context, params: dict) -> dict:

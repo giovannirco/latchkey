@@ -47,6 +47,25 @@ test('a sound setting without a volume shows only the switch', async ({ page, re
   await expect(sound.getByLabel('Volume')).toHaveCount(0);
 });
 
+test('a passage add that stops part way shows what the lock holds now', async ({ page, request }) => {
+  await mock(request, { failPassageAdd: { after: 2, code: 'timeout', message: 'the lock did not answer' } });
+  await login(page);
+  await openLock(page, 'Front door', 'Settings');
+  const passage = page.getByRole('region', { name: 'Passage mode' });
+  await expect(passage.getByRole('listitem')).toHaveText(['Every day, 08:00 to 09:00Delete']);
+  await passage.getByRole('button', { name: 'Add passage window' }).click();
+  await expect(toast(page, 'The lock did not answer in time')).toBeVisible();
+  await expect(toast(page, '2 passage windows were added before that')).toBeVisible();
+  await expect(passage).toContainText('Adding did not finish, so some windows may have been added');
+  await expect(passage.getByRole('listitem')).toHaveText([
+    'Every day, 08:00 to 09:00Delete',
+    'Mondays, 08:00 to 18:00Delete',
+    'Tuesdays, 08:00 to 18:00Delete',
+  ]);
+  const made = (await calls(request)).map((call) => call.method).filter((method) => method.startsWith('lock.passage.'));
+  expect(made.slice(-2)).toEqual(['lock.passage.add', 'lock.passage.list']);
+});
+
 test('features the board does not use are listed apart', async ({ page }) => {
   await login(page);
   await openLock(page, 'Front door', 'Device');
