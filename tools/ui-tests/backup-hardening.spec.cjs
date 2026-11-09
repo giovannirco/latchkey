@@ -61,12 +61,15 @@ for (const [reason, description] of [
     const part = await openHardening(page, request, { adminProvenance: reason });
     await part.getByRole('button', { name: 'Preview hardening' }).click();
     await expect(part).toContainText(description);
-    if (reason === 'admin_unresolved') await expect(part.getByRole('button', { name: 'Apply hardening' })).toBeDisabled();
+    if (reason === 'admin_unresolved') {
+      await expect(part.getByRole('button', { name: 'Apply hardening' })).toBeDisabled();
+      await expect(part.getByRole('listitem').filter({ hasText: description })).toContainText('Skipped');
+    }
   });
 }
 
 test('a failed step keeps completed steps visible and requires another preview', async ({ page, request }) => {
-  const part = await openHardening(page, request, { passcodes: [
+  const part = await openHardening(page, request, { adminProvenance: 'pairing_generated', passcodes: [
     { id: 'fixture-unmanaged', code: '123456', type: 'permanent', managed: false, name: '', validity: null },
   ] });
   await part.getByRole('button', { name: 'Preview hardening' }).click();
@@ -77,9 +80,23 @@ test('a failed step keeps completed steps visible and requires another preview',
   const rows = part.getByRole('listitem');
   await expect(rows.filter({ hasText: "Set the lock's clock" })).toContainText('Done');
   await expect(rows.filter({ hasText: 'unmanaged passcodes' })).toContainText('Failed');
+  await expect(rows.filter({ hasText: 'generated during pairing' })).toContainText('Skipped');
   await expect(rows.filter({ hasText: 'reset button' })).toContainText('Skipped');
   await expect(part.getByRole('button', { name: 'Apply hardening' })).toBeDisabled();
   expect((await calls(request)).filter((call) => call.method === 'lock.harden')).toHaveLength(2);
+});
+
+test('an unresolved admin after preview shows a failed report without planned mutations', async ({ page, request }) => {
+  const part = await openHardening(page, request);
+  await part.getByRole('button', { name: 'Preview hardening' }).click();
+  await expect(part.getByRole('button', { name: 'Apply hardening' })).toBeEnabled();
+  await mock(request, { setLock: { id: FRONT_DOOR, adminProvenance: 'admin_unresolved' } });
+  await part.getByRole('button', { name: 'Apply hardening' }).click();
+  await expect(part).toContainText('Hardening stopped');
+  const rows = part.getByRole('listitem');
+  await expect(rows.filter({ hasText: "Set the lock's clock" })).toContainText('Skipped');
+  await expect(rows.filter({ hasText: 'outcome is unresolved' })).toContainText('Failed');
+  await expect(part.getByRole('button', { name: 'Apply hardening' })).toBeDisabled();
 });
 
 for (const code of ['internal', 'job_lost']) {

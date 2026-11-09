@@ -1613,11 +1613,14 @@ class Mock:
                     }
                 )
             planned = sum(entry["status"] == "planned" for entry in entries)
+            admin_status = "skipped" if reason == "admin_unresolved" else "planned"
+            if reason in ("owner", "legacy_unknown", "hardening_generated"):
+                admin_status = "preserved"
             steps = [
                 {"step": "time", "status": "planned"},
                 {
                     "step": "passcodes",
-                    "status": "planned" if planned else "preserved",
+                    "status": "planned",
                     "planned": planned,
                     "removed": 0,
                     "preserved": len(entries) - planned,
@@ -1625,9 +1628,7 @@ class Mock:
                 },
                 {
                     "step": "admin",
-                    "status": "planned"
-                    if reason in ("pairing_generated", "confirm_candidate", "confirm_previous")
-                    else "preserved",
+                    "status": admin_status,
                     "reason": reason,
                 },
                 {
@@ -1644,15 +1645,24 @@ class Mock:
                 "steps": steps,
             }
             if dry_run:
+                if not self.config.time_synced:
+                    steps[0].update(status="skipped", error="time_unsynced")
                 return result
+            for item in [*steps, *entries]:
+                if item["status"] == "planned":
+                    item["status"] = "skipped"
             if not result["executable"]:
-                raise RpcError("admin_unresolved", "admin-code outcome is unresolved")
+                steps[2].update(status="failed", error="admin_unresolved")
+                result["completion"] = "failed"
+                raise RpcError("hardening_failed", "admin-code outcome is unresolved", **result)
             lock["hardened"] = False
             stop, self.fail_harden_step = self.fail_harden_step, None
             for step in steps:
-                if step["status"] != "planned":
+                if step["status"] == "preserved" or step["step"] == "resetButton":
                     continue
-                if stop and step["step"] == stop["step"]:
+                if stop and step["step"] == stop["step"] and (step["step"] != "passcodes" or planned):
+                    if step["step"] == "passcodes":
+                        next(entry for entry in entries if entry["status"] == "skipped")["status"] = "failed"
                     step.update(status="failed", error=stop["code"])
                     result["completion"] = "failed"
                     raise RpcError(
@@ -1662,11 +1672,11 @@ class Mock:
                     )
                 if step["step"] == "passcodes":
                     lock["passcodes"] = [
-                        entry for entry, view in zip(lock["passcodes"], entries) if view["status"] != "planned"
+                        entry for entry, view in zip(lock["passcodes"], entries) if view["status"] != "skipped"
                     ]
                     step["removed"] = planned
                     for entry in entries:
-                        if entry["status"] == "planned":
+                        if entry["status"] == "skipped":
                             entry["status"] = "done"
                 elif step["step"] == "admin" and reason == "pairing_generated":
                     lock["adminPasscode"] = random_digits(ADMIN_PASSCODE_DIGITS)
