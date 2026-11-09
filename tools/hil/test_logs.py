@@ -15,6 +15,7 @@ from __future__ import annotations
 import base64
 import json
 import re
+import statistics
 import threading
 import time
 from typing import Any
@@ -378,3 +379,28 @@ def test_an_unreachable_collector_costs_counted_errors_not_lines(console: Consol
         if line["seq"] > before and line["tag"] == "syslog" and line["level"] == "warn"
     ]
     assert len(warnings) == 1
+
+
+def test_repeated_wifi_changes_release_the_configuration(
+    console: Console, owned: bool, secrets: dict[str, Any], board_settings: dict[str, Any]
+) -> None:
+    if owned:
+        pytest.skip("the owner's board keeps its Wi-Fi settings")
+    params = wifi_params(secrets, board_settings)
+    if max(len(params["ssid"].encode()), len(params["password"].encode())) <= 15:
+        pytest.skip("the network credentials fit inside the string's inline storage")
+    samples = []
+    for _ in range(18):
+        seen = len(console.lines)
+        assert console.call("system.wifi.set", params) == {}
+        console.wait_info(
+            lambda state: state["wifi"]["connected"]
+            and any("wifi: connected, ip " in line for line in console.lines[seen:]),
+            45.0,
+            "the deferred Wi-Fi change to reconnect",
+        )
+        time.sleep(1.0)
+        samples.append(console.call("system.info")["heap"]["free"])
+    retained = statistics.median(samples[3:6]) - statistics.median(samples[-3:])
+    print(f"heap retained after repeated Wi-Fi changes: {retained} B")
+    assert retained <= 256

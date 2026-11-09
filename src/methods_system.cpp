@@ -293,16 +293,18 @@ rpc::Reply setup(const cJSON* params, const rpc::Context&) {
 
 void switchWifi(void*) {
     vTaskDelay(kWifiSwitchDelay);
-    store::cfg::Wifi wifi;
     {
-        std::lock_guard<std::mutex> lock(s_wifiMutex);
-        wifi = s_pendingWifi;
-        mbedtls_platform_zeroize(s_pendingWifi.password.data(), s_pendingWifi.password.size());
-        s_pendingWifi = {};
-        s_wifiSwitch = nullptr;
+        store::cfg::Wifi wifi;
+        {
+            std::lock_guard<std::mutex> lock(s_wifiMutex);
+            wifi = s_pendingWifi;
+            mbedtls_platform_zeroize(s_pendingWifi.password.data(), s_pendingWifi.password.size());
+            s_pendingWifi = {};
+            s_wifiSwitch = nullptr;
+        }
+        wifi::apply(wifi);
+        mbedtls_platform_zeroize(wifi.password.data(), wifi.password.size());
     }
-    wifi::apply(wifi);
-    mbedtls_platform_zeroize(wifi.password.data(), wifi.password.size());
     vTaskDelete(nullptr);
 }
 
