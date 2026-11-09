@@ -58,10 +58,9 @@ bool raise(const std::string& mac, const LogEntry& entry, latchkey_util::UnlockM
     const esp_err_t stored = lock_manager::rememberAlert(mac, alert, added);
     if (stored != ESP_OK) {
         ESP_LOGE(TAG, "cannot store the unlock alert: %s", esp_err_to_name(stored));
-        return false;
     }
     if (!added) {
-        return true;
+        return stored == ESP_OK;
     }
     const char* name = latchkey_util::toString(method);
     ESP_LOGW(TAG, "unlock alert for %s: log record %u, type %u, %s", mac.c_str(), entry.recordNumber, entry.type,
@@ -74,7 +73,7 @@ bool raise(const std::string& mac, const LogEntry& entry, latchkey_util::UnlockM
     cJSON_AddNumberToObject(data, "type", entry.type);
     events::publish("lock.alert", data);
     audit::append({static_cast<uint32_t>(when > 0 ? when : 0), rpc::Transport::Board, "lock.alert", mac, name});
-    return true;
+    return stored == ESP_OK;
 }
 
 }
