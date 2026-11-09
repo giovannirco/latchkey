@@ -494,40 +494,6 @@ cJSON* featuresJson(uint64_t mask) {
 
 rpc::Reply notPaired() { return rpc::fail("not_paired", "the board has no keys for this lock"); }
 
-rpc::Reply failure(Status status, uint8_t lockError) {
-    switch (status) {
-        case Status::Timeout:
-            return rpc::fail("timeout", "the lock did not answer");
-        case Status::Disconnected:
-            return rpc::fail("disconnected", "the Bluetooth link to the lock dropped");
-        case Status::BadResponse:
-            return rpc::fail("bad_response", "the lock sent an answer the board could not read");
-        case Status::BadCrc:
-            return rpc::fail("bad_crc", "the lock sent a damaged answer");
-        case Status::LockError: {
-            char message[80];
-            std::snprintf(message, sizeof(message), "the lock refused the command: %s (0x%02x)",
-                          ttlock::lockErrorName(lockError), lockError);
-            return rpc::fail("lock_error", message);
-        }
-        case Status::Unsupported:
-            return rpc::fail("unsupported", "the lock does not support that");
-        case Status::NotPaired:
-            return notPaired();
-        case Status::PairIncomplete:
-            return rpc::fail("pair_incomplete", "pairing stopped before it finished");
-        case Status::Busy:
-            return rpc::fail("busy", "the lock is busy");
-        case Status::InvalidArgument:
-            return rpc::fail("invalid_argument", "the lock cannot take that value");
-        case Status::TimeUnsynced:
-            return rpc::fail("time_unsynced", "the board clock is not set yet");
-        case Status::Ok:
-            break;
-    }
-    return rpc::fail("internal", "unexpected lock status");
-}
-
 bool breaksLink(Status status) {
     return status == Status::Timeout || status == Status::Disconnected || status == Status::BadResponse ||
            status == Status::BadCrc;
@@ -1716,6 +1682,40 @@ rpc::Reply submitFor(Kind kind, const std::string& mac) {
     return submit(kind, mac, {}, 0);
 }
 
+}
+
+rpc::Reply failure(Status status, uint8_t lockError) {
+    switch (status) {
+        case Status::Timeout:
+            return rpc::fail("timeout", "the lock did not answer");
+        case Status::Disconnected:
+            return rpc::fail("disconnected", "the Bluetooth link to the lock dropped");
+        case Status::BadResponse:
+            return rpc::fail("bad_response", "the lock sent an answer the board could not read");
+        case Status::BadCrc:
+            return rpc::fail("bad_crc", "the lock sent a damaged answer");
+        case Status::LockError: {
+            char message[80];
+            std::snprintf(message, sizeof(message), "the lock refused the command: %s (0x%02x)",
+                          ttlock::lockErrorName(lockError), lockError);
+            return rpc::fail("lock_error", message);
+        }
+        case Status::Unsupported:
+            return rpc::fail("unsupported", "the lock does not support that");
+        case Status::NotPaired:
+            return notPaired();
+        case Status::PairIncomplete:
+            return rpc::fail("pair_incomplete", "pairing stopped before it finished");
+        case Status::Busy:
+            return rpc::fail("busy", "the lock is busy");
+        case Status::InvalidArgument:
+            return rpc::fail("invalid_argument", "the lock cannot take that value");
+        case Status::TimeUnsynced:
+            return rpc::fail("time_unsynced", "the board clock is not set yet");
+        case Status::Ok:
+            break;
+    }
+    return rpc::fail("internal", "unexpected lock status");
 }
 
 void start() {

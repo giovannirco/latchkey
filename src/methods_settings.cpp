@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include <algorithm>
 #include <cmath>
+#include <cstddef>
 #include <cstdint>
 #include <optional>
 #include <string>
@@ -261,6 +262,16 @@ rpc::Reply readNewWindows(const cJSON* params, std::vector<PassageMode>& out) {
     return rpc::ok();
 }
 
+rpc::Reply stoppedAdding(Status status, uint8_t lockError, size_t added) {
+    rpc::Reply reply = lock_manager::failure(status, lockError);
+    if (added > 0) {
+        reply.message = latchkey_util::passageAddStopped(reply.message, added);
+        reply.errorData.reset(cJSON_CreateObject());
+        cJSON_AddNumberToObject(reply.errorData.get(), "added", static_cast<double>(added));
+    }
+    return reply;
+}
+
 rpc::Reply passageAdd(const cJSON* params, const rpc::Context&) {
     std::string mac;
     if (!lock_access::readLock(params, mac)) {
@@ -278,14 +289,17 @@ rpc::Reply passageAdd(const cJSON* params, const rpc::Context&) {
                           if (status != Status::Ok) {
                               return status;
                           }
+                          size_t added = 0;
                           for (const PassageMode& mode : wanted) {
                               if (std::find(modes.begin(), modes.end(), mode) != modes.end()) {
                                   continue;
                               }
                               status = session.passageAdd(mode);
                               if (status != Status::Ok) {
+                                  out = stoppedAdding(status, session.lockErrorCode(), added);
                                   return status;
                               }
+                              ++added;
                           }
                           return listPassage(session, out);
                       });
