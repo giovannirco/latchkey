@@ -17,6 +17,7 @@
 
 #include "events.h"
 #include "latchkey_util/line_buffer.h"
+#include "logs.h"
 #include "rpc.h"
 
 #if CONFIG_ESP_CONSOLE_UART
@@ -114,6 +115,7 @@ int logToConsole(const char* format, va_list args) {
         return formatted;
     }
     const size_t length = std::min(static_cast<size_t>(formatted), sizeof(text) - 1);
+    logs::capture(text, length, static_cast<size_t>(formatted) > length);
     std::lock_guard<std::recursive_mutex> lock(s_output);
     writePrefixed(text, length);
     if (static_cast<size_t>(formatted) > length && !s_atLineStart) {

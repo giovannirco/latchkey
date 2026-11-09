@@ -52,7 +52,7 @@ using ttlock::LockState;
 using ttlock::Status;
 
 constexpr const char* TAG = "locks";
-constexpr uint32_t kWorkerStack = 8192;
+constexpr uint32_t kWorkerStack = 6144;
 constexpr UBaseType_t kWorkerPriority = 5;
 constexpr BaseType_t kWorkerCore = portNUM_PROCESSORS > 1 ? 1 : 0;
 constexpr uint32_t kIdleSliceMs = 1000;

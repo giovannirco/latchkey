@@ -970,6 +970,34 @@ td.nowrap {
   font-weight: 600;
 }
 
+.log-wrap {
+  max-height: 28rem;
+  overflow-y: auto;
+}
+
+.log-table {
+  font-size: 0.86rem;
+}
+
+.log-message {
+  font-family: var(--mono);
+  overflow-wrap: anywhere;
+}
+
+.log-warn {
+  color: var(--warn);
+  font-weight: 600;
+}
+
+.log-error {
+  color: var(--danger);
+  font-weight: 600;
+}
+
+.log-controls {
+  align-items: end;
+}
+
 .stepper {
   display: flex;
   gap: 8px;

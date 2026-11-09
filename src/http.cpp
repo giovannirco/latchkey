@@ -42,9 +42,9 @@ constexpr uint16_t kHttpsSockets = 3;
 #else
 constexpr uint16_t kHttpsSockets = 4;
 #endif
-constexpr uint32_t kHttpsStack = 6144;
+constexpr uint32_t kHttpsStack = 5120;
 constexpr uint32_t kRedirectStack = 3072;
-constexpr uint32_t kWorkerStack = 6144;
+constexpr uint32_t kWorkerStack = 5120;
 constexpr uint32_t kInitStack = 8192;
 constexpr UBaseType_t kTaskPriority = 5;
 constexpr uint16_t kUriHandlers = 4;
@@ -351,12 +351,15 @@ esp_err_t startRedirect() {
 
 void startServers(void* arg) {
     const uint32_t ipv4 = static_cast<uint32_t>(reinterpret_cast<uintptr_t>(arg));
-    latchkey_util::TlsIdentity identity;
-    esp_err_t error = certs::ensure(ipv4, identity);
-    if (error == ESP_OK) {
-        error = startHttps(identity);
+    esp_err_t error = ESP_OK;
+    {
+        latchkey_util::TlsIdentity identity;
+        error = certs::ensure(ipv4, identity);
+        if (error == ESP_OK) {
+            error = startHttps(identity);
+        }
+        mbedtls_platform_zeroize(identity.key.data(), identity.key.size());
     }
-    mbedtls_platform_zeroize(identity.key.data(), identity.key.size());
     if (error == ESP_OK) {
         error = startRedirect();
     }

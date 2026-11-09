@@ -27,7 +27,7 @@ import build_web
 import pytest
 from board import is_json_object
 from latchkey_cli import Console
-from owner import Private, claim_secret, holds_no_secret, otpauth_secret, totp_code
+from owner import Private, claim_secret, holds_no_secret, otpauth_secret, totp_code, wifi_params
 from relay import Relay, body, header, headers, json_body
 
 WEB_DIR = Path(__file__).resolve().parents[2] / "web"
@@ -640,6 +640,28 @@ def test_a_stalled_handshake_is_dropped_within_seconds(relay: Relay, codes: Code
     assert result["closed_after_ms"] <= STALLED_HANDSHAKE_LIMIT_MS
 
 
+def test_wifi_settings_from_the_web_take_the_whole_static_address(
+    console: Console, relay: Relay, session: Login, secrets: dict[str, Any], board_settings: dict[str, Any]
+) -> None:
+    if board_settings.get("totp_uri"):
+        pytest.skip("the owner's board keeps its Wi-Fi settings")
+    params = wifi_params(secrets, board_settings)
+    partial = {key: value for key, value in params.items() if key != "gateway"}
+    assert rpc(relay, "system.wifi.set", partial, session.cookie)["error"]["code"] == "invalid_argument"
+    result = relay.step(rpc_step("system.wifi.set", params, session.cookie), timeout_s=90)
+    assert result.get("status") == 200, result.get("error")
+    assert json_body(result) == {"id": 1, "result": {}}
+    info = console.wait_info(lambda state: state["wifi"]["connected"], 45.0, "Wi-Fi to reconnect")
+    wifi = info["wifi"]
+    kept = (wifi["ip"], wifi["gateway"], wifi["netmask"], wifi["dns"]) == (
+        board_settings["static_ip"],
+        secrets["gateway"],
+        secrets["netmask"],
+        secrets["dns"],
+    )
+    assert kept, "the board did not keep its static address"
+
+
 def test_heap_holds_with_one_tls_session_and_events(relay: Relay, session: Login, origin: str) -> None:
     result = relay.step(
         {
@@ -666,6 +688,7 @@ def test_heap_holds_with_one_tls_session_and_events(relay: Relay, session: Login
     assert info["ble"]["ready"] is True
     assert heap["minFree"] >= MIN_FREE_HEAP
     assert heap["largestBlock"] > 16_384
+    assert all(free >= 1024 for free in info["stackFree"].values() if free)
 
 
 def test_no_secret_reaches_the_console_or_the_audit(console: Console, secrets: dict[str, Any]) -> None:

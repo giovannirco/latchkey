@@ -24,8 +24,9 @@ Works today:
 - Lock settings (auto-lock, passage mode, sound, and read-only reset button, privacy lock and tamper alert switches), the lock's operation log, and unlock alerts: the board reads each lock's log and raises an alert, with an audit entry, for every unlock from an app it did not make and every forced opening. The lock's clock follows the board's time zone, daylight-saving changes included.
 - The owner web UI (`web/`), served by the board and tested against a mock of the board API.
 - Home Assistant over MQTT, off until configured: each lock appears as a device with a lock entity, battery, last event, Bluetooth link and an unlock alert, through MQTT discovery, and LOCK and UNLOCK from Home Assistant run through the same queue as the web.
+- Logs: the board keeps its recent log lines in RAM and shows them on the System page, and can ship them to a syslog collector (RFC 5424 over UDP or TCP), off until configured.
 
-In progress: recent log lines on the board and syslog shipping; board firmware updates from the web page, with rollback. Next: lock hardening and the encrypted key backup. The web UI already shows the Export and Harden steps, but the board answers them only once they are built.
+In progress: board firmware updates from the web page, with rollback. Next: lock hardening and the encrypted key backup. The web UI already shows the Export and Harden steps, but the board answers them only once they are built.
 
 ## Security model
 
@@ -37,6 +38,7 @@ In progress: recent log lines on the board and syslog shipping; board firmware u
 - Hardening (planned): a random admin passcode on the lock, unknown passcodes removed, the lock's reset button disabled only after an encrypted backup of its keys.
 - No cloud: the board only reaches the internet for DNS and SNTP.
 - MQTT, when you turn it on, is plain MQTT over TCP to a broker you choose: whoever may publish to a lock's command topic there can lock and unlock it.
+- Remote logging, when you turn it on, is plain-text syslog to a collector you choose: the lines hold no secrets, but anyone on the path can read them.
 - Profile P1: lock keys sit in plaintext NVS, so whoever reads the flash of a stolen board can use them. Flash encryption is possible but not the default.
 
 [SECURITY.md](SECURITY.md) has the full model and how to report a vulnerability; [docs/protocol.md](docs/protocol.md) has the protocol notes and its limits.
@@ -195,6 +197,31 @@ Topics, with `<board>` = `latchkey-` and the last three bytes of the board's Wi-
 
 ```sh
 uv run -q --no-project --python 3.14 --with pytest==9.1.1 --with pyserial==3.5 --with paho-mqtt==2.1.0 pytest tools/hil/test_mqtt.py --port <port>
+```
+
+## Logs
+
+The board files every log line the USB console prints with `#` (ESP-IDF's and Latchkey's) in a ring in RAM: 6 KiB on the classic ESP32, about 100 lines, kept in RTC memory so it costs no heap, and 16 KiB on the ESP32-S3, about 300 lines. The ring starts empty at each boot, numbers its lines from 1, and drops the oldest line when full. Lines the Wi-Fi driver writes in pieces are joined into one, as the console shows them. The ROM and bootloader lines before the application starts, and the console's replies and events, are not log lines and never reach the ring.
+
+- `system.logs {"since"?, "level"?, "limit"?}` (not audited) answers `{"lines": [{"seq", "uptimeMs", "utcMs", "level", "tag", "message"}], "more", "next", "missed"}`, oldest line first. `level` is `error`, `warn`, `info`, `debug` or `verbose` and keeps that level and the more severe ones (default `verbose`); `limit` is 1 to 100 (default 100). Without `since` it gives the newest lines; with it, the lines after that sequence number. Pass `next` as `since` to continue: `more` says matching lines follow, and the board also stops early when a page would be long (2 KiB of text on the classic ESP32, 4 KiB on the ESP32-S3). `missed` counts lines that left the ring after `since` before you asked. `utcMs` is null until the clock is set, and is worked out from the line's age, so lines from before the first SNTP sync get a time too. A `next` below the `since` you sent means the board restarted.
+- A line shaped like a secret is filed as `line withheld: it matched a secret pattern` and counted in `system.info.logs` (`{lines, capacity, withheld}`); [SECURITY.md](SECURITY.md) says which shapes.
+- The System page of the web UI shows the lines newest first, filters them by level, asks for new ones every 3 s while it is open (it can be turned off) and copies the shown lines as text.
+
+### Remote logging (syslog)
+
+Off until you turn it on, on the System page or with `system.syslog.set {"enabled", "host", "port"?, "transport"?, "appName"?, "level"?}` (audited). The host is a name or an IPv4 address, required to turn it on; the port defaults to 514, the transport to `udp` (or `tcp`), the app name to `latchkey` (1 to 48 printable ASCII characters) and the level to `info`; fields left out take those defaults. `system.syslog.get` answers the settings plus `{connected, sent, dropped, errors}`, and `system.info.syslog` has `{enabled, connected, sent, dropped, errors}`. The settings are one NVS item and survive a restart; `system.factoryReset` erases them.
+
+```text
+<134>1 2026-11-08T14:03:07.512Z esp32s3-atom latchkey - wifi [meta sequenceId="4812" sysUpTime="130412"] connected, ip 192.0.2.62
+```
+
+- Each line is one RFC 5424 message: facility `local0`, severity from the level (error 3, warn 4, info 6, debug and verbose 7), the UTC time with milliseconds or `-` before the clock is set, the board name (`system.info.board`) as HOSTNAME, the app name, the log tag as MSGID (`-` for none), and a `meta` element with the line's sequence number and the board's uptime in hundredths of a second, so a collector can spot gaps. Two boards of the same model share a board name: give them different app names. Over UDP each message is one datagram of at most 1,024 bytes; over TCP each is framed with octet counting (RFC 6587: the byte count, a space, the message).
+- When remote logging is turned on, the board first sends the lines the ring already holds, then each new line as it comes. A task created the first time remote logging is turned on does the sending (it stays until the next restart, about 4 KB of RAM); the logger only files lines in the ring and never waits for the network. Lines the ring overwrites before they could be sent, because the collector was unreachable or slower than the log, are counted in `dropped`. After a failure the board waits 1 s, then twice as long each time up to 2 minutes, and logs one warning per run of failures. A TCP collector that closes an idle connection is reconnected at the next line without a warning. On the classic ESP32, prefer UDP: a TCP collector that stops reading can hold up to about 6 KB of unacknowledged lines in the board's memory. Remote logging costs the classic about 4.5 KB of RAM while it is on. Hardware checks require at least 30 KB of minimum free heap with MQTT, syslog and HTTPS active, and at least 1 KiB spare in each active task stack.
+- Receivers: rsyslog (`imudp` and `imtcp`, which take octet counting by default), Grafana Alloy's `loki.source.syslog` with `syslog_format = "rfc5424"` (forwarding to Loki), and the log centres of NAS systems that accept RFC 5424 (IETF) syslog.
+- `test_logs.py` checks the ring and the settings on a board; with the optional `hil_syslog` key in `secrets.local.json` (`{host, port}`: a free port on the `hil_relay` host, at the address the boards reach it by) it also runs a listener there for under a minute and checks the lines the board sends over TCP and UDP. It puts the board's remote logging settings back at the end.
+
+```sh
+uv run -q --no-project --python 3.14 --with pytest==9.1.1 --with pyserial==3.5 pytest tools/hil/test_logs.py --port <port>
 ```
 
 ## Contributing

@@ -14,6 +14,9 @@ struct Status {
     bool connected = false;
     std::string ssid;
     uint32_t ip = 0;
+    uint32_t gateway = 0;
+    uint32_t netmask = 0;
+    uint32_t dns = 0;
     int rssi = 0;
 };
 

@@ -9,6 +9,7 @@
 #include "nvs.h"
 #include "nvs_flash.h"
 
+#include "latchkey_util/hostname.h"
 #include "latchkey_util/storage_budget.h"
 
 namespace store {
@@ -160,6 +161,28 @@ bool growthFits(const char* name, const char* key, size_t blobBytes) {
     return blobBytes <= storedBlobSize(name, key) || roomAboveReserve(blobBytes);
 }
 
+constexpr const char* kSyslogKey = "syslog";
+constexpr uint8_t kSyslogRecordVersion = 1;
+
+struct SyslogRecord {
+    uint8_t version;
+    uint8_t enabled;
+    uint8_t tcp;
+    uint8_t level;
+    uint16_t port;
+    char host[latchkey_util::kMaxHostname + 1];
+    char appName[latchkey_util::kMaxSyslogAppName + 1];
+};
+
+template <size_t N>
+bool copyText(char (&field)[N], const std::string& value) {
+    if (value.size() >= N || value.find('\0') != std::string::npos) {
+        return false;
+    }
+    std::memcpy(field, value.data(), value.size());
+    return true;
+}
+
 esp_err_t eraseKey(const char* name, const char* key) {
     Handle handle(name, NVS_READWRITE);
     if (!handle.ok()) {
@@ -255,6 +278,55 @@ esp_err_t saveTimezone(const std::string& timezone) {
         return handle.error();
     }
     const esp_err_t error = nvs_set_str(handle.get(), "tz", timezone.c_str());
+    return error == ESP_OK ? nvs_commit(handle.get()) : error;
+}
+
+esp_err_t loadSyslog(Syslog& out) {
+    Handle handle(kCfgNamespace, NVS_READONLY);
+    SyslogRecord record{};
+    size_t length = sizeof(record);
+    esp_err_t error = handle.ok() ? nvs_get_blob(handle.get(), kSyslogKey, &record, &length) : handle.error();
+    if (error == ESP_ERR_NVS_NOT_FOUND) {
+        out = Syslog{};
+        return ESP_OK;
+    }
+    const bool known = record.level >= static_cast<uint8_t>(latchkey_util::LogLevel::Error) &&
+                       record.level <= static_cast<uint8_t>(latchkey_util::LogLevel::Verbose);
+    if (error == ESP_OK && (length != sizeof(record) || record.version != kSyslogRecordVersion || !known)) {
+        error = ESP_ERR_INVALID_VERSION;
+    }
+    if (error != ESP_OK) {
+        return error;
+    }
+    Syslog syslog;
+    syslog.enabled = record.enabled != 0;
+    syslog.tcp = record.tcp != 0;
+    syslog.level = static_cast<latchkey_util::LogLevel>(record.level);
+    syslog.port = record.port;
+    syslog.host.assign(record.host, strnlen(record.host, sizeof(record.host)));
+    syslog.appName.assign(record.appName, strnlen(record.appName, sizeof(record.appName)));
+    out = std::move(syslog);
+    return ESP_OK;
+}
+
+esp_err_t saveSyslog(const Syslog& syslog) {
+    SyslogRecord record{};
+    record.version = kSyslogRecordVersion;
+    record.enabled = syslog.enabled ? 1 : 0;
+    record.tcp = syslog.tcp ? 1 : 0;
+    record.level = static_cast<uint8_t>(syslog.level);
+    record.port = syslog.port;
+    if (!copyText(record.host, syslog.host) || !copyText(record.appName, syslog.appName)) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    if (!growthFits(kCfgNamespace, kSyslogKey, sizeof(record))) {
+        return ESP_ERR_NVS_NOT_ENOUGH_SPACE;
+    }
+    Handle handle(kCfgNamespace, NVS_READWRITE);
+    if (!handle.ok()) {
+        return handle.error();
+    }
+    const esp_err_t error = nvs_set_blob(handle.get(), kSyslogKey, &record, sizeof(record));
     return error == ESP_OK ? nvs_commit(handle.get()) : error;
 }
 

@@ -22,6 +22,7 @@
 #include "methods.h"
 #include "mqtt.h"
 #include "store.h"
+#include "syslog_client.h"
 #include "wifi.h"
 
 namespace {
@@ -49,9 +50,11 @@ extern "C" void app_main() {
     store::cfg::Wifi config;
     const bool configured = store::cfg::loadWifi(config);
     wifi::start(configured ? &config : nullptr);
+    syslog_client::start();
     ble::init();
     lock_manager::start();
     methods::registerSystem();
+    methods::registerLogging();
     methods::registerAuth();
     methods::registerLocks();
     methods::registerPasscodes();

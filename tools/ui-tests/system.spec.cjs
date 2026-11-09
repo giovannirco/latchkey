@@ -71,7 +71,51 @@ test('Wi-Fi settings never echo the password', async ({ page, request }) => {
   await expect(page.locator('#toasts')).toContainText('The board is joining lab-iot-2');
   await expect(wifi.getByLabel('Password')).toHaveValue('');
   const call = (await calls(request)).find((entry) => entry.method === 'system.wifi.set');
-  expect(call.params).toEqual({ ssid: 'lab-iot-2', password: '***' });
+  expect(call.params).toEqual({
+    ssid: 'lab-iot-2',
+    password: '***',
+    ip: '192.0.2.10',
+    gateway: '192.0.2.1',
+    netmask: '255.255.255.0',
+    dns: '192.0.2.53',
+  });
+});
+
+test('the Wi-Fi form starts from the static address the board reports', async ({ page }) => {
+  await login(page, '#/system');
+  const wifi = page.getByRole('form', { name: 'Wi-Fi' });
+  await expect(wifi.getByLabel('Network name (SSID)')).toHaveValue('lab-iot');
+  await expect(wifi.getByLabel('IP address')).toHaveValue('192.0.2.10');
+  await expect(wifi.getByLabel('Gateway')).toHaveValue('192.0.2.1');
+  await expect(wifi.getByLabel('Netmask')).toHaveValue('255.255.255.0');
+  await expect(wifi.getByLabel('DNS server')).toHaveValue('192.0.2.53');
+});
+
+test('a new static address is sent whole and kept by the board', async ({ page }) => {
+  await login(page, '#/system');
+  const wifi = page.getByRole('form', { name: 'Wi-Fi' });
+  await wifi.getByLabel('IP address').fill('198.51.100.20');
+  await wifi.getByLabel('Gateway').fill('198.51.100.1');
+  await wifi.getByLabel('DNS server').fill('198.51.100.53');
+  await wifi.getByRole('button', { name: 'Save Wi-Fi' }).click();
+  await expect(page.locator('#toasts')).toContainText('The board is joining lab-iot');
+  const reply = await page.request.post('/api/rpc', { data: { id: 1, method: 'system.info', params: {} } });
+  const info = await reply.json();
+  expect(info.result.wifi).toMatchObject({
+    ip: '198.51.100.20',
+    gateway: '198.51.100.1',
+    netmask: '255.255.255.0',
+    dns: '198.51.100.53',
+  });
+});
+
+test('an address outside the gateway network is refused like the board refuses it', async ({ page }) => {
+  await login(page, '#/system');
+  const wifi = page.getByRole('form', { name: 'Wi-Fi' });
+  await wifi.getByLabel('IP address').fill('198.51.100.20');
+  await wifi.getByRole('button', { name: 'Save Wi-Fi' }).click();
+  await expect(page.locator('#toasts')).toContainText(/wifi needs ssid, password, ip, gateway, netmask and dns/i);
+  await expect(page.locator('#toasts')).not.toContainText('The board is joining');
 });
 
 test('the MQTT section shows the connection and says when the password must be given again', async ({ page }) => {
