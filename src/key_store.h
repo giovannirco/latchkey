@@ -20,10 +20,13 @@ public:
 };
 
 esp_err_t recover();
+esp_err_t snapshot(std::string_view mac, latchkey_util::SensitiveBuffer& plaintext,
+                   latchkey_util::RestoreJournal& identities);
 esp_err_t loadRecord(std::string_view mac, store::locks::Record& out);
 esp_err_t loadMetadata(std::string_view mac, latchkey_util::LockMetadata& out);
 esp_err_t saveMetadata(std::string_view mac, const latchkey_util::LockMetadata& metadata);
 esp_err_t eraseMetadata(std::string_view mac);
+esp_err_t eraseAllMetadata();
 esp_err_t loadSeeds(std::string_view mac, latchkey_util::SeedTable& out, bool& present);
 
 }

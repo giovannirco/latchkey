@@ -3,6 +3,8 @@
 
 #include <algorithm>
 #include <cstring>
+#include <memory>
+#include <new>
 
 #include "mbedtls/platform_util.h"
 #include "nvs.h"
@@ -129,6 +131,137 @@ bool makeRecord(const latchkey_util::BackupLock& lock, store::locks::Record& rec
 template <size_t N>
 bool terminated(const char (&field)[N]) { return std::memchr(field, '\0', N) != nullptr; }
 
+esp_err_t listIdentities(latchkey_util::RestoreJournal& out) {
+    Handle handle("locks", NVS_READONLY);
+    if (handle.error() == ESP_ERR_NVS_NOT_FOUND) return ESP_ERR_NOT_FOUND;
+    if (handle.error() != ESP_OK) return handle.error();
+    nvs_iterator_t entry = nullptr;
+    auto error = nvs_entry_find_in_handle(handle.get(), NVS_TYPE_ANY, &entry);
+    while (error == ESP_OK) {
+        nvs_entry_info_t info{};
+        nvs_entry_info(entry, &info);
+        if (out.count == out.identities.size()) {
+            error = ESP_ERR_INVALID_SIZE;
+            break;
+        }
+        if (info.type != NVS_TYPE_BLOB || std::strlen(info.key) != 12) {
+            error = ESP_ERR_INVALID_CRC;
+            break;
+        }
+        auto& mac = out.identities[out.count++];
+        for (size_t i = 0; i < 6; ++i) {
+            mac[3 * i] = info.key[2 * i];
+            mac[3 * i + 1] = info.key[2 * i + 1];
+            if (i != 5) mac[3 * i + 2] = ':';
+        }
+        char key[14];
+        if (!identityKey(mac.data(), key)) {
+            error = ESP_ERR_INVALID_CRC;
+            break;
+        }
+        error = nvs_entry_next(&entry);
+    }
+    nvs_release_iterator(entry);
+    if (error != ESP_ERR_NVS_NOT_FOUND) return error;
+    return out.count == 0 ? ESP_ERR_NOT_FOUND : ESP_OK;
+}
+
+struct SnapshotRecord {
+    store::locks::Record record;
+    latchkey_util::LockMetadata metadata;
+    ~SnapshotRecord() { mbedtls_platform_zeroize(&record, sizeof(record)); }
+};
+
+void describe(const SnapshotRecord& source, latchkey_util::BackupLock& out) {
+    const auto& record = source.record;
+    const auto& metadata = source.metadata;
+    out.flags = record.flags;
+    out.lifecycle = metadata.lifecycle | latchkey_util::kBackupBackedUp;
+    out.provenance = metadata.provenance;
+    out.pendingProvenance = metadata.pendingProvenance;
+    out.pendingAdminPasscode = metadata.pendingAdminPasscode.data();
+    out.addressType = record.addressType;
+    std::copy(std::begin(record.address), std::end(record.address), out.address.begin());
+    out.mac = record.mac;
+    out.protocol = {record.protocolType, record.protocolVersion, record.scene, record.groupId, record.orgId};
+    out.aesKey = record.aesKey;
+    out.adminPs = record.adminPs;
+    out.unlockKey = record.unlockKey;
+    out.lockFlagPos = record.lockFlagPos;
+    out.features = record.features;
+    out.name = record.name;
+    out.adminPasscode = record.adminPasscode;
+    out.model = record.model;
+    out.hardware = record.hardware;
+    out.firmware = record.firmware;
+    out.manufactureDate = record.manufactureDate;
+}
+
+esp_err_t snapshotBlob(std::string_view mac, RestorePart part, latchkey_util::SensitiveBuffer& arena,
+                        size_t& used, std::span<const uint8_t>& out) {
+    char key[14];
+    const auto* name = partKey(mac, part, key);
+    if (name == nullptr) return ESP_ERR_INVALID_ARG;
+    size_t length = 0;
+    auto error = readBlob(name, key, nullptr, length);
+    if (error == ESP_ERR_NVS_NOT_FOUND) {
+        static constexpr uint8_t emptyLabels[]{1, 0};
+        out = part == RestorePart::Seeds ? std::span<const uint8_t>{} : std::span<const uint8_t>{emptyLabels};
+        return ESP_OK;
+    }
+    if (error != ESP_OK) return error;
+    if (length == 0) return ESP_ERR_INVALID_CRC;
+    if (length > arena.size() - used) return ESP_ERR_INVALID_SIZE;
+    const size_t expected = length;
+    error = readBlob(name, key, arena.data() + used, length);
+    if (error != ESP_OK) return error;
+    if (length != expected) return ESP_ERR_INVALID_CRC;
+    out = {arena.data() + used, length};
+    used += length;
+    return ESP_OK;
+}
+
+}
+
+esp_err_t snapshot(std::string_view mac, latchkey_util::SensitiveBuffer& plaintext,
+                   latchkey_util::RestoreJournal& identities) {
+    latchkey_util::RestoreJournal selected;
+    if (mac.empty()) {
+        const auto error = listIdentities(selected);
+        if (error != ESP_OK) return error;
+    } else {
+        char key[14];
+        if (!identityKey(mac, key)) return ESP_ERR_INVALID_ARG;
+        std::copy(mac.begin(), mac.end(), selected.identities[0].begin());
+        selected.count = 1;
+    }
+    const std::unique_ptr<SnapshotRecord[]> records(new (std::nothrow) SnapshotRecord[selected.count]);
+    const std::unique_ptr<latchkey_util::BackupLock[]> locks(new (std::nothrow) latchkey_util::BackupLock[selected.count]);
+    latchkey_util::SensitiveBuffer arena;
+    if (!records || !locks || !arena.allocate(latchkey_util::kMaxBackupPlaintext)) return ESP_ERR_NO_MEM;
+    size_t used = 0;
+    for (size_t i = 0; i < selected.count; ++i) {
+        const std::string_view identity = selected.identities[i].data();
+        auto error = loadRecord(identity, records[i].record);
+        if (error == ESP_ERR_NVS_NOT_FOUND) return ESP_ERR_NOT_FOUND;
+        if (error != ESP_OK) return error;
+        error = loadMetadata(identity, records[i].metadata);
+        if (error != ESP_OK) return error;
+        describe(records[i], locks[i]);
+        constexpr RestorePart parts[]{RestorePart::Passcodes, RestorePart::Fingerprints, RestorePart::Cards};
+        for (size_t kind = 0; kind < 3; ++kind) {
+            error = snapshotBlob(identity, parts[kind], arena, used, locks[i].labels[kind]);
+            if (error != ESP_OK) return error;
+        }
+        error = snapshotBlob(identity, RestorePart::Seeds, arena, used, locks[i].seeds);
+        if (error != ESP_OK) return error;
+    }
+    const auto status = latchkey_util::encodeBackup({locks.get(), selected.count}, plaintext);
+    if (status == latchkey_util::BackupStatus::NoMemory) return ESP_ERR_NO_MEM;
+    if (status == latchkey_util::BackupStatus::TooLarge) return ESP_ERR_INVALID_SIZE;
+    if (status != latchkey_util::BackupStatus::Ok) return ESP_ERR_INVALID_CRC;
+    identities = selected;
+    return ESP_OK;
 }
 
 bool Restore::readJournal(latchkey_util::RestoreJournal& out, bool& present) {
@@ -301,6 +434,16 @@ esp_err_t eraseMetadata(std::string_view mac) {
     char key[14];
     if (!identityKey(mac, key)) return ESP_ERR_INVALID_ARG;
     return eraseBlob(kMetadataNamespace, key);
+}
+
+esp_err_t eraseAllMetadata() {
+    Handle check(kMetadataNamespace, NVS_READONLY);
+    if (check.error() == ESP_ERR_NVS_NOT_FOUND) return ESP_OK;
+    if (check.error() != ESP_OK) return check.error();
+    Handle handle(kMetadataNamespace, NVS_READWRITE);
+    if (handle.error() != ESP_OK) return handle.error();
+    const auto error = nvs_erase_all(handle.get());
+    return error == ESP_OK ? nvs_commit(handle.get()) : error;
 }
 
 esp_err_t loadSeeds(std::string_view mac, latchkey_util::SeedTable& out, bool& present) {

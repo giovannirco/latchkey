@@ -6,148 +6,14 @@
 #include <string>
 #include <vector>
 
-#include "nvs.h"
-#include "../../src/key_store.cpp"
+#include "latchkey_util/key_restore.h"
+#include "key_store_test_runtime.h"
+#include "../reference/allocation_failure.h"
 
 using namespace latchkey_util;
 
-struct StoredValue {
-    nvs_type_t type = NVS_TYPE_BLOB;
-    std::vector<uint8_t> bytes;
-    bool operator==(const StoredValue&) const = default;
-};
-
-using Entries = std::map<std::string, StoredValue>;
-static std::map<std::string, Entries> s_namespaces;
-static std::map<nvs_handle_t, std::string> s_handles;
-static size_t s_reads;
-static size_t s_writes;
-static size_t s_failRead;
-static size_t s_failWrite;
-static size_t s_preflightReads;
-static bool s_failAfter;
-static size_t s_available;
-static uint32_t s_reserveSequence;
-static constexpr std::string_view kMac = "00:00:5E:00:53:01";
-static constexpr const char* kKey = "00005E005301";
-static constexpr const char* kOtherKey = "00005E005309";
-
-void setUp() {
-    s_namespaces.clear();
-    s_handles.clear();
-    s_reads = s_writes = s_failRead = s_failWrite = s_preflightReads = 0;
-    s_failAfter = false;
-    s_available = 4096;
-    s_reserveSequence = 0;
-}
-
-void tearDown() { TEST_ASSERT_TRUE(s_handles.empty()); }
-
-static bool canRead() { return ++s_reads != s_failRead; }
-
-template <typename Mutation>
-static esp_err_t mutate(Mutation mutation) {
-    if (s_writes == 0) s_preflightReads = s_reads;
-    ++s_writes;
-    if (s_writes == s_failWrite && !s_failAfter) return ESP_FAIL;
-    mutation();
-    return s_writes == s_failWrite ? ESP_FAIL : ESP_OK;
-}
-
-esp_err_t nvs_open(const char* name, nvs_open_mode_t mode, nvs_handle_t* out) {
-    if (!canRead()) return ESP_FAIL;
-    if (!s_namespaces.contains(name)) {
-        if (mode == NVS_READONLY) return ESP_ERR_NVS_NOT_FOUND;
-        const auto error = mutate([&] { s_namespaces.emplace(name, Entries{}); });
-        if (error != ESP_OK) return error;
-    }
-    *out = s_handles.empty() ? 1 : s_handles.rbegin()->first + 1;
-    s_handles[*out] = name;
-    return ESP_OK;
-}
-
-void nvs_close(nvs_handle_t handle) { s_handles.erase(handle); }
-
-esp_err_t nvs_find_key(nvs_handle_t handle, const char* key, nvs_type_t* type) {
-    if (!canRead()) return ESP_FAIL;
-    const auto& entries = s_namespaces.at(s_handles.at(handle));
-    if (!entries.contains(key)) return ESP_ERR_NVS_NOT_FOUND;
-    *type = entries.at(key).type;
-    return ESP_OK;
-}
-
-esp_err_t nvs_get_blob(nvs_handle_t handle, const char* key, void* out, size_t* length) {
-    if (!canRead()) return ESP_FAIL;
-    const auto& entries = s_namespaces.at(s_handles.at(handle));
-    if (!entries.contains(key)) return ESP_ERR_NVS_NOT_FOUND;
-    const auto& value = entries.at(key);
-    if (value.type != NVS_TYPE_BLOB) return ESP_ERR_NVS_TYPE_MISMATCH;
-    if (out != nullptr && *length < value.bytes.size()) return ESP_ERR_NVS_INVALID_LENGTH;
-    if (out != nullptr) std::memcpy(out, value.bytes.data(), value.bytes.size());
-    *length = value.bytes.size();
-    return ESP_OK;
-}
-
-esp_err_t nvs_get_u32(nvs_handle_t handle, const char* key, uint32_t* out) {
-    if (!canRead()) return ESP_FAIL;
-    const auto& entries = s_namespaces.at(s_handles.at(handle));
-    if (!entries.contains(key)) return ESP_ERR_NVS_NOT_FOUND;
-    const auto& value = entries.at(key);
-    if (value.type != NVS_TYPE_U32 || value.bytes.size() != 4) return ESP_ERR_NVS_TYPE_MISMATCH;
-    std::memcpy(out, value.bytes.data(), 4);
-    return ESP_OK;
-}
-
-esp_err_t nvs_set_blob(nvs_handle_t handle, const char* key, const void* value, size_t length) {
-    return mutate([&] {
-        const auto* bytes = static_cast<const uint8_t*>(value);
-        s_namespaces.at(s_handles.at(handle))[key] = {NVS_TYPE_BLOB, {bytes, bytes + length}};
-    });
-}
-
-esp_err_t nvs_erase_key(nvs_handle_t handle, const char* key) {
-    auto& entries = s_namespaces.at(s_handles.at(handle));
-    if (!entries.contains(key)) return ESP_ERR_NVS_NOT_FOUND;
-    return mutate([&] { entries.erase(key); });
-}
-
-esp_err_t nvs_commit(nvs_handle_t) { return mutate([] {}); }
-
-struct nvs_iterator { size_t remaining; };
-
-esp_err_t nvs_entry_find_in_handle(nvs_handle_t handle, nvs_type_t type, nvs_iterator_t* out) {
-    if (!canRead()) return ESP_FAIL;
-    TEST_ASSERT_EQUAL_INT(NVS_TYPE_ANY, type);
-    const size_t size = s_namespaces.at(s_handles.at(handle)).size();
-    if (size == 0) return ESP_ERR_NVS_NOT_FOUND;
-    *out = new nvs_iterator{size};
-    return ESP_OK;
-}
-
-esp_err_t nvs_entry_next(nvs_iterator_t* entry) {
-    if (!canRead()) return ESP_FAIL;
-    if (--(*entry)->remaining > 0) return ESP_OK;
-    delete *entry;
-    *entry = nullptr;
-    return ESP_ERR_NVS_NOT_FOUND;
-}
-
-void nvs_release_iterator(nvs_iterator_t entry) { delete entry; }
-
-namespace store {
-
-esp_err_t usage(Usage& out) {
-    if (!canRead()) return ESP_FAIL;
-    out.availableEntries = s_available;
-    return ESP_OK;
-}
-
-size_t reservedEntries(uint32_t nextSequence) {
-    s_reserveSequence = nextSequence;
-    return 100;
-}
-
-}
+void setUp() { resetNvsFixture(); allocation_failure::reset(); }
+void tearDown() { allocation_failure::resume(); clearNvsFixture(); }
 
 static DecodedBackup backup() {
     const std::array<uint8_t, 16> aesKey{1, 2, 3};
@@ -447,6 +313,168 @@ static void test_boot_recovery_retries_failed_cleanup_and_retains_only_existing_
     }
 }
 
+static void seedStoredBackup() {
+    const auto decoded = backup();
+    key_store::Restore storage;
+    Publication publication;
+    TEST_ASSERT_EQUAL_INT(static_cast<int>(RestoreStatus::Ok),
+                          static_cast<int>(restoreKeys(decoded, storage, publication)));
+    s_writes = 0;
+}
+
+static void test_snapshot_preserves_every_field_and_marks_the_first_backup_copy() {
+    seedStoredBackup();
+    LockMetadata metadata;
+    TEST_ASSERT_EQUAL_INT(ESP_OK, key_store::loadMetadata(kMac, metadata));
+    metadata.lifecycle &= ~kBackupBackedUp;
+    TEST_ASSERT_EQUAL_INT(ESP_OK, key_store::saveMetadata(kMac, metadata));
+    const auto before = s_namespaces;
+    SensitiveBuffer plaintext;
+    RestoreJournal identities;
+    TEST_ASSERT_EQUAL_INT(ESP_OK, key_store::snapshot({}, plaintext, identities));
+    TEST_ASSERT_TRUE(s_namespaces == before);
+    TEST_ASSERT_EQUAL_UINT(1, identities.count);
+    DecodedBackup actual;
+    TEST_ASSERT_EQUAL_INT(static_cast<int>(BackupStatus::Ok),
+                          static_cast<int>(decodeBackup(std::move(plaintext), actual)));
+    const auto expected = backup();
+    SensitiveBuffer expectedBytes;
+    SensitiveBuffer actualBytes;
+    TEST_ASSERT_EQUAL_INT(static_cast<int>(BackupStatus::Ok),
+                          static_cast<int>(encodeBackup(expected.locks(), expectedBytes)));
+    TEST_ASSERT_EQUAL_INT(static_cast<int>(BackupStatus::Ok),
+                          static_cast<int>(encodeBackup(actual.locks(), actualBytes)));
+    TEST_ASSERT_TRUE(expectedBytes.size() == actualBytes.size() &&
+                     std::memcmp(expectedBytes.data(), actualBytes.data(), actualBytes.size()) == 0);
+}
+
+static void test_whole_snapshot_rejects_unreadable_persisted_identities_instead_of_exporting_a_subset() {
+    seedStoredBackup();
+    for (const auto type : {NVS_TYPE_BLOB, NVS_TYPE_U32}) {
+        s_namespaces["locks"][kOtherKey] = {type, {0xFF}};
+        SensitiveBuffer plaintext;
+        RestoreJournal identities;
+        TEST_ASSERT_NOT_EQUAL(ESP_OK, key_store::snapshot({}, plaintext, identities));
+        TEST_ASSERT_EQUAL_UINT(0, plaintext.size());
+        TEST_ASSERT_EQUAL_INT(ESP_OK, key_store::snapshot(kMac, plaintext, identities));
+        TEST_ASSERT_EQUAL_UINT(1, identities.count);
+    }
+    TEST_ASSERT_EQUAL_UINT(0, s_writes);
+}
+
+static void test_snapshot_rejects_unreadable_nested_data_and_missing_locks_without_writes() {
+    seedStoredBackup();
+    const auto valid = s_namespaces;
+    for (const auto* name : {"labels", "seeds", "lockmeta"}) {
+        for (const auto type : {NVS_TYPE_BLOB, NVS_TYPE_U32}) {
+            s_namespaces = valid;
+            const std::string key = std::string(kKey) + (std::string_view(name) == "labels" ? "p" : "");
+            s_namespaces[name][key] = {type, {0xFF}};
+            SensitiveBuffer plaintext;
+            RestoreJournal identities;
+            TEST_ASSERT_NOT_EQUAL(ESP_OK, key_store::snapshot(kMac, plaintext, identities));
+            TEST_ASSERT_EQUAL_UINT(0, plaintext.size());
+            TEST_ASSERT_EQUAL_UINT(0, s_writes);
+        }
+    }
+    s_namespaces.clear();
+    SensitiveBuffer plaintext;
+    RestoreJournal identities;
+    TEST_ASSERT_EQUAL_INT(ESP_ERR_NOT_FOUND, key_store::snapshot(kMac, plaintext, identities));
+    TEST_ASSERT_EQUAL_INT(ESP_ERR_NOT_FOUND, key_store::snapshot({}, plaintext, identities));
+}
+
+static void test_snapshot_refuses_oversized_stored_blobs_before_allocating_them() {
+    seedStoredBackup();
+    s_namespaces["labels"][std::string(kKey) + "p"] = {NVS_TYPE_BLOB, std::vector<uint8_t>(kMaxBackupPlaintext + 1)};
+    SensitiveBuffer plaintext;
+    RestoreJournal identities;
+    TEST_ASSERT_EQUAL_INT(ESP_ERR_INVALID_SIZE, key_store::snapshot({}, plaintext, identities));
+    TEST_ASSERT_EQUAL_UINT(0, plaintext.size());
+    TEST_ASSERT_EQUAL_UINT(0, s_writes);
+}
+
+static void test_maximal_single_snapshot_fits_and_all_lock_overflow_has_no_partial_output() {
+    const auto original = backup();
+    auto lock = original.locks()[0];
+    const std::string name(99, 'N');
+    const std::string info(31, 'M');
+    const std::string date(15, 'D');
+    lock.name = name;
+    lock.model = lock.hardware = lock.firmware = info;
+    lock.manufactureDate = date;
+    LabelTable table;
+    std::string label;
+    for (size_t i = 0; i < 24; ++i) label += "\xC3\xA9";
+    for (size_t i = 0; i < kMaxLabels; ++i) {
+        TEST_ASSERT_TRUE(table.put({i + 1, true, label, WeeklyWindow{0x7F, 0, 1440}}));
+    }
+    const auto labels = table.encode();
+    lock.labels.fill(labels);
+    key_store::Restore storage;
+    for (const auto part : kRestoreParts) TEST_ASSERT_TRUE(storage.writePart(lock, part));
+    SensitiveBuffer plaintext;
+    RestoreJournal identities;
+    TEST_ASSERT_EQUAL_INT(ESP_OK, key_store::snapshot({}, plaintext, identities));
+    TEST_ASSERT_LESS_OR_EQUAL_UINT(kMaxBackupPlaintext, plaintext.size());
+    DecodedBackup decoded;
+    TEST_ASSERT_EQUAL_INT(static_cast<int>(BackupStatus::Ok),
+                          static_cast<int>(decodeBackup(std::move(plaintext), decoded)));
+    TEST_ASSERT_TRUE(decoded.locks()[0].name == name);
+    TEST_ASSERT_EQUAL_UINT(labels.size(), decoded.locks()[0].labels[0].size());
+    lock.mac = "00:00:5E:00:53:02";
+    for (const auto part : kRestoreParts) TEST_ASSERT_TRUE(storage.writePart(lock, part));
+    s_writes = 0;
+    TEST_ASSERT_EQUAL_INT(ESP_ERR_INVALID_SIZE, key_store::snapshot({}, plaintext, identities));
+    TEST_ASSERT_EQUAL_UINT(0, plaintext.size());
+    TEST_ASSERT_EQUAL_INT(ESP_OK, key_store::snapshot(lock.mac, plaintext, identities));
+    TEST_ASSERT_EQUAL_UINT(1, identities.count);
+    TEST_ASSERT_EQUAL_UINT(0, s_writes);
+}
+
+static void test_snapshot_allocation_and_read_failures_are_atomic_and_bounded() {
+    seedStoredBackup();
+    const auto before = s_namespaces;
+    SensitiveBuffer plaintext;
+    RestoreJournal identities;
+    allocation_failure::reset();
+    s_reads = 0;
+    TEST_ASSERT_EQUAL_INT(ESP_OK, key_store::snapshot({}, plaintext, identities));
+    const size_t allocations = allocation_failure::attempts;
+    const size_t reads = s_reads;
+    TEST_ASSERT_EQUAL_UINT(4, allocations);
+    plaintext.clear();
+    for (size_t at = 1; at <= allocations; ++at) {
+        allocation_failure::reset();
+        allocation_failure::failAt = at;
+        TEST_ASSERT_EQUAL_INT(ESP_ERR_NO_MEM, key_store::snapshot({}, plaintext, identities));
+        TEST_ASSERT_EQUAL_UINT(0, allocation_failure::live());
+        TEST_ASSERT_EQUAL_UINT(0, plaintext.size());
+        TEST_ASSERT_TRUE(s_namespaces == before);
+    }
+    allocation_failure::resume();
+    for (size_t at = 1; at <= reads; ++at) {
+        s_reads = 0;
+        s_failRead = at;
+        TEST_ASSERT_NOT_EQUAL(ESP_OK, key_store::snapshot({}, plaintext, identities));
+        TEST_ASSERT_EQUAL_UINT(0, plaintext.size());
+        TEST_ASSERT_TRUE(s_namespaces == before);
+    }
+    TEST_ASSERT_EQUAL_UINT(0, s_writes);
+}
+
+static void test_metadata_namespace_cleanup_propagates_failures_and_removes_orphans() {
+    seedStoredBackup();
+    s_namespaces["lockmeta"][kOtherKey] = {NVS_TYPE_BLOB, {0xFF}};
+    s_failWrite = s_writes + 1;
+    TEST_ASSERT_NOT_EQUAL(ESP_OK, key_store::eraseAllMetadata());
+    TEST_ASSERT_EQUAL_UINT(2, s_namespaces["lockmeta"].size());
+    s_failWrite = 0;
+    TEST_ASSERT_EQUAL_INT(ESP_OK, key_store::eraseAllMetadata());
+    TEST_ASSERT_TRUE(s_namespaces["lockmeta"].empty());
+    TEST_ASSERT_TRUE(s_namespaces["locks"].contains(kKey));
+}
+
 int main() {
     UNITY_BEGIN();
     RUN_TEST(test_complete_restore_preserves_record_layout_and_exact_nested_bytes);
@@ -460,5 +488,12 @@ int main() {
     RUN_TEST(test_seed_absence_differs_from_corrupt_or_unreadable_seed_records);
     RUN_TEST(test_unreadable_journal_blocks_boot_recovery_without_deletion);
     RUN_TEST(test_boot_recovery_retries_failed_cleanup_and_retains_only_existing_records);
+    RUN_TEST(test_snapshot_preserves_every_field_and_marks_the_first_backup_copy);
+    RUN_TEST(test_whole_snapshot_rejects_unreadable_persisted_identities_instead_of_exporting_a_subset);
+    RUN_TEST(test_snapshot_rejects_unreadable_nested_data_and_missing_locks_without_writes);
+    RUN_TEST(test_snapshot_refuses_oversized_stored_blobs_before_allocating_them);
+    RUN_TEST(test_maximal_single_snapshot_fits_and_all_lock_overflow_has_no_partial_output);
+    RUN_TEST(test_snapshot_allocation_and_read_failures_are_atomic_and_bounded);
+    RUN_TEST(test_metadata_namespace_cleanup_propagates_failures_and_removes_orphans);
     return UNITY_END();
 }

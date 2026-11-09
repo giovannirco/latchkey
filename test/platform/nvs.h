@@ -15,6 +15,7 @@ inline constexpr esp_err_t ESP_ERR_NVS_INVALID_LENGTH = 0x110c;
 
 struct nvs_iterator;
 using nvs_iterator_t = nvs_iterator*;
+struct nvs_entry_info_t { char namespace_name[16]; char key[16]; nvs_type_t type; };
 
 esp_err_t nvs_open(const char* name, nvs_open_mode_t mode, nvs_handle_t* out);
 void nvs_close(nvs_handle_t handle);
@@ -26,4 +27,6 @@ esp_err_t nvs_erase_key(nvs_handle_t handle, const char* key);
 esp_err_t nvs_commit(nvs_handle_t handle);
 esp_err_t nvs_entry_find_in_handle(nvs_handle_t handle, nvs_type_t type, nvs_iterator_t* out);
 esp_err_t nvs_entry_next(nvs_iterator_t* entry);
+esp_err_t nvs_entry_info(nvs_iterator_t entry, nvs_entry_info_t* out);
+esp_err_t nvs_erase_all(nvs_handle_t handle);
 void nvs_release_iterator(nvs_iterator_t entry);
