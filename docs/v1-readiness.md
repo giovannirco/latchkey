@@ -24,7 +24,7 @@ As of 2026-11-09 UTC, v0.4.0 is the latest published release. v1.0.0 is not read
 - Ending a session clears pending and cached jobs. Old responses cannot reopen secret dialogs or invalidate a newer session.
 - Failure to open the event connection after login shows a retry action using the existing session.
 
-Regression tests live in `tools/ui-tests/rpc-response.spec.cjs`, `session-boundary.spec.cjs` and `auth.spec.cjs`. They exercise the browser against the local mock, including controlled response ordering. They do not operate a real board or lock.
+Regression tests live in `tools/ui-tests/rpc-response.spec.cjs`, `session-boundary.spec.cjs`, `startup.spec.cjs` and `auth.spec.cjs`. They exercise the browser against the local mock, including controlled response ordering and an interrupted native WebSocket handshake. They do not operate a real board or lock.
 
 ## Verification
 

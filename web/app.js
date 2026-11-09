@@ -3556,10 +3556,11 @@ function sendFirmware(file, progress, onSent) {
 }
 
 async function boot() {
+  const startedSession = sessionEpoch;
   try {
     await startApp();
   } catch (failure) {
-    if (failure.code === 'session_changed') return;
+    if (startedSession !== sessionEpoch || failure.code === 'session_changed') return;
     state.authed = false;
     events.stop();
     if (failure.code === 'unauthorized') {
