@@ -2,9 +2,11 @@
 """Lock settings over the USB serial console, which counts as presence at the board, against the owner's TTLock
 lock held by the ESP32-S3. The checks that need no lock run on any board.
 
-The lock belongs to its owner: every setting the suite changes is put back exactly as it was read, in a finally
-block. The suite never clears the passage schedule and deletes only the window it added. It sends no SWITCH write
-(reset button, privacy lock, tamper alert) to the owner's lock: every write must refuse before sending a frame.
+The lock belongs to its owner: the tests that change auto-lock, sound or passage mode run only with
+--allow-lock-writes, and put every setting back exactly as it was read, in a finally block that retries a few times
+and fails naming what it left on the lock. The suite never clears the passage schedule and deletes only the window it
+added. It sends no SWITCH write (reset button, privacy lock, tamper alert) to the owner's lock: every write must refuse
+before sending a frame.
 """
 
 from __future__ import annotations
@@ -12,16 +14,17 @@ from __future__ import annotations
 import re
 import sys
 import time
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from typing import Any
 
 import pytest
 from board import prepare, stored, wait_idle
-from latchkey_cli import Console
+from latchkey_cli import Console, ConsoleTimeout, LatchkeyError
 from owner import hide
 
 DOCUMENTATION_MAC = "00:00:5E:00:53:99"
 LOCK_TIMEOUT_S = 90.0
+CLEANUP_ATTEMPTS = 3
 CLOCK = re.compile(r"([01][0-9]|2[0-3]):[0-5][0-9]")
 SWITCHES = {
     "reset_button": "lock.resetButton",
@@ -93,6 +96,22 @@ def features_of(console: Console, mac: str) -> set[str]:
     return set(call(console, "lock.features", mac)["features"])
 
 
+def put_back(console: Console, left: str, restore: Callable[[], bool]) -> None:
+    problems: list[str] = []
+    for _ in range(CLEANUP_ATTEMPTS):
+        try:
+            if restore():
+                return
+            problems.append("still there after the attempt")
+        except (LatchkeyError, ConsoleTimeout) as error:
+            problems.append(str(error))
+        try:
+            wait_idle(console)
+        except ConsoleTimeout as error:
+            problems.append(str(error))
+    pytest.fail(f"left on the lock after {CLEANUP_ATTEMPTS} attempts: {left} ({'; '.join(problems)})")
+
+
 def check_passage_mode(mode: dict[str, Any]) -> None:
     keys = {"type", "day", "start", "end"} | ({"month"} if mode["type"] == "monthly" else set())
     assert set(mode) == keys, mode
@@ -113,6 +132,12 @@ def held(console: Console, board: dict[str, Any], lock_mac: str) -> dict[str, An
     if lock is None:
         pytest.skip("this board holds no keys for the lock")
     return hide(lock)
+
+
+@pytest.fixture
+def writable(allow_lock_writes: bool) -> None:
+    if not allow_lock_writes:
+        pytest.skip("pass --allow-lock-writes to change the lock's settings and put them back")
 
 
 @pytest.fixture(scope="module")
@@ -225,7 +250,9 @@ def test_unverified_switch_writes_send_no_frames(
     assert frames(console) == before
 
 
-def test_auto_lock_changes_and_comes_back(console: Console, held: dict[str, Any], lock_mac: str) -> None:
+def test_auto_lock_changes_and_comes_back(
+    console: Console, writable: None, held: dict[str, Any], lock_mac: str
+) -> None:
     if "auto_lock" not in features_of(console, lock_mac):
         pytest.skip("the lock does not report auto_lock")
     found = call(console, "lock.autolock.get", lock_mac)
@@ -238,11 +265,17 @@ def test_auto_lock_changes_and_comes_back(console: Console, held: dict[str, Any]
             too_long = {"lock": lock_mac, "seconds": found["max"] + 1}
             assert code_of(console, "lock.autolock.set", too_long) == "invalid_argument"
     finally:
-        call(console, "lock.autolock.set", lock_mac, {"seconds": found["seconds"]})
-    assert call(console, "lock.autolock.get", lock_mac) == found
+
+        def restore() -> bool:
+            call(console, "lock.autolock.set", lock_mac, {"seconds": found["seconds"]})
+            return call(console, "lock.autolock.get", lock_mac) == found
+
+        put_back(console, f"auto-lock {other} s instead of {found['seconds']} s", restore)
 
 
-def test_sound_changes_and_comes_back(console: Console, held: dict[str, Any], lock_mac: str) -> None:
+def test_sound_changes_and_comes_back(
+    console: Console, writable: None, held: dict[str, Any], lock_mac: str
+) -> None:
     if "audio_management" not in features_of(console, lock_mac):
         pytest.skip("the lock does not report audio_management")
     found = call(console, "lock.sound.get", lock_mac)
@@ -255,11 +288,17 @@ def test_sound_changes_and_comes_back(console: Console, held: dict[str, Any], lo
             louder = call(console, "lock.sound.set", lock_mac, {"enabled": True, "volume": level})
             assert (louder["enabled"], louder["volume"]) == (True, level)
     finally:
-        call(console, "lock.sound.set", lock_mac, restore)
-    assert call(console, "lock.sound.get", lock_mac) == found
+
+        def put_sound_back() -> bool:
+            call(console, "lock.sound.set", lock_mac, restore)
+            return call(console, "lock.sound.get", lock_mac) == found
+
+        put_back(console, f"sound changed from {found}", put_sound_back)
 
 
-def test_a_passage_window_is_added_and_deleted(console: Console, held: dict[str, Any], lock_mac: str) -> None:
+def test_a_passage_window_is_added_and_deleted(
+    console: Console, writable: None, held: dict[str, Any], lock_mac: str
+) -> None:
     if "passage_mode" not in features_of(console, lock_mac):
         pytest.skip("the lock does not report passage_mode")
     found = call(console, "lock.passage.list", lock_mac)["modes"]
@@ -274,9 +313,13 @@ def test_a_passage_window_is_added_and_deleted(console: Console, held: dict[str,
         assert call(console, "lock.passage.list", lock_mac)["modes"] == added
         print(f"passage window added for weekday {day} (1 = Monday), listed as {window}", file=sys.stderr)
     finally:
-        listed = call(console, "lock.passage.list", lock_mac)["modes"]
-        if window in listed:
-            call(console, "lock.passage.delete", lock_mac, window)
+
+        def remove_window() -> bool:
+            if window in call(console, "lock.passage.list", lock_mac)["modes"]:
+                call(console, "lock.passage.delete", lock_mac, window)
+            return window not in call(console, "lock.passage.list", lock_mac)["modes"]
+
+        put_back(console, f"passage window {window}", remove_window)
     assert call(console, "lock.passage.list", lock_mac)["modes"] == found
     gone = code_of(console, "lock.passage.delete", {"lock": lock_mac, **window})
     assert gone == "invalid_argument"

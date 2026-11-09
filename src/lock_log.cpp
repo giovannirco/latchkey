@@ -58,10 +58,9 @@ bool raise(const std::string& mac, const LogEntry& entry, latchkey_util::UnlockM
     const esp_err_t stored = lock_manager::rememberAlert(mac, alert, added);
     if (stored != ESP_OK) {
         ESP_LOGE(TAG, "cannot store the unlock alert: %s", esp_err_to_name(stored));
-        return false;
     }
     if (!added) {
-        return true;
+        return stored == ESP_OK;
     }
     const char* name = latchkey_util::toString(method);
     ESP_LOGW(TAG, "unlock alert for %s: log record %u, type %u, %s", mac.c_str(), entry.recordNumber, entry.type,
@@ -74,7 +73,7 @@ bool raise(const std::string& mac, const LogEntry& entry, latchkey_util::UnlockM
     cJSON_AddNumberToObject(data, "type", entry.type);
     events::publish("lock.alert", data);
     audit::append({static_cast<uint32_t>(when > 0 ? when : 0), rpc::Transport::Board, "lock.alert", mac, name});
-    return true;
+    return stored == ESP_OK;
 }
 
 }
@@ -172,6 +171,7 @@ Status readSlots(ttlock::Session& session, uint16_t from, uint16_t to, Entries& 
 bool report(const std::string& mac, const LogPage& page, const latchkey_util::PageJudgement& judged,
             const latchkey_util::WatchState& state, int32_t offset, int64_t nowUtc) {
     const std::vector<UnlockFinding>& findings = judged.findings;
+    bool saved = true;
     for (size_t i = 0; i < findings.size(); ++i) {
         const LogEntry& entry = page.entries[judged.fresh[i]];
         ESP_LOGD(TAG, "log record %u type %u uid %u record id %u", entry.recordNumber, entry.type,
@@ -180,7 +180,7 @@ bool report(const std::string& mac, const LogPage& page, const latchkey_util::Pa
             case UnlockVerdict::Alert:
                 if (!raise(mac, entry, findings[i].method,
                            latchkey_util::recordOffset(state, entry.recordNumber, offset), nowUtc)) {
-                    return false;
+                    saved = false;
                 }
                 break;
             case UnlockVerdict::Latchkey:
@@ -194,7 +194,7 @@ bool report(const std::string& mac, const LogPage& page, const latchkey_util::Pa
                 break;
         }
     }
-    return true;
+    return saved;
 }
 
 cJSON* fetchResult(const Entries& entries, std::optional<uint16_t> since, uint32_t until, bool more,

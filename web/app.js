@@ -594,6 +594,11 @@ function toast(message, { error = false, warning = false, alarm = false, detail 
   if (!warning && !alarm) setTimeout(() => item.remove(), error ? ERROR_TOAST_MS : TOAST_MS);
 }
 
+const STORED_WARNING_TEXT = {
+  watch_state_unreadable: 'The saved operation-log cursor could not be read. Some events may have been missed.',
+  alerts_unreadable: 'Alerts stored before this could not be read and are lost.',
+};
+
 function alertText(data) {
   const lock = state.locks.find((item) => item.id === data.lock);
   const name = lock ? lock.name : data.lock;
@@ -1724,9 +1729,8 @@ async function renderAlerts(view, lock) {
               h(
                 'li',
                 null,
-                alert.kind === 'watch_state_unreadable'
-                  ? 'The saved operation-log cursor could not be read. Some events may have been missed.'
-                  : `${alertText({ ...alert, lock: lock.id })} - ${formatTime(alert.time)}`,
+                STORED_WARNING_TEXT[alert.kind] ||
+                  `${alertText({ ...alert, lock: lock.id })} - ${formatTime(alert.time)}`,
               ),
             ),
           )
@@ -2464,10 +2468,14 @@ async function renderSettings(panel, lock, has) {
   for (const item of parts) await load(item.body, item.load);
 }
 
+const PASSAGE_ADD_STOPPED =
+  'Adding did not finish, so some windows may have been added. The list shows what the lock holds now.';
+
 function passageSection(lock) {
   const clear = h('button', { class: 'button small', type: 'button' }, 'Turn off all');
   const item = section('Passage mode', 'unlock', [clear]);
   const target = { lock: lock.id };
+  let notice = null;
 
   const describe = (mode) => {
     const day = mode.day === 0 ? 'Every day' : WEEKDAY_NAMES[mode.day - 1] || `Day ${mode.day}`;
@@ -2546,13 +2554,20 @@ function passageSection(lock) {
         toast('Passage window added');
       } catch (failure) {
         toastError(failure);
+        if (failure.code === 'unauthorized') return;
+        notice = PASSAGE_ADD_STOPPED;
+        await load(item.body, item.load);
       }
     });
     item.body.replaceChildren(
-      h('p', { class: 'hint' }, 'During a passage window the lock stays open after it is unlocked.'),
-      list,
-      form,
+      ...[
+        h('p', { class: 'hint' }, 'During a passage window the lock stays open after it is unlocked.'),
+        notice && h('p', { class: 'notice', role: 'status' }, notice),
+        list,
+        form,
+      ].filter(Boolean),
     );
+    notice = null;
   }
 
   item.load = async () => {

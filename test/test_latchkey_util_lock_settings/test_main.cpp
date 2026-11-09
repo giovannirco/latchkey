@@ -126,6 +126,18 @@ static void test_auto_lock_renders_its_range_or_null() {
                              latchkey_util::autolockJson(AutoLockSetting{0, 0, 0}).c_str());
 }
 
+static void test_a_passage_add_that_stops_part_way_says_how_many_windows_were_added() {
+    TEST_ASSERT_EQUAL_STRING("the lock did not answer; 1 passage window was added before that",
+                             latchkey_util::passageAddStopped("the lock did not answer", 1).c_str());
+    TEST_ASSERT_EQUAL_STRING("the lock did not answer; 3 passage windows were added before that",
+                             latchkey_util::passageAddStopped("the lock did not answer", 3).c_str());
+}
+
+static void test_a_passage_add_that_stops_before_any_window_keeps_the_failure() {
+    TEST_ASSERT_EQUAL_STRING("the lock did not answer",
+                             latchkey_util::passageAddStopped("the lock did not answer", 0).c_str());
+}
+
 int main(int, char**) {
     UNITY_BEGIN();
     RUN_TEST(test_weekly_passage_days_run_from_every_day_to_sunday);
@@ -138,5 +150,7 @@ int main(int, char**) {
     RUN_TEST(test_auto_lock_is_off_or_a_delay_within_the_lock_range);
     RUN_TEST(test_a_lock_that_reports_no_range_takes_any_delay_it_can_store);
     RUN_TEST(test_auto_lock_renders_its_range_or_null);
+    RUN_TEST(test_a_passage_add_that_stops_part_way_says_how_many_windows_were_added);
+    RUN_TEST(test_a_passage_add_that_stops_before_any_window_keeps_the_failure);
     return UNITY_END();
 }

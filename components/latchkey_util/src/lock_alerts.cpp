@@ -15,7 +15,7 @@ constexpr size_t kHeaderBytes = 6;
 constexpr size_t kEntryBytes = 13;
 
 bool valid(const LockAlert& alert) {
-    if (alert.kind == LockAlertKind::WatchStateUnreadable) {
+    if (alert.kind == LockAlertKind::WatchStateUnreadable || alert.kind == LockAlertKind::AlertsUnreadable) {
         return alert.method == UnlockMethod::None && alert.type == 0 && alert.seq == 0;
     }
     return alert.kind == LockAlertKind::UnexpectedUnlock && unlockMethodOf(alert.type) == alert.method &&
@@ -116,6 +116,14 @@ bool LockAlerts::decode(const uint8_t* data, size_t size, LockAlerts& out) {
     }
     out = alerts;
     return true;
+}
+
+LockAlerts LockAlerts::lost() {
+    LockAlerts alerts;
+    LockAlert warning;
+    warning.kind = LockAlertKind::AlertsUnreadable;
+    alerts.add(warning);
+    return alerts;
 }
 
 }

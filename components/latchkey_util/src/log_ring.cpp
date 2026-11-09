@@ -138,7 +138,9 @@ size_t utf8Prefix(std::string_view text, size_t maxBytes) {
     return cut;
 }
 
-LogRing::LogRing(uint8_t* storage, size_t capacity) : storage_(storage), capacity_(capacity) {}
+LogRing::LogRing(uint8_t* storage, size_t capacity) : storage_(storage), capacity_(capacity) {
+    std::memset(storage_, 0, capacity_);
+}
 
 size_t LogRing::advance(size_t offset, size_t length) const { return (offset + length) % capacity_; }
 

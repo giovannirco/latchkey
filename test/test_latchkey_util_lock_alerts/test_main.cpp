@@ -104,6 +104,36 @@ static void test_a_corrupt_alert_table_is_refused_without_overwriting_the_caller
     }
 }
 
+static void test_a_lost_table_starts_empty_but_for_a_warning_that_is_not_an_unlock() {
+    LockAlerts alerts = LockAlerts::lost();
+    TEST_ASSERT_EQUAL_UINT(1, alerts.entries().size());
+    const LockAlert warning = alerts.entries()[0];
+    TEST_ASSERT_EQUAL(LockAlertKind::AlertsUnreadable, warning.kind);
+    TEST_ASSERT_EQUAL(UnlockMethod::None, warning.method);
+    TEST_ASSERT_EQUAL_UINT32(0, warning.time);
+    TEST_ASSERT_TRUE(alerts.add(unexpected(41)));
+    TEST_ASSERT_GREATER_THAN_UINT32(warning.id, alerts.entries().back().id);
+}
+
+static void test_the_lost_warning_survives_a_restart_until_it_is_acknowledged() {
+    const LockAlerts alerts = LockAlerts::lost();
+    const auto bytes = alerts.encode();
+    LockAlerts restarted;
+    TEST_ASSERT_TRUE(LockAlerts::decode(bytes.data(), bytes.size(), restarted));
+    TEST_ASSERT_EQUAL_UINT(1, restarted.entries().size());
+    TEST_ASSERT_EQUAL(LockAlertKind::AlertsUnreadable, restarted.entries()[0].kind);
+    TEST_ASSERT_TRUE(restarted.acknowledge(restarted.entries()[0].id));
+    TEST_ASSERT_TRUE(restarted.entries().empty());
+}
+
+static void test_a_lost_warning_cannot_carry_an_unlock() {
+    LockAlerts alerts;
+    LockAlert forged = unexpected(41);
+    forged.kind = LockAlertKind::AlertsUnreadable;
+    TEST_ASSERT_FALSE(alerts.add(forged));
+    TEST_ASSERT_TRUE(alerts.entries().empty());
+}
+
 int main(int, char**) {
     UNITY_BEGIN();
     RUN_TEST(test_an_alert_survives_restart_and_acknowledging_it_keeps_a_new_arrival);
@@ -112,5 +142,8 @@ int main(int, char**) {
     RUN_TEST(test_a_watch_warning_is_stored_without_becoming_an_unlock);
     RUN_TEST(test_an_acknowledgement_cannot_hide_alerts_that_have_not_arrived);
     RUN_TEST(test_a_corrupt_alert_table_is_refused_without_overwriting_the_caller);
+    RUN_TEST(test_a_lost_table_starts_empty_but_for_a_warning_that_is_not_an_unlock);
+    RUN_TEST(test_the_lost_warning_survives_a_restart_until_it_is_acknowledged);
+    RUN_TEST(test_a_lost_warning_cannot_carry_an_unlock);
     return UNITY_END();
 }

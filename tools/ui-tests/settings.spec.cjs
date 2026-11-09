@@ -47,6 +47,25 @@ test('a sound setting without a volume shows only the switch', async ({ page, re
   await expect(sound.getByLabel('Volume')).toHaveCount(0);
 });
 
+test('a passage add that stops part way shows what the lock holds now', async ({ page, request }) => {
+  await mock(request, { failPassageAdd: { after: 2, code: 'timeout', message: 'the lock did not answer' } });
+  await login(page);
+  await openLock(page, 'Front door', 'Settings');
+  const passage = page.getByRole('region', { name: 'Passage mode' });
+  await expect(passage.getByRole('listitem')).toHaveText(['Every day, 08:00 to 09:00Delete']);
+  await passage.getByRole('button', { name: 'Add passage window' }).click();
+  await expect(toast(page, 'The lock did not answer in time')).toBeVisible();
+  await expect(toast(page, '2 passage windows were added before that')).toBeVisible();
+  await expect(passage).toContainText('Adding did not finish, so some windows may have been added');
+  await expect(passage.getByRole('listitem')).toHaveText([
+    'Every day, 08:00 to 09:00Delete',
+    'Mondays, 08:00 to 18:00Delete',
+    'Tuesdays, 08:00 to 18:00Delete',
+  ]);
+  const made = (await calls(request)).map((call) => call.method).filter((method) => method.startsWith('lock.passage.'));
+  expect(made.slice(-2)).toEqual(['lock.passage.add', 'lock.passage.list']);
+});
+
 test('features the board does not use are listed apart', async ({ page }) => {
   await login(page);
   await openLock(page, 'Front door', 'Device');
@@ -130,6 +149,26 @@ test('an unreadable watch state is a monitoring warning without an unlock alarm'
   await expect(page.locator('#toasts .toast-alarm')).toHaveCount(0);
   await page.getByRole('button', { name: 'Acknowledge alerts' }).click();
   await expect(page.getByRole('region', { name: 'Alerts', exact: true })).toContainText('No unacknowledged alerts');
+});
+
+test('an alert table the board could not read is a warning without an unlock alarm', async ({ page, request }) => {
+  await mock(request, {
+    setLock: {
+      id: FRONT_DOOR,
+      alertNext: 2,
+      alerts: [{ id: 1, kind: 'alerts_unreadable', time: null, method: 'none', seq: 0, type: 0 }],
+    },
+  });
+  await login(page);
+  await expect(page.getByRole('article', { name: 'Front door' })).toContainText('Monitoring warning');
+  await openLock(page, 'Front door');
+  const alerts = page.getByRole('region', { name: 'Alerts', exact: true });
+  await expect(alerts).toContainText('The stored alerts could not be read and were cleared');
+  await expect(alerts.getByRole('listitem')).toHaveText(['Alerts stored before this could not be read and are lost.']);
+  await expect(page.locator('#toasts .toast-alarm')).toHaveCount(0);
+  await page.getByRole('button', { name: 'Acknowledge alerts' }).click();
+  await expect(alerts).toContainText('No unacknowledged alerts');
+  await expect(alerts).not.toContainText('could not be read');
 });
 
 test('an older alert-list response cannot restore an acknowledged badge', async ({ page, request }) => {
