@@ -5,7 +5,7 @@
 
 Latchkey is firmware for ESP32 boards that takes a TTLock Bluetooth LE smart lock off the TTLock cloud and puts it under one owner's control: the board pairs with the lock by itself, manages what the TTLock app can manage on that lock, and serves an owner-only web UI, with no phone app, TTLock account or computer Bluetooth involved.
 
-Latchkey is in early development; the current release is v0.2.0. Pairing from the board, locking and unlocking, passcodes, fingerprints, IC cards and the keypad's super admin passcode work and have been checked on a real lock, and Home Assistant can drive the lock over MQTT. Lock settings with the operation log and unlock alerts, logging with syslog shipping, and board firmware updates from the web page are being built; hardening and the encrypted key backup come next. The [roadmap](https://github.com/giovannirco/latchkey/issues/26) tracks what is left.
+Latchkey is in early development; the current release is v0.3.0. Pairing from the board, locking and unlocking, passcodes, fingerprints, IC cards, the keypad's super admin passcode, lock settings and the operation log have been checked on a real lock. Unlock alerts persist until acknowledged, and Home Assistant can drive the lock over MQTT. Logging with syslog shipping and board firmware updates from the web page are being built; hardening and the encrypted key backup come next. The [roadmap](https://github.com/giovannirco/latchkey/issues/26) tracks what is left.
 
 ## Why
 
@@ -25,7 +25,7 @@ Works today:
 - The owner web UI (`web/`), served by the board and tested against a mock of the board API.
 - Home Assistant over MQTT, off until configured: each lock appears as a device with a lock entity, battery, last event, Bluetooth link and an unlock alert, through MQTT discovery, and LOCK and UNLOCK from Home Assistant run through the same queue as the web.
 
-In progress: lock settings (auto-lock, passage mode, sound), the operation log and unlock alerts; recent log lines on the board and syslog shipping; board firmware updates from the web page, with rollback. Next: lock hardening and the encrypted key backup. The web UI already shows the Export and Harden steps, but the board answers them only once they are built.
+In progress: recent log lines on the board and syslog shipping; board firmware updates from the web page, with rollback. Next: lock hardening and the encrypted key backup. The web UI already shows the Export and Harden steps, but the board answers them only once they are built.
 
 ## Security model
 
@@ -185,7 +185,7 @@ Topics, with `<board>` = `latchkey-` and the last three bytes of the board's Wi-
 | `latchkey/<board>/<lock>/battery` | battery level, 0 to 100; retained |
 | `latchkey/<board>/<lock>/last_event` | the last lock or unlock, as the web UI words it (`Unlocked from the app`); retained |
 | `latchkey/<board>/<lock>/link` | `ON` while the board has heard the lock within the last 2 minutes, else `OFF`; retained |
-| `latchkey/<board>/<lock>/alert` | `{"event_type": "unexpected_unlock", "method", "time"}` for each `lock.alert` event (raised by the operation-log check, in progress); not retained |
+| `latchkey/<board>/<lock>/alert` | `{"event_type": "unexpected_unlock", "method", "time"}` for each `lock.alert` event raised by the operation-log check; not retained |
 | `latchkey/<board>/<lock>/set` | commands from Home Assistant: `LOCK` or `UNLOCK` |
 
 - On each connection the board publishes, retained, one discovery config per entity of every lock it holds, under `<prefix>/<component>/<board>/<object>/config`: a `lock`, a battery `sensor`, a last-event `sensor`, a link `binary_sensor` and an unlock-alert `event`, grouped as one device per lock (its name, model and firmware). It checks its locks every 30 s and after each command: a lock that is renamed is announced again, and one that is forgotten or reset loses its configs and state topics (empty retained messages, sent again until they go out). A config under the board's node id for a lock the board does not hold, which the board finds when it connects, loses that lock's configs and state topics too. A new discovery prefix or broker first removes the board's entities under the old one, and waits up to 3 s for the broker to confirm each removal. `system.factoryReset` removes every entity and the availability topic from the broker the same way before it erases the board; if MQTT is not connected at that moment, or the broker does not confirm in time, Home Assistant keeps an unavailable device until you delete it there.
