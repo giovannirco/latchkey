@@ -13,7 +13,9 @@ static esp_err_t admitSocket(int fd, uint32_t session) {
     http_fixture::cookie = session == 1 ? "fixture-session" : "fixture-session-2";
     httpd_req_t request;
     const auto admitted = ws::admit(&request);
-    if (admitted == ESP_OK) http_fixture::sockets[fd] = {session, false, request.sess_ctx, request.free_ctx};
+    if (admitted == ESP_OK) {
+        TEST_ASSERT_TRUE(http_fixture::openSocket(fd, {session, false, request.sess_ctx, request.free_ctx}));
+    }
     return admitted;
 }
 
@@ -29,10 +31,12 @@ void setUp() {
 void tearDown() {
     http_fixture::rejectWork = http_fixture::rejectClose = http_fixture::rejectList = false;
     http_fixture::onSend = {};
+    http_fixture::onCloseRequested = {};
     while (!http_fixture::work.empty()) http_fixture::runWork();
     ws::service();
     while (!http_fixture::work.empty()) http_fixture::runWork();
     clearRpcFixture();
+    TEST_ASSERT_EQUAL_UINT(0, http_fixture::shutdownsOutsideServer);
 }
 
 static void deliver(uint32_t session, size_t size = 11000) {
@@ -75,7 +79,7 @@ static void test_empty_render_closes_target_after_schedule_and_close_recover() {
     TEST_ASSERT_FALSE(http_fixture::sockets.at(10).closed);
     http_fixture::rejectClose = false;
     ws::service();
-    http_fixture::runWork();
+    while (!http_fixture::work.empty()) http_fixture::runWork();
     TEST_ASSERT_TRUE(http_fixture::sockets.at(10).closed);
     TEST_ASSERT_FALSE(http_fixture::sockets.at(11).closed);
 }
@@ -123,7 +127,7 @@ static void test_client_scan_failure_is_retained_until_targeted_close() {
     TEST_ASSERT_FALSE(http_fixture::sockets.at(10).closed);
     http_fixture::rejectList = false;
     ws::service();
-    http_fixture::runWork();
+    while (!http_fixture::work.empty()) http_fixture::runWork();
     TEST_ASSERT_TRUE(http_fixture::sockets.at(10).closed);
     TEST_ASSERT_FALSE(http_fixture::sockets.at(11).closed);
 }
@@ -178,6 +182,73 @@ static void test_twenty_kib_job_result_fits_the_output_and_queue_budgets() {
     TEST_ASSERT_FALSE(http_fixture::sockets.at(11).closed);
 }
 
+static void test_failed_session_close_cannot_follow_a_reused_session_slot() {
+    deliver(1, 0);
+    http_fixture::runWork();
+    http_fixture::retireSocket(10);
+    TEST_ASSERT_EQUAL(ESP_OK, admitSocket(23, 2));
+    while (!http_fixture::work.empty()) http_fixture::runWork();
+    TEST_ASSERT_FALSE(http_fixture::sockets.at(23).closed);
+    TEST_ASSERT_FALSE(http_fixture::sockets.at(11).closed);
+    TEST_ASSERT_EQUAL_UINT(1, http_fixture::shutdownCalls);
+    TEST_ASSERT_EQUAL_UINT(0, http_fixture::queuedCloses);
+}
+
+static void test_duplicate_close_work_cannot_follow_a_reused_descriptor() {
+    bool serviced = false;
+    http_fixture::onCloseRequested = [&] {
+        if (serviced) return;
+        serviced = true;
+        ws::service();
+    };
+    deliver(1, 0);
+    http_fixture::runWork();
+    http_fixture::runWork();
+    TEST_ASSERT_TRUE(serviced);
+    if (http_fixture::queuedCloses != 0) TEST_ASSERT_EQUAL_UINT(2, http_fixture::queuedCloses);
+    http_fixture::retireSocket(10);
+    TEST_ASSERT_EQUAL(ESP_OK, admitSocket(10, 2));
+    while (!http_fixture::work.empty()) http_fixture::runWork();
+    TEST_ASSERT_FALSE(http_fixture::sockets.at(10).closed);
+    TEST_ASSERT_FALSE(http_fixture::sockets.at(11).closed);
+    TEST_ASSERT_EQUAL_UINT(1, http_fixture::shutdownCalls);
+    TEST_ASSERT_EQUAL_UINT(0, http_fixture::queuedCloses);
+}
+
+static void test_missing_context_close_cannot_follow_a_reused_session_slot() {
+    auto& socket = http_fixture::sockets.at(10);
+    socket.freeContext(socket.context);
+    socket.context = nullptr;
+    socket.freeContext = nullptr;
+    ws::service();
+    http_fixture::runWork();
+    http_fixture::retireSocket(10);
+    TEST_ASSERT_EQUAL(ESP_OK, admitSocket(23, 2));
+    while (!http_fixture::work.empty()) http_fixture::runWork();
+    TEST_ASSERT_FALSE(http_fixture::sockets.at(23).closed);
+    TEST_ASSERT_FALSE(http_fixture::sockets.at(11).closed);
+    TEST_ASSERT_EQUAL_UINT(1, http_fixture::shutdownCalls);
+    TEST_ASSERT_EQUAL_UINT(0, http_fixture::queuedCloses);
+}
+
+static void test_missing_context_shutdown_failure_is_retried_on_server_task() {
+    auto& socket = http_fixture::sockets.at(10);
+    socket.freeContext(socket.context);
+    socket.context = nullptr;
+    socket.freeContext = nullptr;
+    http_fixture::rejectClose = true;
+    ws::service();
+    http_fixture::runWork();
+    TEST_ASSERT_FALSE(socket.closed);
+    http_fixture::rejectClose = false;
+    ws::service();
+    while (!http_fixture::work.empty()) http_fixture::runWork();
+    TEST_ASSERT_TRUE(socket.closed);
+    TEST_ASSERT_FALSE(http_fixture::sockets.at(11).closed);
+    TEST_ASSERT_EQUAL_UINT(2, http_fixture::shutdownCalls);
+    TEST_ASSERT_EQUAL_UINT(0, http_fixture::queuedCloses);
+}
+
 int main() {
     rpc::init();
     UNITY_BEGIN();
@@ -192,5 +263,9 @@ int main() {
     RUN_TEST(test_message_count_saturation_never_evicts_another_targeted_result);
     RUN_TEST(test_session_end_closes_without_sending_and_wipes_queued_payload);
     RUN_TEST(test_twenty_kib_job_result_fits_the_output_and_queue_budgets);
+    RUN_TEST(test_failed_session_close_cannot_follow_a_reused_session_slot);
+    RUN_TEST(test_duplicate_close_work_cannot_follow_a_reused_descriptor);
+    RUN_TEST(test_missing_context_close_cannot_follow_a_reused_session_slot);
+    RUN_TEST(test_missing_context_shutdown_failure_is_retried_on_server_task);
     return UNITY_END();
 }

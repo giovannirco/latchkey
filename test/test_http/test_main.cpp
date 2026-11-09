@@ -17,7 +17,11 @@ esp_err_t receive(httpd_req_t*) { return ESP_OK; }
 void service() {}
 }
 
-void setUp() { resetRpcFixture(); http_fixture::reset(); }
+void setUp() {
+    resetRpcFixture();
+    http_fixture::reset();
+    TEST_ASSERT_TRUE(http_fixture::openSocket(10, {}));
+}
 void tearDown() {
     delete static_cast<http::Request*>(http_fixture::request);
     clearRpcFixture();
@@ -65,6 +69,7 @@ static void test_revoked_session_is_rechecked_before_receiving_a_large_body() {
     http::answer(*static_cast<http::Request*>(http_fixture::request));
     TEST_ASSERT_EQUAL_UINT(0, http_fixture::recvCalls);
     TEST_ASSERT_EQUAL_UINT(0, handlerCalls);
+    while (!http_fixture::work.empty()) http_fixture::runWork();
     TEST_ASSERT_EQUAL_UINT(1, http_fixture::closed);
 }
 
@@ -98,6 +103,7 @@ static void test_body_allocation_failure_closes_without_receiving_or_dispatching
     TEST_ASSERT_EQUAL_UINT(0, http_fixture::recvCalls);
     TEST_ASSERT_EQUAL_UINT(0, handlerCalls);
     TEST_ASSERT_EQUAL_UINT(1, http_fixture::completed);
+    while (!http_fixture::work.empty()) http_fixture::runWork();
     TEST_ASSERT_EQUAL_UINT(1, http_fixture::closed);
 }
 
@@ -111,6 +117,7 @@ static void test_receive_timeouts_are_bounded_by_the_existing_deadline() {
     TEST_ASSERT_EQUAL_UINT(3, http_fixture::recvCalls);
     TEST_ASSERT_EQUAL_UINT(0, handlerCalls);
     TEST_ASSERT_EQUAL_UINT(1, http_fixture::completed);
+    while (!http_fixture::work.empty()) http_fixture::runWork();
     TEST_ASSERT_EQUAL_UINT(1, http_fixture::closed);
 }
 

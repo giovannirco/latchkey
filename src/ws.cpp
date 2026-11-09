@@ -8,6 +8,7 @@
 
 #include "esp_log.h"
 #include "esp_timer.h"
+#include "lwip/sockets.h"
 #include "mbedtls/platform_util.h"
 
 #include "auth.h"
@@ -73,7 +74,7 @@ void failSession(uint32_t session) {
 }
 
 bool closeSocket(int fd, uint32_t session) {
-    if (httpd_sess_trigger_close(s_server, fd) == ESP_OK) return true;
+    if (shutdown(fd, SHUT_RDWR) == 0) return true;
     failSession(session);
     return false;
 }
@@ -96,7 +97,7 @@ bool sendTo(int fd, const latchkey_util::RpcText& line) {
 
 bool serve(int fd, const std::array<Outgoing, kMaxPending>& batch, size_t count) {
     const auto* context = static_cast<const Socket*>(httpd_sess_get_ctx(s_server, fd));
-    if (context == nullptr) return httpd_sess_trigger_close(s_server, fd) == ESP_OK;
+    if (context == nullptr) return shutdown(fd, SHUT_RDWR) == 0;
     const uint32_t session = context->session;
     if (!auth::sessionOpen(session) || failedSocket(fd)) {
         return closeSocket(fd, session);

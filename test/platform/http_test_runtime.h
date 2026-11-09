@@ -2,6 +2,8 @@
 #pragma once
 
 #include <algorithm>
+#include <array>
+#include <cerrno>
 #include <cstring>
 #include <deque>
 #include <functional>
@@ -15,6 +17,7 @@
 #include "esp_timer.h"
 #include "freertos/queue.h"
 #include "freertos/task.h"
+#include "lwip/sockets.h"
 
 namespace http_fixture {
 struct Socket {
@@ -22,13 +25,24 @@ struct Socket {
     bool closed = false;
     void* context = nullptr;
     void (*freeContext)(void*) = nullptr;
+    bool shutdownPending = false;
+};
+struct SessionSlot {
+    int fd = -1;
+    uint64_t lruCounter = 0;
 };
 inline std::map<std::string, std::string> headers;
 inline std::string cookie, body, status, reply;
 inline std::map<int, Socket> sockets;
+inline std::array<SessionSlot, 4> slots;
+inline uint64_t lruCounter = 0;
+inline size_t queuedCloses = 0;
+inline size_t shutdownCalls = 0, shutdownsOutsideServer = 0;
+inline bool onServerTask = false;
 inline std::vector<std::pair<int, std::string>> sent;
 inline std::deque<std::pair<void (*)(void*), void*>> work;
 inline std::function<void()> onSend;
+inline std::function<void()> onCloseRequested;
 inline std::function<void(char*, size_t)> onReceive;
 inline void* request = nullptr;
 inline bool rejectQueue = false, rejectAsync = false, rejectWork = false, rejectClose = false;
@@ -38,11 +52,39 @@ inline size_t readChunk = SIZE_MAX;
 inline int recvError = 0;
 inline int64_t now = 0, readDelay = 0;
 inline int fd = 10;
+inline bool openSocket(int fd, Socket socket) {
+    for (auto& slot : slots) {
+        if (slot.fd != -1) continue;
+        slot = {fd, ++lruCounter};
+        sockets[fd] = socket;
+        return true;
+    }
+    return false;
+}
+inline void retireSocket(int fd) {
+    for (auto& slot : slots) {
+        if (slot.fd != fd || fd == -1) continue;
+        auto& socket = sockets.at(fd);
+        socket.closed = true;
+        if (socket.freeContext) socket.freeContext(socket.context);
+        socket.context = nullptr;
+        socket.freeContext = nullptr;
+        slot.fd = -1;
+        ++closed;
+        if (std::none_of(slots.begin(), slots.end(), [](const auto& entry) { return entry.fd != -1; })) lruCounter = 0;
+        return;
+    }
+}
 inline void reset() {
     for (const auto& [fd, socket] : sockets) if (socket.freeContext) socket.freeContext(socket.context);
     headers = {{"Host", "192.0.2.1"}, {"Content-Type", "application/json"}};
     cookie = "fixture-session";
     body.clear(); status.clear(); reply.clear(); sockets.clear(); sent.clear(); work.clear(); onSend = {}; onReceive = {};
+    onCloseRequested = {};
+    slots = {};
+    lruCounter = queuedCloses = 0;
+    shutdownCalls = shutdownsOutsideServer = 0;
+    onServerTask = false;
     request = nullptr;
     rejectQueue = rejectAsync = rejectWork = rejectClose = rejectList = rejectSend = false;
     offset = recvCalls = completed = closed = 0;
@@ -54,8 +96,26 @@ inline void reset() {
 inline void runWork() {
     const auto callback = work.front();
     work.pop_front();
+    onServerTask = true;
     callback.first(callback.second);
+    for (const auto& [fd, socket] : sockets) {
+        if (!socket.closed && socket.shutdownPending) retireSocket(fd);
+    }
+    onServerTask = false;
 }
+}
+
+int lwip_shutdown(int fd, int how) {
+    using namespace http_fixture;
+    ++shutdownCalls;
+    if (!onServerTask) ++shutdownsOutsideServer;
+    const auto found = sockets.find(fd);
+    if (found == sockets.end() || found->second.closed) { errno = EBADF; return -1; }
+    if (how != SHUT_RDWR) { errno = EINVAL; return -1; }
+    if (rejectClose) { errno = ENOMEM; return -1; }
+    if (onCloseRequested) onCloseRequested();
+    found->second.shutdownPending = true;
+    return 0;
 }
 
 bool httpd_uri_match_wildcard(const char*, const char*, size_t) { return false; }
@@ -97,19 +157,30 @@ esp_err_t httpd_req_async_handler_begin(httpd_req_t* req, httpd_req_t** out) {
     return ESP_OK;
 }
 esp_err_t httpd_req_async_handler_complete(httpd_req_t*) { ++http_fixture::completed; return ESP_OK; }
-esp_err_t httpd_sess_trigger_close(httpd_handle_t, int fd) {
-    if (http_fixture::rejectClose) return ESP_FAIL;
-    ++http_fixture::closed;
-    const auto found = http_fixture::sockets.find(fd);
-    if (found != http_fixture::sockets.end()) {
-        found->second.closed = true;
-        if (found->second.freeContext) found->second.freeContext(found->second.context);
-        found->second.context = nullptr;
-        found->second.freeContext = nullptr;
+esp_err_t httpd_sess_trigger_close(httpd_handle_t server, int fd) {
+    using namespace http_fixture;
+    if (rejectClose) return ESP_FAIL;
+    for (auto& slot : slots) {
+        if (slot.fd != fd) continue;
+        if (onCloseRequested) onCloseRequested();
+        const auto result = httpd_queue_work(server, [](void* arg) {
+            auto* slot = static_cast<SessionSlot*>(arg);
+            if (slot->lruCounter != 0) retireSocket(slot->fd);
+        }, &slot);
+        if (result == ESP_OK) ++queuedCloses;
+        return result;
     }
-    return ESP_OK;
+    return ESP_FAIL;
 }
-esp_err_t httpd_sess_update_lru_counter(httpd_handle_t, int) { return ESP_OK; }
+esp_err_t httpd_sess_update_lru_counter(httpd_handle_t, int fd) {
+    for (auto& slot : http_fixture::slots) {
+        if (slot.fd == fd) {
+            slot.lruCounter = ++http_fixture::lruCounter;
+            return ESP_OK;
+        }
+    }
+    return ESP_FAIL;
+}
 void* httpd_sess_get_ctx(httpd_handle_t, int fd) {
     const auto found = http_fixture::sockets.find(fd);
     return found == http_fixture::sockets.end() ? nullptr : found->second.context;
