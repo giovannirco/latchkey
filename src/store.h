@@ -10,6 +10,8 @@
 #include "esp_err.h"
 #include "latchkey_util/certificate.h"
 #include "latchkey_util/label_table.h"
+#include "latchkey_util/lock_alerts.h"
+#include "latchkey_util/lock_watch.h"
 #include "latchkey_util/mqtt_settings.h"
 #include "latchkey_util/password_record.h"
 #include "latchkey_util/seed_table.h"
@@ -169,6 +171,30 @@ esp_err_t eraseAll();
 namespace seeds {
 
 esp_err_t save(const char* mac, const latchkey_util::SeedTable& table);
+
+esp_err_t erase(const char* mac);
+
+esp_err_t eraseAll();
+
+}
+
+namespace watch {
+
+esp_err_t load(const char* mac, latchkey_util::WatchState& out);
+
+esp_err_t save(const char* mac, const latchkey_util::WatchState& state);
+
+esp_err_t erase(const char* mac);
+
+esp_err_t eraseAll();
+
+}
+
+namespace alerts {
+
+esp_err_t load(const char* mac, latchkey_util::LockAlerts& out);
+
+esp_err_t save(const char* mac, const latchkey_util::LockAlerts& alerts);
 
 esp_err_t erase(const char* mac);
 

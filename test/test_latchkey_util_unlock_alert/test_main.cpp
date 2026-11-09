@@ -151,7 +151,8 @@ static void test_a_record_id_picks_the_entry_latchkey_made() {
     assertVerdicts({UnlockVerdict::Latchkey, UnlockVerdict::Alert},
                    classify({entry(1, localAt(3), 42), entry(1, localAt(2), 41)}, {ours}));
     assertVerdicts({UnlockVerdict::Alert}, classify({entry(1, localAt(2), 7)}, {ours}));
-    assertVerdicts({UnlockVerdict::Alert}, classify({entry(1, localAt(600), 42)}, {ours}));
+    assertVerdicts({UnlockVerdict::Latchkey}, classify({entry(1, localAt(600), 42)}, {ours}));
+    assertVerdicts({UnlockVerdict::Latchkey}, classify({entry(1, LockTime{2025, 13, 7, 11, 0, 0}, 42)}, {ours}));
     assertVerdicts({UnlockVerdict::Latchkey, UnlockVerdict::Latchkey},
                    classify({entry(1, localAt(2), 41), entry(1, localAt(3), 42)}, {sent(kTwoPm, kTwoPm + 5), ours}));
 }

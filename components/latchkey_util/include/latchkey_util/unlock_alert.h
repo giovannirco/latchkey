@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Callers pass windows only, without record ids, until a hardware check confirms that a lock's log record id equals
-// the record id in its unlock reply.
+// A record id, when the unlock reply carries one, explains the log entry with that id whatever its time; a window
+// explains the rest.
 #pragma once
 
 #include <cstdint>
@@ -50,5 +50,9 @@ const char* toString(UnlockMethod method);
 std::vector<UnlockFinding> classifyUnlocks(const std::vector<ttlock::LogEntry>& entries,
                                            const std::vector<LatchkeyUnlock>& performed, int32_t lockUtcOffsetSeconds,
                                            uint32_t toleranceSeconds);
+
+std::vector<UnlockFinding> classifyUnlocks(const std::vector<ttlock::LogEntry>& entries,
+                                           const std::vector<LatchkeyUnlock>& performed, int32_t lockUtcOffsetSeconds,
+                                           uint32_t toleranceSeconds, std::vector<bool>& used);
 
 }

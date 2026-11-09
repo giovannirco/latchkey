@@ -43,6 +43,25 @@ static void test_the_reserve_holds_the_rest_of_the_audit_ring_one_pairing_and_a_
     TEST_ASSERT_EQUAL_UINT(1 + 2 * 12 + 2 * 6 + 40, latchkey_util::reservedEntries(needs));
 }
 
+static void test_the_reserve_also_holds_a_log_watch_state_per_lock_slot() {
+    StorageNeeds needs;
+    needs.auditRecordsLeft = 0;
+    needs.lockRecordBytes = 304;
+    needs.seedTableBytes = 104;
+    needs.spareEntries = 40;
+    needs.watchStateBytes = 16;
+    needs.watchStates = 8;
+    TEST_ASSERT_EQUAL_UINT(1 + 2 * 12 + 2 * 6 + 40 + 8 * 3, latchkey_util::reservedEntries(needs));
+}
+
+static void test_recent_alerts_have_protected_storage_for_every_lock() {
+    StorageNeeds needs;
+    const size_t before = latchkey_util::reservedEntries(needs);
+    needs.alertTables = 8;
+    needs.alertTableBytes = 110;
+    TEST_ASSERT_EQUAL_UINT(before + 8 * 6, latchkey_util::reservedEntries(needs));
+}
+
 static void test_a_write_must_leave_the_reserve_untouched() {
     TEST_ASSERT_TRUE(latchkey_util::fitsAboveReserve(100, 88, 95));
     TEST_ASSERT_TRUE(latchkey_util::fitsAboveReserve(100, 96, 95));
@@ -58,6 +77,8 @@ int main(int, char**) {
     RUN_TEST(test_a_blob_takes_an_index_a_chunk_header_and_its_32_byte_entries);
     RUN_TEST(test_audit_records_still_to_come_follow_the_ring);
     RUN_TEST(test_the_reserve_holds_the_rest_of_the_audit_ring_one_pairing_and_a_spare);
+    RUN_TEST(test_the_reserve_also_holds_a_log_watch_state_per_lock_slot);
+    RUN_TEST(test_recent_alerts_have_protected_storage_for_every_lock);
     RUN_TEST(test_a_write_must_leave_the_reserve_untouched);
     return UNITY_END();
 }

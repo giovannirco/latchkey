@@ -16,5 +16,8 @@ void registerCredentials();
 void registerAdminPasscode();
 
 void registerMqtt();
+void registerSettings();
+
+void registerLog();
 
 }

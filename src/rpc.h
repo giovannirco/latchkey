@@ -16,6 +16,7 @@ enum class Transport : uint8_t {
     Serial,
     Web,
     Mqtt,
+    Board,
 };
 
 const char* toString(Transport transport);

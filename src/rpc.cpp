@@ -148,6 +148,8 @@ const char* toString(Transport transport) {
             return "web";
         case Transport::Mqtt:
             return "mqtt";
+        case Transport::Board:
+            return "board";
     }
     return "web";
 }
