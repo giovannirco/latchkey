@@ -14,6 +14,7 @@ idf_component_register(
         "hmac.cpp"
         "http.cpp"
         "jobs.cpp"
+        "key_store.cpp"
         "lock_log.cpp"
         "lock_manager.cpp"
         "logs.cpp"

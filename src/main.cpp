@@ -18,6 +18,7 @@
 #include "console.h"
 #include "http.h"
 #include "jobs.h"
+#include "key_store.h"
 #include "lock_manager.h"
 #include "methods.h"
 #include "mqtt.h"
@@ -40,6 +41,7 @@ extern "C" void app_main() {
         abort();
     }
     store::init();
+    ESP_ERROR_CHECK(key_store::recover());
     audit::init();
     auth::init();
     certs::init();

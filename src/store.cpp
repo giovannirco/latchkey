@@ -208,9 +208,11 @@ esp_err_t usage(Usage& out) {
     return error;
 }
 
-size_t reservedEntries() {
+size_t reservedEntries() { return reservedEntries(audit::loadNextSeq()); }
+
+size_t reservedEntries(uint32_t nextAuditSequence) {
     latchkey_util::StorageNeeds needs;
-    needs.auditRecordsLeft = latchkey_util::auditRecordsLeft(audit::loadNextSeq(), audit::kCapacity);
+    needs.auditRecordsLeft = latchkey_util::auditRecordsLeft(nextAuditSequence, audit::kCapacity);
     needs.auditRecordBytes = sizeof(audit::Record);
     needs.lockRecordBytes = sizeof(locks::Record);
     needs.seedTableBytes = latchkey_util::kSeedTableSize;
