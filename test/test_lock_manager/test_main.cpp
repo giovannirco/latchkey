@@ -158,10 +158,10 @@ static void test_recovery_required_remains_latched_across_requests_and_blocks_ev
     const std::string mac(kMac);
     TEST_ASSERT_FALSE(lock_manager::rename(mac, "Changed").error.empty());
     TEST_ASSERT_FALSE(lock_manager::forget(mac).error.empty());
-    lock_manager::AdminPasscodeCopy previous;
-    TEST_ASSERT_FALSE(lock_manager::stageAdminPasscode(mac, "246813579", previous));
-    TEST_ASSERT_FALSE(lock_manager::confirmAdminPasscode(mac));
-    TEST_ASSERT_FALSE(lock_manager::restoreAdminPasscode(mac, previous));
+    TEST_ASSERT_NOT_EQUAL(ESP_OK, lock_manager::stageAdminPasscode(mac, "246813579", latchkey_util::AdminProvenance::Owner));
+    TEST_ASSERT_NOT_EQUAL(ESP_OK, lock_manager::confirmAdminPasscode(mac));
+    TEST_ASSERT_NOT_EQUAL(ESP_OK, lock_manager::reconcileAdminPasscode(mac, "246813579"));
+    TEST_ASSERT_NOT_EQUAL(ESP_OK, lock_manager::rejectAdminPasscode(mac));
     latchkey_util::LabelTable labels;
     TEST_ASSERT_NOT_EQUAL(ESP_OK, lock_manager::saveLabels(mac, store::labels::Kind::Passcodes, labels));
     TEST_ASSERT_NOT_EQUAL(ESP_OK, lock_manager::eraseAll());

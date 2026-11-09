@@ -53,18 +53,22 @@ esp_err_t saveLabels(const std::string& mac, store::labels::Kind kind, const lat
 
 bool labelsFit(const std::string& mac, store::labels::Kind kind, const latchkey_util::LabelTable& table);
 
-struct AdminPasscodeCopy {
-    std::string code;
-    bool confirmed = false;
-
-    ~AdminPasscodeCopy();
+struct AdminState {
+    store::locks::Record record{};
+    latchkey_util::LockMetadata metadata;
+    ~AdminState();
 };
 
-bool stageAdminPasscode(const std::string& mac, const std::string& candidate, AdminPasscodeCopy& previous);
+esp_err_t readAdminState(const std::string& mac, AdminState& out);
 
-bool confirmAdminPasscode(const std::string& mac);
+esp_err_t stageAdminPasscode(const std::string& mac, std::string_view candidate,
+                              latchkey_util::AdminProvenance provenance);
 
-bool restoreAdminPasscode(const std::string& mac, const AdminPasscodeCopy& previous);
+esp_err_t confirmAdminPasscode(const std::string& mac);
+
+esp_err_t reconcileAdminPasscode(const std::string& mac, std::string_view observed);
+
+esp_err_t rejectAdminPasscode(const std::string& mac);
 
 rpc::Reply rename(const std::string& mac, const std::string& name);
 
@@ -95,6 +99,8 @@ rpc::Reply syncTime(const std::string& mac);
 rpc::Reply factoryReset(const std::string& mac);
 
 esp_err_t storedCount(size_t& out);
+
+esp_err_t checkEraseAll();
 
 esp_err_t eraseAll();
 

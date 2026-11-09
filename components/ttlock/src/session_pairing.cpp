@@ -189,14 +189,24 @@ Status Session::finishPairing(const PairOptions& options, const std::function<vo
     const std::string previous = keys_.adminPasscode;
     keys_.adminPasscode =
         options.adminPasscode.empty() ? randomDigits(kAdminPasscodeDigits) : options.adminPasscode;
+    if (options.prepareAdminPasscode && !options.prepareAdminPasscode(keys_.adminPasscode)) {
+        keys_.adminPasscode = previous;
+        return Status::PairIncomplete;
+    }
     persist();
     status = request(command::kSetAdminKeyboardPassword, buildSetAdminPasscode(keys_.adminPasscode), data);
     if (status == Status::LockError) {
         keys_.adminPasscode = previous;
+        if (options.finishAdminPasscode && !options.finishAdminPasscode(false)) {
+            return Status::PairIncomplete;
+        }
         persist();
         return status;
     }
     if (status == Status::Ok) {
+        if (options.finishAdminPasscode && !options.finishAdminPasscode(true)) {
+            return Status::PairIncomplete;
+        }
         result.adminPasscodeConfirmed = true;
     } else if (status != Status::Timeout) {
         return status;

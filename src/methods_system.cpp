@@ -344,6 +344,9 @@ bool readForce(const cJSON* params, bool& force) {
 }
 
 rpc::Reply checkLocksKept(bool force) {
+    if (lock_manager::checkEraseAll() != ESP_OK) {
+        return rpc::fail("recovery_protected", "cannot erase keys: a reset button is disabled or stored recovery state cannot be verified");
+    }
     size_t locks = 0;
     if (lock_manager::storedCount(locks) != ESP_OK) {
         return rpc::fail("internal", "cannot read the stored locks");

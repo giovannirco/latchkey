@@ -94,8 +94,8 @@ bool decodeRestoreJournal(std::span<const uint8_t> bytes, RestoreJournal& out) {
 bool encodeLockMetadata(const LockMetadata& metadata, std::span<uint8_t, kLockMetadataBytes> bytes) {
     const size_t length = strnlen(metadata.pendingAdminPasscode.data(), metadata.pendingAdminPasscode.size());
     const auto code = std::string_view(metadata.pendingAdminPasscode.data(), length);
-    if ((metadata.lifecycle & ~7) != 0 || metadata.provenance > AdminProvenance::PairingGenerated ||
-        metadata.pendingProvenance > AdminProvenance::PairingGenerated ||
+    if ((metadata.lifecycle & ~7) != 0 || metadata.provenance > AdminProvenance::HardeningGenerated ||
+        metadata.pendingProvenance > AdminProvenance::HardeningGenerated ||
         (!code.empty() && !ttlock::isPasscode(code)) ||
         (code.empty() && metadata.pendingProvenance != AdminProvenance::LegacyUnknown)) return false;
     std::fill(bytes.begin(), bytes.end(), 0);

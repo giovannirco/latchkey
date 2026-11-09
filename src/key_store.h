@@ -28,6 +28,7 @@ esp_err_t loadMetadata(std::string_view mac, latchkey_util::LockMetadata& out);
 esp_err_t saveMetadata(std::string_view mac, const latchkey_util::LockMetadata& metadata);
 esp_err_t eraseMetadata(std::string_view mac);
 esp_err_t eraseAllMetadata();
+esp_err_t checkErase(std::string_view mac);
 esp_err_t loadSeeds(std::string_view mac, latchkey_util::SeedTable& out, bool& present);
 
 }

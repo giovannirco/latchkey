@@ -24,6 +24,10 @@ size_t allocationAttempts = 0;
 size_t failAllocation = 0;
 size_t unclearedSecrets = 0;
 std::string_view watchedSecret;
+bool fixtureClockSynced = false;
+int64_t fixtureUtc = 1762524000;
+size_t auditWrites = 0;
+std::function<void()> beforePress;
 bool openSession = true;
 bool pressAllowed = true;
 bool rejectJob = false;
@@ -124,14 +128,15 @@ std::optional<uint32_t> sessionFor(std::string_view token) {
 bool sessionOpen(uint32_t id) { return openSession && endedSession != id; }
 void onSessionsEnded(void (*)()) {}
 }
-namespace audit { void append(const Entry&) {} }
+namespace audit { void append(const Entry&) { ++auditWrites; } }
 namespace wallclock {
-bool synced() { return false; }
-int64_t utcSeconds() { return 0; }
+bool synced() { return fixtureClockSynced; }
+int64_t utcSeconds() { return fixtureUtc; }
 }
 namespace board {
 bool waitForPress(uint32_t, const std::function<bool()>& keepWaiting) {
     ++confirmations;
+    if (beforePress) beforePress();
     return pressAllowed && keepWaiting();
 }
 }
@@ -160,6 +165,10 @@ std::optional<std::string> submit(std::optional<uint32_t>, Work work) {
 
 void resetRpcFixture() {
     queuedWork.reset();
+    fixtureClockSynced = false;
+    fixtureUtc = 1762524000;
+    auditWrites = 0;
+    beforePress = {};
     watchedSecret = {};
     unclearedSecrets = handlerCalls = confirmations = 0;
     peakBytes = liveBytes;

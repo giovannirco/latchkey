@@ -186,16 +186,15 @@ bool validLock(const BackupLock& lock) {
     constexpr uint8_t recordFlags = kBackupPairComplete | kBackupAdminPasscodeConfirmed | kBackupTimeCalibrated;
     constexpr uint8_t lifecycleFlags = kBackupBackedUp | kBackupHardened | kBackupResetButtonOff;
     if ((lock.flags & ~recordFlags) != 0 || (lock.lifecycle & ~lifecycleFlags) != 0 || lock.addressType > 3 ||
-        lock.provenance > AdminProvenance::PairingGenerated ||
-        lock.pendingProvenance > AdminProvenance::PairingGenerated || !validMac(lock) || lock.aesKey.size() != 16 ||
+        lock.provenance > AdminProvenance::HardeningGenerated ||
+        lock.pendingProvenance > AdminProvenance::HardeningGenerated || !validMac(lock) || lock.aesKey.size() != 16 ||
         lock.protocol.protocolType != 5 || lock.protocol.protocolVersion != 3 || lock.protocol.scene != 1 ||
         lock.protocol.groupId == 0 || lock.protocol.orgId == 0) return false;
     if (!validText(lock.name, 99) || !validText(lock.model, 31) || !validText(lock.hardware, 31) ||
         !validText(lock.firmware, 31) || !validText(lock.manufactureDate, 15)) return false;
     if ((!lock.adminPasscode.empty() && !ttlock::isPasscode(lock.adminPasscode)) ||
         ((lock.flags & kBackupAdminPasscodeConfirmed) != 0 && lock.adminPasscode.empty()) ||
-        (!lock.pendingAdminPasscode.empty() && (!ttlock::isPasscode(lock.pendingAdminPasscode) ||
-                                               lock.pendingAdminPasscode == lock.adminPasscode)) ||
+        (!lock.pendingAdminPasscode.empty() && !ttlock::isPasscode(lock.pendingAdminPasscode)) ||
         (lock.pendingAdminPasscode.empty() && lock.pendingProvenance != AdminProvenance::LegacyUnknown)) return false;
     for (const auto labels : lock.labels) if (!validLabels(labels)) return false;
     return validSeeds(lock.seeds);

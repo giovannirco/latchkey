@@ -26,7 +26,7 @@ inline constexpr uint8_t kBackupHardened = 0x02;
 inline constexpr uint8_t kBackupResetButtonOff = 0x04;
 
 enum class BackupStatus { Ok, Invalid, Duplicate, TooLarge, NoMemory, CryptoFailed };
-enum class AdminProvenance : uint8_t { LegacyUnknown, Owner, PairingGenerated };
+enum class AdminProvenance : uint8_t { LegacyUnknown, Owner, PairingGenerated, HardeningGenerated };
 
 class SensitiveBuffer {
 public:

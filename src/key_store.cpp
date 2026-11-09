@@ -430,6 +430,30 @@ esp_err_t saveMetadata(std::string_view mac, const latchkey_util::LockMetadata& 
     return error;
 }
 
+esp_err_t checkErase(std::string_view mac) {
+    latchkey_util::RestoreJournal identities;
+    if (mac.empty()) {
+        const auto error = listIdentities(identities);
+        if (error == ESP_ERR_NOT_FOUND) return ESP_OK;
+        if (error != ESP_OK) return error;
+    } else {
+        char key[14];
+        if (!identityKey(mac, key)) return ESP_ERR_INVALID_ARG;
+        std::copy(mac.begin(), mac.end(), identities.identities[0].begin());
+        identities.count = 1;
+    }
+    for (size_t i = 0; i < identities.count; ++i) {
+        SnapshotRecord stored;
+        const std::string_view identity = identities.identities[i].data();
+        auto error = loadRecord(identity, stored.record);
+        if (error != ESP_OK) return error;
+        error = loadMetadata(identity, stored.metadata);
+        if (error != ESP_OK) return error;
+        if ((stored.metadata.lifecycle & latchkey_util::kBackupResetButtonOff) != 0) return ESP_ERR_INVALID_STATE;
+    }
+    return ESP_OK;
+}
+
 esp_err_t eraseMetadata(std::string_view mac) {
     char key[14];
     if (!identityKey(mac, key)) return ESP_ERR_INVALID_ARG;

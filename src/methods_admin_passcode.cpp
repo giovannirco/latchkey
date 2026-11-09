@@ -86,6 +86,22 @@ rpc::Reply checkAdminSet(const cJSON* params, const rpc::Context&) {
 
 Status setAdminPasscode(const std::string& mac, const Secret& code, bool generated, Session& session,
                         rpc::Reply& out) {
+    lock_manager::AdminState state;
+    if (lock_manager::readAdminState(mac, state) != ESP_OK) {
+        out = rpc::fail("storage_error", "cannot read the admin passcode recovery state");
+        return Status::Ok;
+    }
+    if (state.metadata.pendingAdminPasscode[0] != 0) {
+        std::string observed;
+        const Status read = session.adminPasscodeGet(observed);
+        const Secret secret(observed);
+        lock_access::wipe(observed);
+        const bool reconciled = read == Status::Ok &&
+            lock_manager::reconcileAdminPasscode(mac, secret.get()) == ESP_OK;
+        out = reconciled ? rpc::fail("admin_reconciled", "the previous admin change was reconciled; review it before another change")
+                         : rpc::fail("admin_unresolved", "the previous admin change remains unresolved");
+        return Status::Ok;
+    }
     Listed listed;
     Status status = session.passcodeList(listed.items);
     if (status != Status::Ok) {
@@ -99,26 +115,28 @@ Status setAdminPasscode(const std::string& mac, const Secret& code, bool generat
         out = rpc::fail("lock_error", lock_access::kInUseMessage);
         return Status::Ok;
     }
-    lock_manager::AdminPasscodeCopy previous;
-    if (!lock_manager::stageAdminPasscode(mac, code.get(), previous)) {
-        out = rpc::fail("internal", "cannot store the new admin passcode on the board before sending it");
+    if (lock_manager::stageAdminPasscode(mac, code.get(), latchkey_util::AdminProvenance::Owner) != ESP_OK) {
+        out = rpc::fail("storage_error", "cannot store the pending admin passcode before sending it");
         return Status::Ok;
     }
     status = session.setAdminPasscode(code.get());
-    if (status == Status::LockError && !lock_manager::restoreAdminPasscode(mac, previous)) {
-        ESP_LOGE(TAG, "the lock refused the admin passcode, and the board could not put its old copy back");
+    if (status == Status::LockError && lock_manager::rejectAdminPasscode(mac) != ESP_OK) {
+        out = rpc::fail("admin_unresolved", "the lock refused the change but its recovery state could not be cleared");
+        return Status::Ok;
     }
     if (status != Status::Ok) {
         return status;
     }
-    const bool confirmed = lock_manager::confirmAdminPasscode(mac);
+    if (lock_manager::confirmAdminPasscode(mac) != ESP_OK) {
+        out = rpc::fail("admin_unresolved", "the lock accepted the change but its confirmation could not be stored");
+        return Status::Ok;
+    }
     cJSON* result = cJSON_CreateObject();
     if (generated) {
         cJSON_AddStringToObject(result, "code", code.get().c_str());
     }
     lock_access::addWarnings(
-        result, {confirmed ? "" : "the lock took the new admin passcode, but the board could not mark its copy as taken",
-                 generated ? std::string() : lock_access::easyCodeWarning(code.get())});
+        result, {generated ? std::string() : lock_access::easyCodeWarning(code.get())});
     out = rpc::ok(result);
     return Status::Ok;
 }

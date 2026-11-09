@@ -276,7 +276,6 @@ void storeKeys(Record& record, const ttlock::LockKeys& keys) {
     record.unlockKey = keys.unlockKey;
     record.lockFlagPos = keys.lockFlagPos;
     record.features = keys.features;
-    copyText(record.adminPasscode, keys.adminPasscode);
 }
 
 void copyDeviceInfo(Record& record, const ttlock::DeviceInfo& info) {
@@ -433,10 +432,12 @@ esp_err_t clearPairingDescriptions(const std::string& mac) {
     return storageBlocked() ? ESP_ERR_INVALID_STATE : eraseDescriptions(mac);
 }
 
-esp_err_t removeRecord(std::string_view mac) {
+esp_err_t removeRecord(std::string_view mac, bool protectReset = false) {
     const std::string key(mac);
     std::lock_guard<std::mutex> guard(s_mutex);
     if (storageBlocked()) return ESP_ERR_INVALID_STATE;
+    const auto allowed = protectReset ? key_store::checkErase(mac) : ESP_OK;
+    if (allowed != ESP_OK) return allowed;
     esp_err_t error = eraseDescriptions(key);
     if (error != ESP_OK) {
         return error;
@@ -1428,7 +1429,9 @@ void runPair(Job& job) {
         finish(job, rpc::fail("unsupported", "only TTLock protocol 3 locks can be paired"));
         return;
     }
-    Record record = blankRecord();
+    AdminState pairingState;
+    Record& record = pairingState.record;
+    record = blankRecord();
     record.addressType = raw.address.type;
     std::memcpy(record.address, raw.address.value, sizeof(record.address));
     copyText(record.mac, job.mac);
@@ -1462,6 +1465,24 @@ void runPair(Job& job) {
     SeedStore seeds;
     ttlock::PairOptions options;
     options.adminPasscode = job.adminPasscode;
+    options.prepareAdminPasscode = [&job, &stores](std::string_view candidate) {
+        const auto provenance = job.adminPasscode.empty() ? latchkey_util::AdminProvenance::PairingGenerated
+                                                          : latchkey_util::AdminProvenance::Owner;
+        const bool stored = stores.keysStored && stageAdminPasscode(job.mac, candidate, provenance) == ESP_OK;
+        stores.storeFailed = stores.storeFailed || !stored;
+        return stored;
+    };
+    options.finishAdminPasscode = [&job, &record, &stores](bool accepted) {
+        const auto error = accepted ? confirmAdminPasscode(job.mac) : rejectAdminPasscode(job.mac);
+        AdminState state;
+        const bool stored = error == ESP_OK && readAdminState(job.mac, state) == ESP_OK;
+        if (stored) {
+            copyText(record.adminPasscode, state.record.adminPasscode);
+            record.flags = state.record.flags;
+        }
+        stores.storeFailed = stores.storeFailed || !stored;
+        return stored;
+    };
     options.persistSeeds = [&job, &seeds](uint16_t year,
                                           const std::array<ttlock::CodeSecret, ttlock::kCodeSecretCount>& table) {
         seeds.table.year = year;
@@ -1972,30 +1993,93 @@ rpc::Reply runOnLock(const std::string& mac, const char* action, LockWork work) 
     return submit(job);
 }
 
-AdminPasscodeCopy::~AdminPasscodeCopy() { mbedtls_platform_zeroize(code.data(), code.size()); }
+AdminState::~AdminState() { mbedtls_platform_zeroize(&record, sizeof(record)); }
 
-bool stageAdminPasscode(const std::string& mac, const std::string& candidate, AdminPasscodeCopy& previous) {
-    return updateRecord(mac, [&candidate, &previous](Record& stored) {
-        previous.code.assign(stored.adminPasscode);
-        previous.confirmed = (stored.flags & store::locks::kFlagAdminPasscodeConfirmed) != 0;
-        copyText(stored.adminPasscode, candidate);
-        stored.flags &= static_cast<uint8_t>(~store::locks::kFlagAdminPasscodeConfirmed);
-    });
+namespace {
+
+esp_err_t loadAdminStateLocked(const std::string& mac, AdminState& out) {
+    if (storageBlocked()) return ESP_ERR_INVALID_STATE;
+    if (findLocked(mac) == nullptr) return ESP_ERR_NOT_FOUND;
+    AdminState state;
+    auto error = key_store::loadRecord(mac, state.record);
+    if (error == ESP_OK) error = key_store::loadMetadata(mac, state.metadata);
+    if (error == ESP_OK) out = state;
+    return error;
 }
 
-bool confirmAdminPasscode(const std::string& mac) {
-    return updateRecord(mac, [](Record& stored) { stored.flags |= store::locks::kFlagAdminPasscodeConfirmed; });
+esp_err_t saveAdminMetadataLocked(Lock& lock, const latchkey_util::LockMetadata& metadata) {
+    const auto error = key_store::saveMetadata(lock.record.mac, metadata);
+    lock.live.metadataReadFailed = error != ESP_OK;
+    if (error == ESP_OK) lock.metadata = metadata;
+    return error;
 }
 
-bool restoreAdminPasscode(const std::string& mac, const AdminPasscodeCopy& previous) {
-    return updateRecord(mac, [&previous](Record& stored) {
-        copyText(stored.adminPasscode, previous.code);
-        if (previous.confirmed) {
-            stored.flags |= store::locks::kFlagAdminPasscodeConfirmed;
-        } else {
-            stored.flags &= static_cast<uint8_t>(~store::locks::kFlagAdminPasscodeConfirmed);
-        }
-    });
+esp_err_t finishAdminStateLocked(const std::string& mac, AdminState& state, std::string_view observed) {
+    if (state.metadata.pendingAdminPasscode[0] == 0 || !ttlock::isPasscode(observed)) return ESP_ERR_INVALID_STATE;
+    const bool accepted = observed == state.metadata.pendingAdminPasscode.data();
+    if (!accepted && observed != state.record.adminPasscode) return ESP_ERR_INVALID_STATE;
+    Lock& lock = *findLocked(mac);
+    copyText(state.record.adminPasscode, observed);
+    state.record.flags |= store::locks::kFlagAdminPasscodeConfirmed;
+    const auto stored = store::locks::save(state.record);
+    lock.record = state.record;
+    if (stored != ESP_OK) {
+        lock.live.metadataReadFailed = true;
+        return stored;
+    }
+    if (accepted) state.metadata.provenance = state.metadata.pendingProvenance;
+    state.metadata.pendingProvenance = latchkey_util::AdminProvenance::LegacyUnknown;
+    state.metadata.pendingAdminPasscode.fill(0);
+    return saveAdminMetadataLocked(lock, state.metadata);
+}
+
+}
+
+esp_err_t readAdminState(const std::string& mac, AdminState& out) {
+    std::lock_guard<std::mutex> guard(s_mutex);
+    return loadAdminStateLocked(mac, out);
+}
+
+esp_err_t stageAdminPasscode(const std::string& mac, std::string_view candidate,
+                              latchkey_util::AdminProvenance provenance) {
+    if (!ttlock::isPasscode(candidate) || provenance == latchkey_util::AdminProvenance::LegacyUnknown ||
+        provenance > latchkey_util::AdminProvenance::HardeningGenerated) return ESP_ERR_INVALID_ARG;
+    std::lock_guard<std::mutex> guard(s_mutex);
+    AdminState state;
+    const auto loaded = loadAdminStateLocked(mac, state);
+    if (loaded != ESP_OK) return loaded;
+    if (state.metadata.pendingAdminPasscode[0] != 0 || candidate == state.record.adminPasscode) {
+        return ESP_ERR_INVALID_STATE;
+    }
+    std::copy(candidate.begin(), candidate.end(), state.metadata.pendingAdminPasscode.begin());
+    state.metadata.pendingProvenance = provenance;
+    return saveAdminMetadataLocked(*findLocked(mac), state.metadata);
+}
+
+esp_err_t confirmAdminPasscode(const std::string& mac) {
+    std::lock_guard<std::mutex> guard(s_mutex);
+    AdminState state;
+    const auto loaded = loadAdminStateLocked(mac, state);
+    if (loaded != ESP_OK) return loaded;
+    return finishAdminStateLocked(mac, state, state.metadata.pendingAdminPasscode.data());
+}
+
+esp_err_t reconcileAdminPasscode(const std::string& mac, std::string_view observed) {
+    std::lock_guard<std::mutex> guard(s_mutex);
+    AdminState state;
+    const auto loaded = loadAdminStateLocked(mac, state);
+    return loaded == ESP_OK ? finishAdminStateLocked(mac, state, observed) : loaded;
+}
+
+esp_err_t rejectAdminPasscode(const std::string& mac) {
+    std::lock_guard<std::mutex> guard(s_mutex);
+    AdminState state;
+    const auto loaded = loadAdminStateLocked(mac, state);
+    if (loaded != ESP_OK) return loaded;
+    if (state.metadata.pendingAdminPasscode[0] == 0) return ESP_ERR_INVALID_STATE;
+    state.metadata.pendingProvenance = latchkey_util::AdminProvenance::LegacyUnknown;
+    state.metadata.pendingAdminPasscode.fill(0);
+    return saveAdminMetadataLocked(*findLocked(mac), state.metadata);
 }
 
 rpc::Reply rename(const std::string& mac, const std::string& name) {
@@ -2024,8 +2108,8 @@ rpc::Reply forget(const std::string& mac) {
     if (!exists(mac)) {
         return notPaired();
     }
-    if (removeRecord(mac) != ESP_OK) {
-        return rpc::fail("internal", "cannot erase the lock's keys");
+    if (removeRecord(mac, true) != ESP_OK) {
+        return rpc::fail("recovery_protected", "cannot erase keys: the reset button is disabled or stored recovery state cannot be verified");
     }
     ESP_LOGW(TAG, "forgot lock %s", mac.c_str());
     return rpc::ok();
@@ -2173,9 +2257,16 @@ esp_err_t storedCount(size_t& out) {
     return ESP_OK;
 }
 
+esp_err_t checkEraseAll() {
+    std::lock_guard<std::mutex> guard(s_mutex);
+    return storageBlocked() ? ESP_ERR_INVALID_STATE : key_store::checkErase({});
+}
+
 esp_err_t eraseAll() {
     std::lock_guard<std::mutex> guard(s_mutex);
     if (storageBlocked()) return ESP_ERR_INVALID_STATE;
+    const auto allowed = key_store::checkErase({});
+    if (allowed != ESP_OK) return allowed;
     s_erased = true;
     esp_err_t error = store::seeds::eraseAll();
     if (error == ESP_OK) {

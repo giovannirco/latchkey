@@ -15,6 +15,8 @@
 
 inline std::atomic<int64_t> managerTime{0};
 inline std::atomic<bool> managerBusy{false};
+inline ttlock::Transport* fixtureTransport = nullptr;
+inline bool fixtureConnected = false;
 inline bool bluetoothReady = false;
 inline size_t bluetoothCalls = 0;
 inline std::function<bool(ble::Message&)> receiveAdvert;
@@ -54,11 +56,11 @@ namespace ble {
 const char* addressTypeName(uint8_t) { return "fixture"; }
 bool isConnectable(const Advert&) { return true; }
 bool ready() { return bluetoothReady; }
-bool connected() { return false; }
-void disconnect() { ++bluetoothCalls; }
+bool connected() { return fixtureConnected; }
+void disconnect() { ++bluetoothCalls; fixtureConnected = false; }
 int scan(ScanMode mode) { ++bluetoothCalls; bluetoothScan = mode; return 0; }
 ScanMode scanMode() { return bluetoothScan; }
-int connect(const Address&, uint32_t, LinkInfo&) { ++bluetoothCalls; return 1; }
+int connect(const Address&, uint32_t, LinkInfo&) { ++bluetoothCalls; fixtureConnected = fixtureTransport != nullptr; return fixtureConnected ? 0 : 1; }
 bool receive(Message& message, uint32_t timeout) {
     ++bluetoothCalls;
     if (receiveAdvert && receiveAdvert(message)) return true;
@@ -72,10 +74,10 @@ void wake() {
 }
 LinkTransport::LinkTransport(AdvertSink sink) : sink_(std::move(sink)) {}
 void LinkTransport::reset() {}
-ttlock::Status LinkTransport::send(const ttlock::Bytes&) { ++bluetoothCalls; return ttlock::Status::Timeout; }
-ttlock::Status LinkTransport::receive(ttlock::Bytes&, uint32_t) {
+ttlock::Status LinkTransport::send(const ttlock::Bytes& bytes) { ++bluetoothCalls; return fixtureTransport ? fixtureTransport->send(bytes) : ttlock::Status::Timeout; }
+ttlock::Status LinkTransport::receive(ttlock::Bytes& bytes, uint32_t timeout) {
     ++bluetoothCalls;
-    return ttlock::Status::Timeout;
+    return fixtureTransport ? fixtureTransport->receive(bytes, timeout) : ttlock::Status::Timeout;
 }
 }
 
@@ -147,6 +149,9 @@ esp_err_t eraseAll() { return eraseFixtureNamespace("alerts"); }
 void resetManagerFixture() {
     resetRpcFixture();
     resetNvsFixture();
+    lock_manager::s_link = {};
+    fixtureTransport = nullptr;
+    fixtureConnected = false;
     lock_manager::s_locks = {};
     lock_manager::s_lockCount = 0;
     lock_manager::s_restore = key_store::Restore{};
