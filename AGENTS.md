@@ -49,6 +49,7 @@ uv run --no-project --python 3.14 --with pytest==9.1.1 --with pyserial==3.5 \
 - The public repository holds no real IP addresses, network names, MAC addresses, people's names, private paths or credentials. Examples use RFC 5737 addresses and documentation MACs (`00:00:5E:00:53:xx`). Private values belong in `secrets.local.json`.
 - No secret (lock keys, passcodes, the admin passcode, the owner's password hash, TOTP secrets, session tokens, Wi-Fi or MQTT passwords) in logs, RPC results, events, audit entries, MQTT payloads or test output.
 - Tests that run against a real lock leave it as they found it: delete only what they created, never clear credentials, restore names and settings, leave it locked. Destructive steps need an explicit opt-in flag.
+- Hardware tests that change a real lock's settings run only with `--allow-lock-writes`; without it they skip. Never send a switch write (reset button, privacy lock, tamper alert) until its layout is proven on that lock (#20).
 - A button press or a keypad touch is a person's action: tests wait for it and skip without it; nothing simulates one.
 - Commits are small conventional commits (`feat(fw): …`, `fix(ui): …`, `test(hil): …`, `docs: …`), with no trailers.
 
