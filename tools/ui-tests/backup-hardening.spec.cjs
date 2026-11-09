@@ -231,29 +231,38 @@ async function importForm(page, bytes, phrase = PASSPHRASE) {
   return dialog;
 }
 
-test('confirmed import remains explicit when the following list refresh fails', async ({ page, request }) => {
-  await mock(request, { confirmDelayMs: 20 });
-  await login(page);
-  await openLock(page, 'Shed', 'Device');
-  const exporting = await exportForm(page);
-  const downloaded = page.waitForEvent('download');
-  await exporting.getByRole('button', { name: 'Export', exact: true }).click();
-  const bytes = await readFile(await (await downloaded).path());
-  await expect(exporting).toBeHidden();
-  const forgotten = await page.request.post('/api/rpc', { data: { id: 1, method: 'locks.forget', params: { lock: SHED } } });
-  expect((await forgotten.json()).error).toBeUndefined();
-  await page.getByRole('link', { name: 'Security', exact: true }).click();
-  const importing = await importForm(page, bytes);
-  await mock(request, { failNext: { method: 'locks.list', code: 'storage_error', message: 'list refresh failed' } });
-  await importing.getByRole('button', { name: 'Import', exact: true }).click();
-  const notice = page.locator('#toasts .toast-warning');
-  await expect(notice).toContainText('Imported 1 lock');
-  await expect(notice).toContainText('List refresh failed');
-  await expect(importing).toBeHidden();
-  await notice.getByRole('link', { name: 'Open locks' }).click();
-  await expect(lockCard(page, 'Shed')).toBeVisible();
-  expect((await calls(request)).filter((call) => call.method === 'keys.import')).toHaveLength(1);
-});
+for (const refreshCode of ['storage_error', 'unauthorized']) {
+  test(`confirmed import handles list refresh failure ${refreshCode} within its session`, async ({ page, request }) => {
+    await mock(request, { confirmDelayMs: 20 });
+    await login(page);
+    await openLock(page, 'Shed', 'Device');
+    const exporting = await exportForm(page);
+    const downloaded = page.waitForEvent('download');
+    await exporting.getByRole('button', { name: 'Export', exact: true }).click();
+    const bytes = await readFile(await (await downloaded).path());
+    await expect(exporting).toBeHidden();
+    const forgotten = await page.request.post('/api/rpc', { data: { id: 1, method: 'locks.forget', params: { lock: SHED } } });
+    expect((await forgotten.json()).error).toBeUndefined();
+    await page.getByRole('link', { name: 'Security', exact: true }).click();
+    const importing = await importForm(page, bytes);
+    await mock(request, { failNext: { method: 'locks.list', code: refreshCode, message: 'list refresh failed' } });
+    await importing.getByRole('button', { name: 'Import', exact: true }).click();
+    if (refreshCode === 'unauthorized') {
+      await expect(page.getByRole('heading', { name: 'Sign in', exact: true })).toBeVisible();
+      await expect(importing).toBeHidden();
+      await expect(page.locator('#toasts')).not.toContainText('Imported');
+      expect((await calls(request)).filter((call) => call.method === 'keys.import')).toHaveLength(1);
+      return;
+    }
+    const notice = page.locator('#toasts .toast-warning');
+    await expect(notice).toContainText('Imported 1 lock');
+    await expect(notice).toContainText('List refresh failed');
+    await expect(importing).toBeHidden();
+    await notice.getByRole('link', { name: 'Open locks' }).click();
+    await expect(lockCard(page, 'Shed')).toBeVisible();
+    expect((await calls(request)).filter((call) => call.method === 'keys.import')).toHaveLength(1);
+  });
+}
 
 test('all-lock backup preserves spaces and refuses a conflicting import without overwriting names', async ({ page, request }) => {
   await mock(request, { confirmDelayMs: 100, setLock: { id: FRONT_DOOR, backedUp: false } });
