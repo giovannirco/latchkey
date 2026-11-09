@@ -1735,9 +1735,22 @@ function importKeysDialog() {
       if (!Array.isArray(result.imported) || !result.imported.length || result.imported.some((id) => typeof id !== 'string')) {
         throw new Error('The board sent an invalid import report. Refresh the lock list before retrying.');
       }
-      ({ locks: state.locks } = await rpc('locks.list'));
       const count = result.imported.length;
-      toast(count === 1 ? 'Imported 1 lock' : `Imported ${count} locks`);
+      const message = count === 1 ? 'Imported 1 lock' : `Imported ${count} locks`;
+      try {
+        ({ locks: state.locks } = await rpc('locks.list'));
+      } catch (failure) {
+        if (failure.code === 'unauthorized' || failure.code === 'session_changed') throw failure;
+        const detail = [errorText(failure), errorDetail(failure)].filter(Boolean).join(' ');
+        toast(message, {
+          warning: true,
+          detail: h('span', null,
+            `The import completed, but the lock list could not be refreshed. ${detail} `,
+            h('a', { href: '#/locks' }, 'Open locks'), ' to refresh it. Do not import this file again.'),
+        });
+        return result;
+      }
+      toast(message);
       return result;
     },
   });
