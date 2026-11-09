@@ -85,6 +85,14 @@ static void test_a_poll_with_more_to_read_is_due_again_at_once() {
     TEST_ASSERT_FALSE(watch.due(kBoot + 2));
 }
 
+static void test_a_dedicated_watch_waits_for_a_recent_advertisement() {
+    TEST_ASSERT_FALSE(latchkey_util::canWatchWithoutLink(-1, kBoot, 3 * kMinute));
+    TEST_ASSERT_FALSE(latchkey_util::canWatchWithoutLink(kBoot + 1, kBoot, 3 * kMinute));
+    TEST_ASSERT_TRUE(latchkey_util::canWatchWithoutLink(kBoot, kBoot, 3 * kMinute));
+    TEST_ASSERT_TRUE(latchkey_util::canWatchWithoutLink(kBoot, kBoot + 3 * kMinute, 3 * kMinute));
+    TEST_ASSERT_FALSE(latchkey_util::canWatchWithoutLink(kBoot, kBoot + 3 * kMinute + 1, 3 * kMinute));
+}
+
 int main(int, char**) {
     UNITY_BEGIN();
     RUN_TEST(test_locks_are_first_watched_soon_after_boot_one_after_another);
@@ -93,5 +101,6 @@ int main(int, char**) {
     RUN_TEST(test_a_latchkey_unlock_is_read_back_at_the_next_link);
     RUN_TEST(test_a_failed_read_back_of_an_unlock_waits_for_the_retry);
     RUN_TEST(test_a_poll_with_more_to_read_is_due_again_at_once);
+    RUN_TEST(test_a_dedicated_watch_waits_for_a_recent_advertisement);
     return UNITY_END();
 }

@@ -6,6 +6,8 @@
 
 namespace latchkey_util {
 
+bool canWatchWithoutLink(int64_t lastAdvertMs, int64_t nowMs, int64_t maximumAgeMs);
+
 class WatchSchedule {
 public:
     WatchSchedule(int64_t intervalMs, int64_t retryMs, int64_t gapMs);

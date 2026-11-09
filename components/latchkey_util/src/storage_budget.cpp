@@ -24,7 +24,8 @@ size_t auditRecordsLeft(uint32_t nextSeq, uint32_t capacity) {
 size_t reservedEntries(const StorageNeeds& needs) {
     return needs.auditRecordsLeft * nvsBlobEntries(needs.auditRecordBytes) + kSequenceEntries +
            kWritesPerPairing * (nvsBlobEntries(needs.lockRecordBytes) + nvsBlobEntries(needs.seedTableBytes)) +
-           needs.watchStates * nvsBlobEntries(needs.watchStateBytes) + needs.spareEntries;
+           needs.watchStates * nvsBlobEntries(needs.watchStateBytes) +
+           needs.alertTables * nvsBlobEntries(needs.alertTableBytes) + needs.spareEntries;
 }
 
 bool fitsAboveReserve(size_t availableEntries, size_t blobBytes, size_t reserved) {

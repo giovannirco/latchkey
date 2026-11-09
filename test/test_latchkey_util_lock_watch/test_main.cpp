@@ -4,6 +4,7 @@
 #include <array>
 #include <cstdint>
 
+#include "latchkey_util/lock_alerts.h"
 #include "latchkey_util/lock_watch.h"
 
 using latchkey_util::ClockSync;
@@ -130,6 +131,32 @@ static void test_a_drift_correction_preserves_the_previous_offset_boundary() {
     TEST_ASSERT_EQUAL_UINT32(kNow + kDay, state.clockSetUtc);
 }
 
+static void test_a_failed_warning_write_preserves_the_corrupt_cursor_until_the_warning_is_durable() {
+    std::array<uint8_t, latchkey_util::kWatchStateSize> storedCursor{};
+    latchkey_util::LockAlerts pending;
+    latchkey_util::LockAlert warning;
+    warning.kind = latchkey_util::LockAlertKind::WatchStateUnreadable;
+    TEST_ASSERT_TRUE(pending.add(warning));
+    auto storedAlerts = latchkey_util::LockAlerts{}.encode();
+    const WatchState replacement = watched();
+    auto saveCursor = [&](const WatchState& state) {
+        storedCursor = latchkey_util::encodeWatchState(state);
+        return true;
+    };
+    TEST_ASSERT_FALSE(latchkey_util::persistWatchState(replacement, [] { return false; }, saveCursor));
+    WatchState restarted;
+    TEST_ASSERT_FALSE(latchkey_util::decodeWatchState(storedCursor.data(), storedCursor.size(), restarted));
+    TEST_ASSERT_TRUE(latchkey_util::persistWatchState(replacement, [&] {
+        storedAlerts = pending.encode();
+        return true;
+    }, saveCursor));
+    TEST_ASSERT_TRUE(latchkey_util::decodeWatchState(storedCursor.data(), storedCursor.size(), restarted));
+    latchkey_util::LockAlerts restartedAlerts;
+    TEST_ASSERT_TRUE(latchkey_util::LockAlerts::decode(storedAlerts.data(), storedAlerts.size(), restartedAlerts));
+    TEST_ASSERT_TRUE(restarted == replacement);
+    TEST_ASSERT_EQUAL_UINT(1, restartedAlerts.entries().size());
+}
+
 int main(int, char**) {
     UNITY_BEGIN();
     RUN_TEST(test_a_watch_state_encodes_byte_for_byte);
@@ -138,6 +165,7 @@ int main(int, char**) {
     RUN_TEST(test_a_damaged_watch_state_is_refused);
     RUN_TEST(test_setting_the_clock_keeps_the_offset_of_the_records_before);
     RUN_TEST(test_a_drift_correction_preserves_the_previous_offset_boundary);
+    RUN_TEST(test_a_failed_warning_write_preserves_the_corrupt_cursor_until_the_warning_is_durable);
     RUN_TEST(test_a_lock_clock_the_board_never_set_is_set_at_once);
     RUN_TEST(test_a_new_offset_sets_the_lock_clock_at_once);
     RUN_TEST(test_drift_is_corrected_once_a_day_when_a_link_is_open_anyway);

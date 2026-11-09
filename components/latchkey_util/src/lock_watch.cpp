@@ -71,6 +71,11 @@ void clockSet(WatchState& state, int32_t offset, int64_t utc) {
     state.clockSetUtc = static_cast<uint32_t>(utc);
 }
 
+bool persistWatchState(const WatchState& state, const std::function<bool()>& persistWarning,
+                       const std::function<bool(const WatchState&)>& persistCursor) {
+    return persistWarning() && persistCursor(state);
+}
+
 int32_t recordOffset(const WatchState& state, uint16_t seq, int32_t unknownOffset) {
     if (!state.clockKnown) {
         return unknownOffset;

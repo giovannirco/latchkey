@@ -3,6 +3,10 @@
 
 namespace latchkey_util {
 
+bool canWatchWithoutLink(int64_t lastAdvertMs, int64_t nowMs, int64_t maximumAgeMs) {
+    return lastAdvertMs >= 0 && lastAdvertMs <= nowMs && nowMs - lastAdvertMs <= maximumAgeMs;
+}
+
 WatchSchedule::WatchSchedule(int64_t intervalMs, int64_t retryMs, int64_t gapMs)
     : intervalMs_(intervalMs), retryMs_(retryMs), gapMs_(gapMs) {}
 

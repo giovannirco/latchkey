@@ -4,6 +4,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 
 namespace latchkey_util {
 
@@ -35,6 +36,9 @@ bool decodeWatchState(const uint8_t* data, size_t size, WatchState& out);
 ClockSync clockSyncNeeded(const WatchState& state, int32_t currentOffset, int64_t nowUtc, int64_t driftSeconds);
 
 void clockSet(WatchState& state, int32_t offset, int64_t utc);
+
+bool persistWatchState(const WatchState& state, const std::function<bool()>& persistWarning,
+                       const std::function<bool(const WatchState&)>& persistCursor);
 
 int32_t recordOffset(const WatchState& state, uint16_t seq, int32_t unknownOffset);
 
