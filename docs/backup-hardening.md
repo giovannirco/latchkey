@@ -5,7 +5,7 @@ The owner authorized backup/hardening application code and offline tests on 2026
 
 ## Backup contract
 
-`keys.export {passphrase, lock?}` returns an encrypted backup; `keys.import {passphrase, backup}` restores it. Both require owner authentication and the board button over HTTPS; USB retains the existing physical-presence rule. Web requests use jobs; USB keeps its inline reply contract. Passphrases are 12 to 128 UTF-8 bytes and never enter logs, events or audit metadata.
+`keys.export {passphrase, lock?}` returns an encrypted backup; `keys.import {passphrase, backup}` restores it. Both require owner authentication and the board button over HTTPS; USB retains the existing physical-presence rule. Web requests use jobs; USB keeps its inline reply contract. Passphrases are 12 to 128 UTF-8 bytes and never enter logs, events or audit metadata. The JSON transport rejects U+0000 explicitly because its string representation cannot preserve embedded NUL characters; it must never silently truncate a passphrase. Other valid UTF-8 controls remain supported by the length-delimited crypto interface.
 
 Use a versioned `LKB2` binary envelope: magic, version, KDF identifier, PBKDF2-HMAC-SHA256 iteration count (100,000), 16-byte random salt and 12-byte random nonce. Authenticate the complete header as AES-256-GCM additional data; use a 16-byte tag. Reject unknown versions/KDFs and unexpected iteration counts before deriving a key. Reuse the existing PBKDF2 implementation and PSA cryptography; add no dependency. Derivation yields periodically to the scheduler.
 
