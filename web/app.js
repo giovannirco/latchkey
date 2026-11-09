@@ -1098,12 +1098,7 @@ function showLogin(message) {
     }
     password.value = '';
     code.value = '';
-    try {
-      await startApp();
-    } catch (failure) {
-      error.textContent = errorText(failure);
-      error.hidden = false;
-    }
+    await boot();
   });
   app.replaceChildren(
     h(
@@ -3564,6 +3559,9 @@ async function boot() {
   try {
     await startApp();
   } catch (failure) {
+    if (failure.code === 'session_changed') return;
+    state.authed = false;
+    events.stop();
     if (failure.code === 'unauthorized') {
       showLogin();
       return;
