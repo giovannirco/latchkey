@@ -25,11 +25,13 @@ inline size_t failAt = 0;
 inline size_t attempts = 0;
 inline size_t checkedWipes = 0;
 inline bool wiped = true;
+inline void (*onChange)() = nullptr;
 
 inline void reset() {
     failAt = attempts = checkedWipes = 0;
     wipeChecks = {};
     wiped = true;
+    onChange = nullptr;
 }
 
 inline void failNext() {
@@ -62,6 +64,7 @@ inline void* allocate(size_t size) noexcept {
     for (auto& allocation : allocations) {
         if (allocation.data == nullptr) {
             allocation = {data, size};
+            if (onChange) onChange();
             return data;
         }
     }
@@ -81,6 +84,7 @@ inline void release(void* data) noexcept {
             check = {};
         }
         allocation = {};
+        if (onChange) onChange();
         break;
     }
     ::operator delete(data);

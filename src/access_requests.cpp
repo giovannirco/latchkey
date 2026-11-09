@@ -190,7 +190,7 @@ bool listFits(size_t textBound) {
 
 rpc::Reply tooLarge(size_t entries, const char* noun) {
     char message[120];
-    std::snprintf(message, sizeof(message), "this board has too little free memory to list %u %s",
+    std::snprintf(message, sizeof(message), "listing %u %s exceeds this board's response memory limits",
                   static_cast<unsigned>(entries), noun);
     return rpc::fail("too_large", message);
 }

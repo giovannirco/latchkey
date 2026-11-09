@@ -9,8 +9,14 @@
 #include <string_view>
 
 #include "cJSON.h"
+#include "latchkey_util/rpc_text.h"
 
 namespace rpc {
+
+inline constexpr std::string_view kRenderFailure =
+    R"({"id":null,"error":{"code":"internal","message":"reply exceeded memory limits"}})";
+
+void init();
 
 enum class Transport : uint8_t {
     Serial,
@@ -52,7 +58,7 @@ struct Reply {
 };
 
 struct Response {
-    std::string json;
+    latchkey_util::RpcText json;
     std::string sessionToken;
     bool endSession = false;
 };
@@ -61,9 +67,10 @@ Reply ok(cJSON* result = nullptr);
 
 Reply fail(const char* code, const char* message);
 
-void addOutcome(cJSON* object, Reply reply);
+bool addOutcome(cJSON* object, Reply reply);
+latchkey_util::RpcText render(Json envelope);
 
-using Handler = std::function<Reply(const cJSON* params, const Context& context)>;
+using Handler = std::function<Reply(cJSON* params, const Context& context)>;
 
 void registerMethod(const char* name, Access access, Handler handler, Handler check = nullptr);
 
@@ -73,21 +80,24 @@ enum class Presence : uint8_t {
     SessionEnded,
 };
 
-Presence confirmPresence(const std::string& action, const Context& context);
+Presence confirmPresence(const char* action, const Context& context);
 
 struct JobSpec {
-    std::string action;
+    const char* action = nullptr;
     Context context;
     bool confirm = false;
-    std::function<Reply()> check;
-    std::function<Reply()> run;
-    std::function<void(const Reply&)> finish;
+    bool audited = false;
+    Json params;
+    Handler check;
+    Handler run;
+    std::function<void(const JobSpec&, const Reply&)> finish;
 };
 
 Reply startJob(JobSpec spec);
+Reply executeJob(JobSpec spec, bool expired);
 
-Response dispatch(const char* requestJson, Transport origin, std::string_view sessionToken);
+Response dispatch(latchkey_util::RpcText requestJson, Transport origin, std::string_view sessionToken);
 
-std::string errorLine(const char* code, const char* message);
+latchkey_util::RpcText errorLine(const char* code, const char* message);
 
 }

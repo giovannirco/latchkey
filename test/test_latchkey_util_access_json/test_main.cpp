@@ -116,6 +116,13 @@ static void test_the_first_feature_the_lock_does_not_report_is_named() {
                             static_cast<uint8_t>(*latchkey_util::firstMissingFeature(0, {Feature::Ic})));
 }
 
+static void test_list_preflight_reserves_response_envelope_space() {
+    TEST_ASSERT_TRUE(latchkey_util::listFitsInHeap(20000, 1000000, 1000000));
+    TEST_ASSERT_TRUE(latchkey_util::listFitsInHeap(32768 - 256, 1000000, 1000000));
+    TEST_ASSERT_FALSE(latchkey_util::listFitsInHeap(32768 - 255, 1000000, 1000000));
+    TEST_ASSERT_FALSE(latchkey_util::listFitsInHeap(SIZE_MAX, SIZE_MAX, SIZE_MAX));
+}
+
 int main(int, char**) {
     UNITY_BEGIN();
     RUN_TEST(test_strings_are_escaped_for_json);
@@ -124,5 +131,6 @@ int main(int, char**) {
     RUN_TEST(test_the_bounds_cover_the_largest_entries);
     RUN_TEST(test_a_list_fits_only_with_room_for_its_copies);
     RUN_TEST(test_the_first_feature_the_lock_does_not_report_is_named);
+    RUN_TEST(test_list_preflight_reserves_response_envelope_space);
     return UNITY_END();
 }

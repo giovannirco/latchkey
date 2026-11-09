@@ -38,6 +38,14 @@ Persist backed-up, hardened, reset-button-off and provenance flags without reint
 - Browser tests cover preview/confirmation, partial completion, export/import errors, longer job deadlines and honest state after failures.
 - Both target builds, native tests, browser tests and source checks must pass. No HIL or device command runs in this pass.
 
+The transport implementation accepts 16 KiB authenticated HTTP bodies and USB lines; unauthenticated HTTP remains limited to 8 KiB. Rendered replies have a separate 32 KiB limit, allowing existing lists above the request limit. Credential/passcode list preflight reserves 256 bytes for the response envelope and returns `too_large` before JSON construction if its content bound exceeds 32,512 bytes or the existing heap checks fail. This is a deliberate bounded-output policy; pagination is unchanged.
+
+WebSocket admission allows at most 32 messages and 32,769 allocated payload bytes, including terminators and active batches. It counts buffer capacity, not just rendered length. A targeted result that cannot be rendered or admitted closes only that session's event sockets so pending browser jobs reject. Failure flags belong to admitted socket contexts, survive scheduling/closure failures, and are retried through service calls and the existing five-second sweep.
+
+Native allocation tests bound owned JSON/text peaks, including the wiping cJSON allocator's aligned headers: 34 KiB for a 16 KiB request with one large parameter, 54 KiB for a maximum-size request near the 256-value limit, 34 KiB for a 16,000-byte request ID, and 28 KiB for an 11,000-byte result. These are transport fixtures, not total device-heap guarantees; handler binary buffers, TLS, task stacks and other services are outside these measurements. Maximum backup binary/base64 overlap remains an end-to-end test for the export/import handler slice.
+
+Native builds fetch the exact cJSON component shared by both target lockfiles using the existing pinned `idf-component-manager==3.1.2` resolver. The build bootstrap verifies the locked content hash on download and cache reuse, needs no target build or full ESP-IDF installation, and performs no download from a running test binary. Run its tests with `uv run --no-project --with idf-component-manager==3.1.2 python -m unittest discover -s tools -p test_prepare_native.py`; `uvx platformio==6.2.0 test -e native` includes the production parser, dispatcher, HTTP, jobs and WebSocket host tests.
+
 ## Remaining acceptance
 
 Runtime heap during derivation/import, physical-button behavior and a two-board restore remain unverified until separate hardware work is authorized. Full reset-button hardening additionally needs the switch-layout proof in issue #20. OTA and its hardware checks are deferred beyond v1.0.0.

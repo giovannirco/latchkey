@@ -3,26 +3,28 @@
 
 #include <cstddef>
 #include <functional>
-#include <string>
-#include <string_view>
+#include <optional>
+
+#include "latchkey_util/rpc_text.h"
 
 namespace latchkey_util {
 
 class LineBuffer {
 public:
-    using LineHandler = std::function<void(std::string_view line)>;
-    using OverflowHandler = std::function<void()>;
+    enum class Error { TooLong, NoMemory };
+    using LineHandler = std::function<void(RpcText line)>;
+    using OverflowHandler = std::function<void(Error)>;
 
     LineBuffer(size_t maxLength, LineHandler onLine, OverflowHandler onOverflow);
 
-    void feed(const char* data, size_t length);
+    void consume(char* data, size_t length);
 
 private:
     size_t maxLength_;
     LineHandler onLine_;
     OverflowHandler onOverflow_;
-    std::string line_;
-    bool overflowing_ = false;
+    RpcText line_;
+    std::optional<Error> error_;
 };
 
 }

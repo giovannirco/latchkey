@@ -31,6 +31,7 @@ idf_component_register(
         "methods_system.cpp"
         "mqtt.cpp"
         "rpc.cpp"
+        "rpc_json.cpp"
         "store.cpp"
         "syslog_client.cpp"
         "wifi.cpp"

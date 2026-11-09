@@ -1,11 +1,10 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "ws.h"
 
+#include <array>
 #include <cstdlib>
-#include <deque>
 #include <mutex>
 #include <utility>
-#include <vector>
 
 #include "esp_log.h"
 #include "esp_timer.h"
@@ -14,7 +13,6 @@
 #include "auth.h"
 #include "events.h"
 #include "http.h"
-#include "latchkey_util/backlog.h"
 #include "latchkey_util/web.h"
 
 namespace ws {
@@ -23,6 +21,8 @@ namespace {
 
 constexpr const char* TAG = "ws";
 constexpr size_t kMaxPending = 32;
+constexpr size_t kMaxQueuedBytes = latchkey_util::kMaxRpcResponse + 1;
+constexpr size_t kMaxSockets = 4;
 constexpr size_t kMaxClientFrame = 128;
 constexpr size_t kTokenBuffer = 65;
 constexpr uint64_t kSweepPeriodUs = 5 * 1000 * 1000;
@@ -30,65 +30,115 @@ constexpr uint64_t kSweepPeriodUs = 5 * 1000 * 1000;
 struct Outgoing {
     bool broadcast = true;
     uint32_t session = 0;
-    std::string line;
+    latchkey_util::RpcText line;
+};
+
+struct Socket {
+    uint32_t session;
+    int fd;
+    bool failed = false;
 };
 
 std::mutex s_mutex;
-std::deque<Outgoing> s_pending;
+std::array<Outgoing, kMaxPending> s_pending;
+std::array<Socket*, kMaxSockets> s_sockets{};
+size_t s_pendingCount = 0;
+size_t s_count = 0;
+size_t s_bytes = 0;
 httpd_handle_t s_server = nullptr;
 size_t s_maxSockets = 0;
 bool s_queued = false;
 
-void discard(Outgoing& out) {
-    if (!out.broadcast) {
-        mbedtls_platform_zeroize(out.line.data(), out.line.size());
-    }
+void failSessionLocked(uint32_t session) {
+    for (Socket* socket : s_sockets) if (socket != nullptr && socket->session == session) socket->failed = true;
 }
 
-bool sendTo(int fd, const std::string& line) {
+bool failedSocket(int fd) {
+    std::lock_guard<std::mutex> lock(s_mutex);
+    for (const Socket* socket : s_sockets) if (socket != nullptr && socket->fd == fd) return socket->failed;
+    return false;
+}
+
+void freeSocket(void* context) {
+    {
+        std::lock_guard<std::mutex> lock(s_mutex);
+        for (Socket*& socket : s_sockets) if (socket == context) socket = nullptr;
+    }
+    free(context);
+}
+
+void failSession(uint32_t session) {
+    std::lock_guard<std::mutex> lock(s_mutex);
+    failSessionLocked(session);
+}
+
+bool closeSocket(int fd, uint32_t session) {
+    if (httpd_sess_trigger_close(s_server, fd) == ESP_OK) return true;
+    failSession(session);
+    return false;
+}
+
+void release(Outgoing& out) {
+    const size_t bytes = out.line.capacity() + 1;
+    out.line.clear();
+    s_bytes -= bytes;
+    --s_count;
+}
+
+bool sendTo(int fd, const latchkey_util::RpcText& line) {
     httpd_ws_frame_t frame{};
     frame.final = true;
     frame.type = HTTPD_WS_TYPE_TEXT;
-    frame.payload = reinterpret_cast<uint8_t*>(const_cast<char*>(line.data()));
+    frame.payload = reinterpret_cast<uint8_t*>(const_cast<char*>(line.c_str()));
     frame.len = line.size();
     return httpd_ws_send_frame_async(s_server, fd, &frame) == ESP_OK;
 }
 
-void serve(int fd, const std::deque<Outgoing>& batch) {
-    const auto* session = static_cast<const uint32_t*>(httpd_sess_get_ctx(s_server, fd));
-    if (session == nullptr || !auth::sessionOpen(*session)) {
-        httpd_sess_trigger_close(s_server, fd);
-        return;
+bool serve(int fd, const std::array<Outgoing, kMaxPending>& batch, size_t count) {
+    const auto* context = static_cast<const Socket*>(httpd_sess_get_ctx(s_server, fd));
+    if (context == nullptr) return httpd_sess_trigger_close(s_server, fd) == ESP_OK;
+    const uint32_t session = context->session;
+    if (!auth::sessionOpen(session) || failedSocket(fd)) {
+        return closeSocket(fd, session);
     }
     httpd_sess_update_lru_counter(s_server, fd);
-    for (const Outgoing& out : batch) {
-        if ((out.broadcast || out.session == *session) && !sendTo(fd, out.line)) {
+    for (size_t i = 0; i < count; ++i) {
+        const Outgoing& out = batch[i];
+        if (failedSocket(fd)) return closeSocket(fd, session);
+        if ((out.broadcast || out.session == session) && !sendTo(fd, out.line)) {
             ESP_LOGW(TAG, "event socket %d does not take frames: closing it", fd);
-            httpd_sess_trigger_close(s_server, fd);
-            return;
+            return closeSocket(fd, session);
         }
     }
+    return true;
 }
 
 void pass(void*) {
-    std::deque<Outgoing> batch;
+    std::array<Outgoing, kMaxPending> batch;
+    size_t count = 0;
     {
         std::lock_guard<std::mutex> lock(s_mutex);
-        batch.swap(s_pending);
+        count = std::exchange(s_pendingCount, 0);
+        for (size_t i = 0; i < count; ++i) batch[i] = std::move(s_pending[i]);
         s_queued = false;
     }
-    std::vector<int> fds(s_maxSockets);
-    size_t count = fds.size();
-    if (httpd_get_client_list(s_server, &count, fds.data()) == ESP_OK) {
-        for (size_t i = 0; i < count; ++i) {
+    std::array<int, kMaxSockets> fds{};
+    size_t sockets = s_maxSockets;
+    const bool scanned = httpd_get_client_list(s_server, &sockets, fds.data()) == ESP_OK;
+    if (scanned) {
+        for (size_t i = 0; i < sockets; ++i) {
             if (httpd_ws_get_fd_info(s_server, fds[i]) == HTTPD_WS_CLIENT_WEBSOCKET) {
-                serve(fds[i], batch);
+                serve(fds[i], batch, count);
             }
         }
     }
-    for (Outgoing& out : batch) {
-        discard(out);
+    std::lock_guard<std::mutex> lock(s_mutex);
+    if (!scanned) {
+        for (size_t i = 0; i < count; ++i) {
+            if (!batch[i].broadcast) failSessionLocked(batch[i].session);
+        }
     }
+    for (size_t i = 0; i < count; ++i) release(batch[i]);
 }
 
 void schedule(bool due) {
@@ -107,14 +157,23 @@ void enqueue(Outgoing out) {
     {
         std::lock_guard<std::mutex> lock(s_mutex);
         if (s_server == nullptr) {
-            discard(out);
             return;
         }
-        std::optional<Outgoing> dropped = latchkey_util::pushBounded(
-            s_pending, std::move(out), kMaxPending, [](const Outgoing& line) { return line.broadcast; });
-        if (dropped.has_value()) {
-            ESP_LOGW(TAG, "event queue full: dropped the oldest %s", dropped->broadcast ? "event" : "job result");
-            discard(*dropped);
+        const size_t bytes = out.line.capacity() + 1;
+        while (!out.line.empty() && (s_count == kMaxPending || bytes > kMaxQueuedBytes - s_bytes)) {
+            size_t victim = 0;
+            while (victim < s_pendingCount && !s_pending[victim].broadcast) ++victim;
+            if (victim == s_pendingCount) break;
+            release(s_pending[victim]);
+            --s_pendingCount;
+            for (size_t i = victim; i < s_pendingCount; ++i) s_pending[i] = std::move(s_pending[i + 1]);
+        }
+        if (out.line.empty() || s_count == kMaxPending || bytes > kMaxQueuedBytes - s_bytes) {
+            if (!out.broadcast) failSessionLocked(out.session);
+        } else {
+            s_pending[s_pendingCount++] = std::move(out);
+            s_bytes += bytes;
+            ++s_count;
         }
         due = !s_queued;
         s_queued = true;
@@ -136,11 +195,18 @@ std::optional<uint32_t> sessionOf(httpd_req_t* req) {
 }
 
 void init() {
-    events::addSink([](const std::string& line) { enqueue(Outgoing{true, 0, line}); });
+    events::addSink([](const std::string& line) {
+        latchkey_util::RpcText text(latchkey_util::RpcText::Limit::Response);
+        if (text.assign(line)) enqueue(Outgoing{true, 0, std::move(text)});
+    });
     auth::onSessionsEnded(service);
 }
 
 void attach(httpd_handle_t server, size_t maxSockets) {
+    if (maxSockets > kMaxSockets) {
+        ESP_LOGE(TAG, "event socket capacity exceeded");
+        return;
+    }
     {
         std::lock_guard<std::mutex> lock(s_mutex);
         s_maxSockets = maxSockets;
@@ -167,14 +233,24 @@ esp_err_t admit(httpd_req_t* req) {
     if (!session.has_value()) {
         return ESP_FAIL;
     }
-    auto* id = static_cast<uint32_t*>(malloc(sizeof(uint32_t)));
-    if (id == nullptr) {
+    auto* socket = static_cast<Socket*>(malloc(sizeof(Socket)));
+    if (socket == nullptr) {
         return ESP_FAIL;
     }
-    *id = *session;
-    req->sess_ctx = id;
-    req->free_ctx = free;
-    return ESP_OK;
+    *socket = {*session, httpd_req_to_sockfd(req), false};
+    {
+        std::lock_guard<std::mutex> lock(s_mutex);
+        for (Socket*& slot : s_sockets) {
+            if (slot == nullptr) {
+                slot = socket;
+                req->sess_ctx = socket;
+                req->free_ctx = freeSocket;
+                return ESP_OK;
+            }
+        }
+    }
+    free(socket);
+    return ESP_FAIL;
 }
 
 esp_err_t receive(httpd_req_t* req) {
@@ -193,9 +269,8 @@ esp_err_t receive(httpd_req_t* req) {
     return httpd_ws_recv_frame(req, &frame, frame.len);
 }
 
-void deliver(std::optional<uint32_t> session, std::string line) {
+void deliver(std::optional<uint32_t> session, latchkey_util::RpcText line) {
     if (!session.has_value()) {
-        mbedtls_platform_zeroize(line.data(), line.size());
         return;
     }
     enqueue(Outgoing{false, *session, std::move(line)});

@@ -4,10 +4,10 @@
 #include <cstddef>
 #include <cstdint>
 #include <optional>
-#include <string>
 
 #include "esp_err.h"
 #include "esp_http_server.h"
+#include "latchkey_util/rpc_text.h"
 
 namespace ws {
 
@@ -19,7 +19,7 @@ esp_err_t admit(httpd_req_t* req);
 
 esp_err_t receive(httpd_req_t* req);
 
-void deliver(std::optional<uint32_t> session, std::string line);
+void deliver(std::optional<uint32_t> session, latchkey_util::RpcText line);
 
 void service();
 

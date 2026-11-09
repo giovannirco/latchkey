@@ -4,6 +4,7 @@
 #include <cstdio>
 
 #include "latchkey_util/credential_id.h"
+#include "latchkey_util/rpc_text.h"
 
 namespace latchkey_util {
 
@@ -14,6 +15,7 @@ constexpr size_t kPasscodeFixedBytes = 128;
 constexpr size_t kCredentialFixedBytes = 160;
 constexpr size_t kEscapedBytesPerNameByte = 2;
 constexpr size_t kSeparatorBytes = 1;
+constexpr size_t kResponseEnvelopeBytes = 256;
 
 void appendNumber(std::string& out, int64_t value) {
     char text[24];
@@ -113,7 +115,8 @@ size_t credentialJsonBound(size_t nameBytes) {
 }
 
 bool listFitsInHeap(size_t textBytes, size_t freeBytes, size_t largestBlock) {
-    return kListCopies * textBytes + kListHeadroomBytes <= freeBytes && textBytes <= largestBlock;
+    return textBytes <= kMaxRpcResponse - kResponseEnvelopeBytes &&
+           kListCopies * textBytes + kListHeadroomBytes <= freeBytes && textBytes <= largestBlock;
 }
 
 }

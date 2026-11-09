@@ -13,7 +13,6 @@
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
-#include "mbedtls/platform_util.h"
 
 #include "latchkey_util/job_queue.h"
 #include "ws.h"
@@ -42,30 +41,23 @@ bool s_running = false;
 
 uint32_t nowMs() { return static_cast<uint32_t>(esp_timer_get_time() / 1000); }
 
-std::string doneLine(const Job& job, rpc::Reply reply) {
-    cJSON* event = cJSON_CreateObject();
-    cJSON_AddStringToObject(event, "event", "job.done");
-    cJSON* data = cJSON_AddObjectToObject(event, "data");
-    cJSON_AddStringToObject(data, "job", job.id.c_str());
-    rpc::addOutcome(data, std::move(reply));
-    char* text = cJSON_PrintUnformatted(event);
-    cJSON_Delete(event);
-    if (text == nullptr) {
-        return {};
-    }
-    std::string line(text);
-    mbedtls_platform_zeroize(text, line.size());
-    cJSON_free(text);
-    return line;
+latchkey_util::RpcText doneLine(const Job& job, rpc::Reply reply) {
+    rpc::Json event(cJSON_CreateObject());
+    if (!event || !cJSON_AddStringToObject(event.get(), "event", "job.done")) return {};
+    cJSON* data = cJSON_AddObjectToObject(event.get(), "data");
+    if (data == nullptr || !cJSON_AddStringToObject(data, "job", job.id.c_str()) ||
+        !rpc::addOutcome(data, std::move(reply))) return {};
+    return rpc::render(std::move(event));
 }
 
 void finish(Job* job, bool expired) {
-    std::string line = doneLine(*job, job->work(expired));
+    rpc::Reply reply = rpc::executeJob(std::move(*job->work), expired);
+    job->work.reset();
+    auto line = doneLine(*job, std::move(reply));
     if (line.empty()) {
         ESP_LOGE(TAG, "out of memory rendering the outcome of %s", job->id.c_str());
-    } else {
-        ws::deliver(job->session, std::move(line));
     }
+    ws::deliver(job->session, std::move(line));
     delete job;
 }
 

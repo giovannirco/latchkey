@@ -9,6 +9,7 @@
 #include <cstring>
 #include <mutex>
 #include <string>
+#include <utility>
 
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
@@ -34,7 +35,7 @@ namespace console {
 
 namespace {
 
-constexpr size_t kMaxRequest = 2048;
+constexpr size_t kMaxRequest = latchkey_util::kMaxRpcText;
 constexpr size_t kReadChunk = 256;
 constexpr size_t kLogLine = 256;
 constexpr uint32_t kRxBuffer = 2048;
@@ -128,15 +129,20 @@ int logToConsole(const char* format, va_list args) {
 void serveRequests(void*) {
     latchkey_util::LineBuffer lines(
         kMaxRequest,
-        [](std::string_view line) {
-            const std::string request(line);
-            writeLine(rpc::dispatch(request.c_str(), rpc::Transport::Serial, {}).json);
+        [](latchkey_util::RpcText line) {
+            auto response = rpc::dispatch(std::move(line), rpc::Transport::Serial, {});
+            writeLine(response.json.empty() ? rpc::kRenderFailure : response.json.view());
         },
-        []() { writeLine(rpc::errorLine("bad_request", "request line too long")); });
+        [](latchkey_util::LineBuffer::Error error) {
+            const auto line = error == latchkey_util::LineBuffer::Error::TooLong
+                                  ? rpc::errorLine("bad_request", "request line too long")
+                                  : rpc::errorLine("internal", "out of memory reading request");
+            writeLine(line.empty() ? rpc::kRenderFailure : line.view());
+        });
     uint8_t chunk[kReadChunk];
     while (true) {
         const size_t count = readSome(chunk, sizeof(chunk));
-        lines.feed(reinterpret_cast<const char*>(chunk), count);
+        lines.consume(reinterpret_cast<char*>(chunk), count);
     }
 }
 
