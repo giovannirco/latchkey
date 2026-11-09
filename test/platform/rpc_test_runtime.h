@@ -27,6 +27,7 @@ std::string_view watchedSecret;
 bool fixtureClockSynced = false;
 int64_t fixtureUtc = 1762524000;
 size_t auditWrites = 0;
+std::string lastAuditResult;
 std::function<void()> beforePress;
 bool openSession = true;
 bool pressAllowed = true;
@@ -128,7 +129,7 @@ std::optional<uint32_t> sessionFor(std::string_view token) {
 bool sessionOpen(uint32_t id) { return openSession && endedSession != id; }
 void onSessionsEnded(void (*)()) {}
 }
-namespace audit { void append(const Entry&) { ++auditWrites; } }
+namespace audit { void append(const Entry& entry) { ++auditWrites; lastAuditResult = entry.result; } }
 namespace wallclock {
 bool synced() { return fixtureClockSynced; }
 int64_t utcSeconds() { return fixtureUtc; }
@@ -168,6 +169,7 @@ void resetRpcFixture() {
     fixtureClockSynced = false;
     fixtureUtc = 1762524000;
     auditWrites = 0;
+    lastAuditResult.clear();
     beforePress = {};
     watchedSecret = {};
     unclearedSecrets = handlerCalls = confirmations = 0;

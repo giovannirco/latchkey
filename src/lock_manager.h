@@ -44,6 +44,9 @@ bool record(const std::string& mac, store::locks::Record& out);
 rpc::Reply featureMask(const std::string& mac, uint64_t& out);
 
 rpc::Reply runOnLock(const std::string& mac, const char* action, LockWork work);
+rpc::Reply runOnLockDirect(const std::string& mac, const char* action, LockWork work);
+rpc::Reply synchronizeHardeningTime(ttlock::Session& session, const std::string& mac);
+esp_err_t beginHardening(const std::string& mac);
 
 rpc::Reply failure(ttlock::Status status, uint8_t lockError);
 

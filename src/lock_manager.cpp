@@ -106,6 +106,7 @@ struct Job {
     std::optional<uint16_t> since;
     const char* action = nullptr;
     LockWork work;
+    bool automaticPreparation = true;
     StorageWork storageWork;
     rpc::Reply reply;
     StaticSemaphore_t doneBuffer{};
@@ -873,18 +874,19 @@ void saveWatch(Lock& lock, const latchkey_util::WatchState& state) {
     lock.live.watch.state() = state;
 }
 
-void noteClockSet(const std::string& mac, int32_t offset, int64_t utc) {
+bool noteClockSet(const std::string& mac, int32_t offset, int64_t utc) {
     std::lock_guard<std::mutex> guard(s_mutex);
     Lock* lock = findLocked(mac);
     if (lock == nullptr || storageBlocked()) {
-        return;
+        return false;
     }
     latchkey_util::WatchState state = lock->live.watch.state();
     latchkey_util::clockSet(state, offset, utc);
     saveWatch(*lock, state);
+    return !lock->live.watchWriteFailed && !lock->live.alertWriteFailed;
 }
 
-Status readBeforeClock(ttlock::Session& session, const std::string& mac);
+Status readBeforeClock(ttlock::Session& session, const std::string& mac, bool persistOnFailure = true);
 
 Status setLockClock(ttlock::Session& session, const std::string& mac) {
     if (!wallclock::synced()) {
@@ -1079,7 +1081,7 @@ Status readNewEntries(ttlock::Session& session, const std::string& mac, WatchVie
     return lock_log::catchUp(session, mac, offset, view.watch, fresh, more, utcNow());
 }
 
-Status readBeforeClock(ttlock::Session& session, const std::string& mac) {
+Status readBeforeClock(ttlock::Session& session, const std::string& mac, bool persistOnFailure) {
     WatchView view;
     if (!watchView(mac, view)) {
         return Status::NotPaired;
@@ -1087,6 +1089,7 @@ Status readBeforeClock(ttlock::Session& session, const std::string& mac) {
     lock_log::Entries fresh;
     bool more = false;
     const Status status = readNewEntries(session, mac, view, fresh, more);
+    if (status != Status::Ok && !persistOnFailure) return status;
     keepWatch(mac, view, status == Status::Ok, more);
     return status == Status::Ok && more ? Status::Busy : status;
 }
@@ -1173,7 +1176,8 @@ void runLockJob(Job& job) {
         return;
     }
     ttlock::Session& session = *s_link.session;
-    catchUp(session, lock);
+    if (job.automaticPreparation) catchUp(session, lock);
+    else session.setEventSink({});
     rpc::Reply reply;
     bool userOperation = false;
     switch (job.kind) {
@@ -1210,6 +1214,9 @@ void runLockJob(Job& job) {
         case Kind::Scan:
         case Kind::Pair:
             break;
+    }
+    if (!job.automaticPreparation && s_link.session) {
+        s_link.session->setEventSink([mac = job.mac](const ttlock::LockEvent& event) { onPush(mac, event); });
     }
     const uint8_t lockError = s_link.session ? s_link.session->lockErrorCode() : 0;
     if (status != Status::Ok) {
@@ -1993,6 +2000,44 @@ rpc::Reply runOnLock(const std::string& mac, const char* action, LockWork work) 
     return submit(job);
 }
 
+rpc::Reply runOnLockDirect(const std::string& mac, const char* action, LockWork work) {
+    if (!exists(mac)) return notPaired();
+    Job job;
+    job.kind = Kind::Access;
+    job.mac = mac;
+    job.action = action;
+    job.work = std::move(work);
+    job.automaticPreparation = false;
+    return submit(job);
+}
+
+rpc::Reply synchronizeHardeningTime(ttlock::Session& session, const std::string& mac) {
+    if (!wallclock::synced()) return failure(Status::TimeUnsynced, 0);
+    const auto read = readBeforeClock(session, mac, false);
+    if (read != Status::Ok) return failure(read, session.lockErrorCode());
+    {
+        std::lock_guard<std::mutex> guard(s_mutex);
+        const Lock* lock = findLocked(mac);
+        if (lock == nullptr || storageBlocked() || lock->live.watchWriteFailed || lock->live.alertWriteFailed) {
+            return rpc::fail("storage_error", "cannot preserve the log position before setting the clock");
+        }
+    }
+    const auto synced = session.syncTime();
+    if (synced != Status::Ok) return failure(synced, session.lockErrorCode());
+    if (!noteClockSet(mac, wallclock::utcOffsetSeconds(), utcNow())) {
+        return rpc::fail("storage_error", "cannot store the clock offset for log records");
+    }
+    if (!updateRecord(mac, [](Record& record) { record.flags |= store::locks::kFlagTimeCalibrated; })) {
+        return rpc::fail("storage_error", "cannot store clock confirmation");
+    }
+    std::lock_guard<std::mutex> guard(s_mutex);
+    const Lock* lock = findLocked(mac);
+    if (lock == nullptr || lock->live.watchWriteFailed || lock->live.alertWriteFailed) {
+        return rpc::fail("storage_error", "cannot store the clock offset for log records");
+    }
+    return rpc::ok();
+}
+
 AdminState::~AdminState() { mbedtls_platform_zeroize(&record, sizeof(record)); }
 
 namespace {
@@ -2038,6 +2083,17 @@ esp_err_t finishAdminStateLocked(const std::string& mac, AdminState& state, std:
 esp_err_t readAdminState(const std::string& mac, AdminState& out) {
     std::lock_guard<std::mutex> guard(s_mutex);
     return loadAdminStateLocked(mac, out);
+}
+
+esp_err_t beginHardening(const std::string& mac) {
+    std::lock_guard<std::mutex> guard(s_mutex);
+    AdminState state;
+    const auto loaded = loadAdminStateLocked(mac, state);
+    if (loaded != ESP_OK) return loaded;
+    if ((state.metadata.lifecycle & latchkey_util::kBackupBackedUp) == 0) return ESP_ERR_INVALID_STATE;
+    if ((state.metadata.lifecycle & latchkey_util::kBackupHardened) == 0) return ESP_OK;
+    state.metadata.lifecycle &= ~latchkey_util::kBackupHardened;
+    return saveAdminMetadataLocked(*findLocked(mac), state.metadata);
 }
 
 esp_err_t stageAdminPasscode(const std::string& mac, std::string_view candidate,

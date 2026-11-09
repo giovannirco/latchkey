@@ -117,7 +117,17 @@ esp_err_t eraseAll() { return eraseFixtureNamespace("locks"); }
 }
 
 namespace store::labels {
-esp_err_t load(const char*, Kind, latchkey_util::LabelTable& out) { out = {}; return ESP_OK; }
+esp_err_t load(const char* mac, Kind kind, latchkey_util::LabelTable& out) {
+    const std::string key = storedKey(mac) + static_cast<char>(kind);
+    size_t length = 0;
+    auto error = key_store::readBlob("labels", key.c_str(), nullptr, length);
+    if (error == ESP_ERR_NVS_NOT_FOUND) { out = {}; return ESP_OK; }
+    if (error != ESP_OK) return error;
+    std::vector<uint8_t> bytes(length);
+    error = key_store::readBlob("labels", key.c_str(), bytes.data(), length);
+    if (error != ESP_OK) return error;
+    return latchkey_util::LabelTable::decode(bytes.data(), length, out) ? ESP_OK : ESP_ERR_INVALID_CRC;
+}
 esp_err_t save(const char*, Kind, const latchkey_util::LabelTable&) { return mutate([] {}); }
 bool fits(const char*, Kind, const latchkey_util::LabelTable&) { return true; }
 esp_err_t erase(const char* mac) {

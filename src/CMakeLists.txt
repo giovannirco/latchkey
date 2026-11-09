@@ -24,6 +24,7 @@ idf_component_register(
         "methods_auth.cpp"
         "methods_backup.cpp"
         "methods_credentials.cpp"
+        "methods_harden.cpp"
         "methods_locks.cpp"
         "methods_log.cpp"
         "methods_logging.cpp"
