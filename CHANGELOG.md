@@ -22,6 +22,11 @@ Notable changes to Latchkey, in the format of [Keep a Changelog](https://keepach
 - HTTPS releases temporary startup credentials and completed-handshake allocations, and sends large responses in smaller TLS records.
 - Passage-window additions wait up to ten seconds for the lock's acknowledgement; authentication and other commands keep their five-second waits. Slow acknowledgements no longer trigger an early timeout, and writes are never resent.
 
+### Known issues
+
+- One classic ESP32 stress run recorded a 27,576-byte minimum heap; later unchanged runs passed the 30 KB check. The earlier low point remains untraced ([#21](https://github.com/giovannirco/latchkey/issues/21)).
+- A passage-window write was acknowledged once and then its readback connection dropped; later hardware checks pass, but that disconnect remains untraced ([#31](https://github.com/giovannirco/latchkey/issues/31)).
+
 ## [0.3.0] - 2026-11-09
 
 ### Added
