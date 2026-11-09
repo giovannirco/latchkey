@@ -1215,9 +1215,6 @@ void runLockJob(Job& job) {
         case Kind::Pair:
             break;
     }
-    if (!job.automaticPreparation && s_link.session) {
-        s_link.session->setEventSink([mac = job.mac](const ttlock::LockEvent& event) { onPush(mac, event); });
-    }
     const uint8_t lockError = s_link.session ? s_link.session->lockErrorCode() : 0;
     if (status != Status::Ok) {
         ESP_LOGW(TAG, "%s failed: %s (lock error 0x%02x)", jobName(job), ttlock::toString(status), lockError);
@@ -1225,7 +1222,7 @@ void runLockJob(Job& job) {
             reply = failure(status, lockError);
         }
     }
-    if (s_link.open && (breaksLink(status) || !ble::connected())) {
+    if (s_link.open && (!job.automaticPreparation || breaksLink(status) || !ble::connected())) {
         closeLink();
     } else if (s_link.open) {
         s_link.keepUntilMs = nowMs() + (userOperation ? kUserKeepAliveMs : kLingerMs);

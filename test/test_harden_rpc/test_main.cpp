@@ -156,6 +156,35 @@ static void test_execution_is_button_gated_ordered_and_partial_with_no_switch_co
     TEST_ASSERT_EQUAL_UINT(0, rig.lock.unexpected());
     for (const auto& wire : rig.lock.requests()) TEST_ASSERT_NOT_EQUAL(cmd::kSwitch, wire.command);
 }
+static void test_preview_releases_new_and_reused_links_before_worker_monitoring() {
+    for (const bool reuse : {false, true}) {
+        resetManagerFixture();
+        Rig rig;
+        auto& held = *lock_manager::findLocked(mac);
+        held.live.schedule.begin(0, 0, 60000, 300000);
+        TEST_ASSERT_FALSE(lock_manager::watchAlone());
+        if (reuse) TEST_ASSERT_EQUAL_INT(ttlock::Status::Ok, lock_manager::openLink(held.record));
+        rig.reads();
+        const auto reply = run(true);
+        TEST_ASSERT_TRUE(reply.error.empty());
+        const size_t requests = rig.lock.requests().size();
+        TEST_ASSERT_FALSE(lock_manager::watchOnLink());
+        TEST_ASSERT_FALSE(lock_manager::watchAlone());
+        TEST_ASSERT_FALSE(lock_manager::s_link.open);
+        TEST_ASSERT_EQUAL_UINT(requests, rig.lock.requests().size());
+        TEST_ASSERT_EQUAL_UINT(0, s_writes);
+        TEST_ASSERT_EQUAL_UINT(0, auditWrites);
+        TEST_ASSERT_FALSE(held.live.schedule.due(0));
+        TEST_ASSERT_EQUAL_INT(-1, held.live.lastAdvertMs);
+        managerTime = 60000000;
+        held.live.lastAdvertMs = 60000;
+        rig.clock();
+        TEST_ASSERT_TRUE(lock_manager::watchAlone());
+        TEST_ASSERT_GREATER_THAN(0, s_writes);
+        TEST_ASSERT_TRUE(rig.lock.scriptDone());
+        TEST_ASSERT_EQUAL_UINT(0, rig.lock.unexpected());
+    }
+}
 static void test_preconditions_fail_before_button_and_are_rechecked_after_it() {
     Rig rig;
     rig.metadata(AdminProvenance::Owner, false);
@@ -344,6 +373,11 @@ static void test_clock_storage_failure_stops_the_next_storage_and_lock_mutation(
     TEST_ASSERT_EQUAL_STRING("storage_error", stringField(step(reply, 0), "error"));
     TEST_ASSERT_EQUAL_UINT(1, s_writes);
     TEST_ASSERT_TRUE(rig.lock.scriptDone());
+    const size_t requests = rig.lock.requests().size();
+    TEST_ASSERT_FALSE(lock_manager::watchOnLink());
+    TEST_ASSERT_FALSE(lock_manager::watchAlone());
+    TEST_ASSERT_EQUAL_UINT(requests, rig.lock.requests().size());
+    TEST_ASSERT_EQUAL_UINT(1, s_writes);
 }
 static void test_unresolved_third_code_and_confirmation_timeout_have_no_mutations() {
     Rig rig;
@@ -437,6 +471,7 @@ int main() {
     UNITY_BEGIN();
     RUN_TEST(test_preview_has_zero_storage_audit_clock_or_switch_writes_even_without_cached_features);
     RUN_TEST(test_execution_is_button_gated_ordered_and_partial_with_no_switch_command);
+    RUN_TEST(test_preview_releases_new_and_reused_links_before_worker_monitoring);
     RUN_TEST(test_preconditions_fail_before_button_and_are_rechecked_after_it);
     RUN_TEST(test_authentication_validation_expiry_and_session_end_precede_lock_io);
     RUN_TEST(test_usb_runs_inline_without_button_or_job);
