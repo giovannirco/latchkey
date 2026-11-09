@@ -15,6 +15,7 @@ constexpr uint8_t kMinVolume = 1;
 constexpr uint8_t kMaxVolume = 5;
 constexpr uint8_t kLastWeekday = 7;
 constexpr uint8_t kLastMonthDay = 31;
+constexpr uint32_t kPassageAddTimeoutMs = 10000;
 
 bool isValidPassage(const PassageMode& mode) {
     const bool weekly = mode.type == PassageType::Weekly && mode.weekOrDay <= kLastWeekday;
@@ -81,8 +82,12 @@ Status Session::passageAdd(const PassageMode& mode) {
     if (!isValidPassage(mode)) {
         return Status::InvalidArgument;
     }
+    const Status authenticated = beginAdmin(Feature::PassageMode);
+    if (authenticated != Status::Ok) {
+        return authenticated;
+    }
     Bytes data;
-    return adminRequest(Feature::PassageMode, command::kConfigurePassageMode, buildPassageAdd(mode), data);
+    return request(command::kConfigurePassageMode, buildPassageAdd(mode), data, kPassageAddTimeoutMs);
 }
 
 Status Session::passageDelete(const PassageMode& mode) {

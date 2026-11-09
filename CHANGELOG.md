@@ -5,6 +5,10 @@ Notable changes to Latchkey, in the format of [Keep a Changelog](https://keepach
 
 ## [Unreleased]
 
+### Fixed
+
+- Passage-window additions wait up to ten seconds for the lock's acknowledgement; authentication and other commands keep their five-second waits. Slow acknowledgements no longer trigger an early timeout, and writes are never resent.
+
 ## [0.3.0] - 2026-11-09
 
 ### Added
