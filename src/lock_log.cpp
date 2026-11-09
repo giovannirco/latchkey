@@ -171,6 +171,7 @@ Status readSlots(ttlock::Session& session, uint16_t from, uint16_t to, Entries& 
 bool report(const std::string& mac, const LogPage& page, const latchkey_util::PageJudgement& judged,
             const latchkey_util::WatchState& state, int32_t offset, int64_t nowUtc) {
     const std::vector<UnlockFinding>& findings = judged.findings;
+    bool saved = true;
     for (size_t i = 0; i < findings.size(); ++i) {
         const LogEntry& entry = page.entries[judged.fresh[i]];
         ESP_LOGD(TAG, "log record %u type %u uid %u record id %u", entry.recordNumber, entry.type,
@@ -179,7 +180,7 @@ bool report(const std::string& mac, const LogPage& page, const latchkey_util::Pa
             case UnlockVerdict::Alert:
                 if (!raise(mac, entry, findings[i].method,
                            latchkey_util::recordOffset(state, entry.recordNumber, offset), nowUtc)) {
-                    return false;
+                    saved = false;
                 }
                 break;
             case UnlockVerdict::Latchkey:
@@ -193,7 +194,7 @@ bool report(const std::string& mac, const LogPage& page, const latchkey_util::Pa
                 break;
         }
     }
-    return true;
+    return saved;
 }
 
 cJSON* fetchResult(const Entries& entries, std::optional<uint16_t> since, uint32_t until, bool more,
