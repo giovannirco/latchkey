@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-const { test, expect, mock, login, lockCard, openLock, toast, FRONT_DOOR } = require('./support.cjs');
+const { test, expect, mock, login, settled, lockCard, openLock, toast, FRONT_DOOR } = require('./support.cjs');
 
 const NO_REPLY = 'The board did not answer in time';
 const PASSPHRASE = 'correct horse battery staple';
@@ -11,6 +11,7 @@ async function startUnlock(page) {
 async function startReboot(page) {
   await page.getByRole('link', { name: 'System', exact: true }).click();
   await page.getByRole('button', { name: 'Restart the board' }).click();
+  await settled(page);
   await page.getByRole('dialog', { name: 'Restart the board?' }).getByRole('button', { name: 'Restart' }).click();
 }
 
@@ -18,6 +19,7 @@ async function startExport(page) {
   await page.getByRole('link', { name: 'Security', exact: true }).click();
   await page.getByRole('button', { name: 'Export keys' }).click();
   const dialog = page.getByRole('dialog', { name: 'Export keys' });
+  await settled(page);
   await dialog.getByLabel('Passphrase', { exact: true }).fill(PASSPHRASE);
   await dialog.getByLabel('Repeat passphrase').fill(PASSPHRASE);
   await dialog.getByRole('button', { name: 'Export' }).click();
