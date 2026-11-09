@@ -353,6 +353,7 @@ function timeoutFor(method) {
 }
 
 async function call(method, params = {}) {
+  const id = ++rpcSeq;
   const budget = timeoutFor(method);
   const started = Date.now();
   const sentEpoch = jobs.epoch();
@@ -366,7 +367,7 @@ async function call(method, params = {}) {
       headers: { 'Content-Type': 'application/json' },
       credentials: 'same-origin',
       cache: 'no-store',
-      body: JSON.stringify({ id: ++rpcSeq, method, params }),
+      body: JSON.stringify({ id, method, params }),
       signal: controller.signal,
     });
     try {
@@ -383,7 +384,10 @@ async function call(method, params = {}) {
   }
   if (body && body.error) throw apiError(body.error);
   if (!response.ok) throw new ApiError('http', `HTTP ${response.status}`);
-  const result = (body && body.result) || {};
+  if (!body || body.id !== id || !body.result || typeof body.result !== 'object' || Array.isArray(body.result)) {
+    throw new ApiError('http', 'The board sent an invalid response. Check the result before retrying.');
+  }
+  const result = body.result;
   if (typeof result.job === 'string') {
     return jobs.wait(result.job, Math.max(1000, budget - (Date.now() - started)), sentEpoch);
   }
@@ -528,8 +532,12 @@ const jobs = (() => {
     for (const [id, entry] of early) if (entry.at < cutoff) early.delete(id);
   }
 
-  function outcome(data) {
-    return data.error ? Promise.reject(apiError(data.error)) : Promise.resolve(data.result || {});
+  async function outcome(data) {
+    if (data.error) throw apiError(data.error);
+    if (!data.result || typeof data.result !== 'object' || Array.isArray(data.result)) {
+      throw new ApiError('http', 'The board sent an invalid job result. Check the result before retrying.');
+    }
+    return data.result;
   }
 
   events.on('job.done', (data) => {

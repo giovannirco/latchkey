@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-const { test, expect, login, lockCard, toast } = require('./support.cjs');
+const { test, expect, mock, login, lockCard, toast } = require('./support.cjs');
 
-async function streamUnlockReply(page, delayMs, body = '{"result":{"state":"unlocked"}}') {
+async function streamUnlockReply(page, delayMs, body = null) {
   await page.evaluate(({ delayMs, body }) => {
     const fetch = window.fetch;
     window.fetch = async (input, options) => {
@@ -12,7 +12,8 @@ async function streamUnlockReply(page, delayMs, body = '{"result":{"state":"unlo
         start(controller) {
           const timer = setTimeout(() => {
             options.signal.removeEventListener('abort', abort);
-            controller.enqueue(new TextEncoder().encode(body));
+            const reply = body ?? JSON.stringify({ id: JSON.parse(options.body).id, result: { state: 'unlocked' } });
+            controller.enqueue(new TextEncoder().encode(reply));
             controller.close();
           }, delayMs);
           function abort() {
@@ -61,3 +62,45 @@ test('an unreadable RPC response body reports an error without claiming success'
   await expect(toast(page, 'The board answered with an error.')).toBeVisible();
   await expect(toast(page, 'Front door unlocked')).toHaveCount(0);
 });
+
+for (const [name, reply] of [
+  ['missing result', {}],
+  ['null result', { result: null }],
+  ['array result', { result: [] }],
+  ['mismatched request id', { id: -1, result: { state: 'unlocked' } }],
+]) {
+  test(`an RPC reply with ${name} cannot report an unlock`, async ({ page }) => {
+    await login(page);
+    await page.route('**/api/rpc', (route) => {
+      const request = route.request().postDataJSON();
+      if (request.method !== 'lock.unlock') return route.continue();
+      return route.fulfill({ json: { id: request.id, ...reply } });
+    });
+    const front = lockCard(page, 'Front door');
+    await front.getByRole('button', { name: 'Unlock' }).click();
+    await expect(toast(page, 'The board answered with an error.')).toBeVisible();
+    await expect(toast(page, 'Front door unlocked')).toHaveCount(0);
+    await expect(front.getByText('Locked', { exact: true })).toBeVisible();
+  });
+}
+
+for (const [name, reply] of [
+  ['missing result', {}],
+  ['null result', { result: null }],
+  ['array result', { result: [] }],
+]) {
+  test(`a completed job with ${name} cannot report an unlock`, async ({ page, request }) => {
+    await login(page);
+    await page.route('**/api/rpc', (route) => {
+      const request = route.request().postDataJSON();
+      if (request.method !== 'lock.unlock') return route.continue();
+      return route.fulfill({ json: { id: request.id, result: { job: 'invalid-unlock' } } });
+    });
+    const front = lockCard(page, 'Front door');
+    await front.getByRole('button', { name: 'Unlock' }).click();
+    await mock(request, { emit: [{ event: 'job.done', data: { job: 'invalid-unlock', ...reply } }] });
+    await expect(toast(page, 'The board answered with an error.')).toBeVisible();
+    await expect(toast(page, 'Front door unlocked')).toHaveCount(0);
+    await expect(front.getByText('Locked', { exact: true })).toBeVisible();
+  });
+}
