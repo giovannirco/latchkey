@@ -4,6 +4,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <functional>
+#include <optional>
 #include <string>
 
 #include "esp_err.h"
@@ -64,6 +65,16 @@ rpc::Reply info(const std::string& mac);
 rpc::Reply features(const std::string& mac);
 
 rpc::Reply unlock(const std::string& mac);
+
+rpc::Reply readLog(const std::string& mac, std::optional<uint16_t> since);
+
+esp_err_t rememberAlert(const std::string& mac, const latchkey_util::LockAlert& alert, bool& added);
+
+rpc::Reply alerts(const std::string& mac);
+
+rpc::Reply acknowledgeAlerts(const std::string& mac, uint32_t through);
+
+cJSON* warnings();
 
 rpc::Reply lock(const std::string& mac);
 

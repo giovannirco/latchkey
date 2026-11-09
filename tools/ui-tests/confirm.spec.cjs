@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-const { test, expect, mock, login, boardButton, openLock } = require('./support.cjs');
+const { test, expect, mock, login, boardButton, openLock, FRONT_DOOR } = require('./support.cjs');
 
 async function rotateTotp(page) {
   await page.getByRole('link', { name: 'Security', exact: true }).click();
@@ -64,19 +64,47 @@ test('a confirmed press shows the confirmation then the result', async ({ page }
   await expect(secret).toBeHidden();
 });
 
-test('enabling the reset button needs the board button, disabling does not', async ({ page }) => {
+test('unverified switch writes refuse before a button prompt even with a backup', async ({ page }) => {
   await login(page);
   await openLock(page, 'Front door', 'Settings');
   const reset = page.getByRole('switch', { name: 'Physical reset button' });
   await expect(reset).not.toBeChecked();
-  await reset.check();
-  await expect(boardButton(page)).toBeVisible();
-  await expect(boardButton(page)).toContainText('Enable the reset button');
+  await page.evaluate(() => {
+    window.__switchEvents = [];
+    const socket = new WebSocket(`ws://${location.host}/api/events`);
+    window.__switchSocket = socket;
+    return new Promise((resolve) => {
+      socket.addEventListener('message', (event) => window.__switchEvents.push(JSON.parse(event.data)));
+      socket.addEventListener('open', resolve);
+    });
+  });
+  for (const method of ['lock.resetButton.set', 'lock.privacyLock.set', 'lock.tamperAlert.set']) {
+    for (const enabled of [true, false]) {
+      const result = await page.evaluate(
+        async ({ method, enabled, lock }) => {
+          const response = await fetch('/api/rpc', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ id: 1, method, params: { lock, enabled } }),
+          });
+          return response.json();
+        },
+        { method, enabled, lock: FRONT_DOOR },
+      );
+      await expect
+        .poll(async () =>
+          page.evaluate((reply) => {
+            if (reply.error) return reply.error.code;
+            return window.__switchEvents.find(
+              (event) => event.event === 'job.done' && event.data.job === reply.result.job,
+            )?.data.error?.code;
+          }, result),
+        )
+        .toBe('unverified');
+    }
+  }
+  expect(
+    await page.evaluate(() => window.__switchEvents.filter((event) => event.event === 'confirm.required')),
+  ).toEqual([]);
   await expect(boardButton(page)).toBeHidden();
-  await expect(reset).toBeChecked();
-
-  await reset.uncheck();
-  await expect(page.locator('#toasts')).toContainText('Reset button turned off');
-  await expect(boardButton(page)).toBeHidden();
-  await expect(reset).not.toBeChecked();
 });

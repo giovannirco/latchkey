@@ -62,7 +62,7 @@ public:
             if (byRecord && *unlock.recordId != entry.recordId) {
                 continue;
             }
-            if (utc < unlock.fromUtc - tolerance_ || utc > unlock.toUtc + tolerance_) {
+            if (!byRecord && (utc < unlock.fromUtc - tolerance_ || utc > unlock.toUtc + tolerance_)) {
                 continue;
             }
             used_[i] = true;
@@ -70,6 +70,8 @@ public:
         }
         return false;
     }
+
+    const std::vector<bool>& used() const { return used_; }
 
 private:
     const std::vector<LatchkeyUnlock>& performed_;
@@ -117,6 +119,13 @@ const char* toString(UnlockMethod method) {
 std::vector<UnlockFinding> classifyUnlocks(const std::vector<ttlock::LogEntry>& entries,
                                            const std::vector<LatchkeyUnlock>& performed, int32_t lockUtcOffsetSeconds,
                                            uint32_t toleranceSeconds) {
+    std::vector<bool> used;
+    return classifyUnlocks(entries, performed, lockUtcOffsetSeconds, toleranceSeconds, used);
+}
+
+std::vector<UnlockFinding> classifyUnlocks(const std::vector<ttlock::LogEntry>& entries,
+                                           const std::vector<LatchkeyUnlock>& performed, int32_t lockUtcOffsetSeconds,
+                                           uint32_t toleranceSeconds, std::vector<bool>& used) {
     std::vector<UnlockFinding> findings(entries.size());
     std::vector<int64_t> utc(entries.size(), 0);
     std::vector<bool> datable(entries.size(), false);
@@ -142,12 +151,13 @@ std::vector<UnlockFinding> classifyUnlocks(const std::vector<ttlock::LogEntry>& 
     Matcher matcher(performed, toleranceSeconds);
     for (const bool byRecord : {true, false}) {
         for (size_t i = 0; i < entries.size(); ++i) {
-            if (findings[i].verdict == UnlockVerdict::Alert && datable[i] &&
+            if (findings[i].verdict == UnlockVerdict::Alert && (byRecord || datable[i]) &&
                 matcher.claim(entries[i], findings[i].method, utc[i], byRecord)) {
                 findings[i].verdict = UnlockVerdict::Latchkey;
             }
         }
     }
+    used = matcher.used();
     return findings;
 }
 

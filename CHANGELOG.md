@@ -7,13 +7,30 @@ Notable changes to Latchkey, in the format of [Keep a Changelog](https://keepach
 
 ### Added
 
+- Lock settings from the board, each checked against the lock's feature bits before any Bluetooth: `lock.autolock.get`/`set`, `lock.passage.list`/`add`/`delete`/`clear` (weekly windows in the lock's local time), `lock.sound.get`/`set`, `lock.resetButton.get`, `lock.privacyLock.get` and `lock.tamperAlert.get`. All three switches are read-only until their write layout is verified on hardware; writes refuse with `unverified` before any Bluetooth frame or button prompt. Turning the reset button off without a key backup refuses first with `backup_required`.
+- The lock's operation log: `lock.log.fetch` reads new records from a cursor the board keeps per lock in NVS (found by bisection the first time) and answers the newest entries, or those after `since`, as `{entries, last, more}`; passcodes the lock records in its log never leave the board.
+- Unlock alerts: the board reads each lock's log after the connections it makes anyway, and about every six hours otherwise, and raises `lock.alert {lock, method, time, seq, type}` with an audit entry (source `board`) for every unlock from an app it did not make and every forced opening. The newest eight unacknowledged alerts per lock survive a restart in NVS and appear in the dashboard badge and lock page; `lock.alerts.list` and `lock.alerts.ack {through}` leave later arrivals unread. Live notices stay until dismissed.
+- The lock's clock follows the board's time zone: the board sets it again after a time-zone change or a daylight-saving change, and once a day against drift.
+- Web UI: reset button, privacy lock and tamper alert shown read-only, features the board does not use listed apart, and the log reads on until it has every new entry.
+- `tools/hil/test_lock_settings.py` and `tools/hil/test_lock_log.py`, run on the owner's lock.
+
 - Recent log lines on the board: every line the USB console prints with `#` (ESP-IDF's and Latchkey's, with lines the Wi-Fi driver writes in pieces joined) goes into a RAM ring with its level, tag and boot time, 6 KiB on the classic ESP32 (in RTC memory, so it costs no heap) and 16 KiB on the ESP32-S3. `system.logs {since?, level?, limit?}` pages through it; a line shaped like a secret is kept only as a notice and counted in `system.info.logs.withheld`.
 - Remote logging over syslog, off until configured: `system.syslog.set {enabled, host, port?, transport?, appName?, level?}` ships the lines as RFC 5424 over UDP, or over TCP with octet counting, to a collector such as rsyslog, Grafana Alloy or a NAS log centre; `system.syslog.get` and `system.info.syslog` report what was sent, dropped and refused. Each change is audited.
 - Web UI: a Logs view on the System page (level filter, refresh every few seconds, copy as text), the remote logging settings, and the Wi-Fi form's IP address, gateway, netmask and DNS server, prefilled from `system.info.wifi`, which now reports `gateway`, `netmask` and `dns`.
 
+### Changed
+
+- The remote unlock control is gone from the web UI and the mock: the board does not implement it, and the lock's `config_gateway_unlock` bit is listed as reported but not used.
+
 ### Fixed
 
 - `system.wifi.set` from the web now gets its reply: the board answers first and switches networks a second later, where it used to stop Wi-Fi before the reply left.
+
+- A corrupt operation-log cursor raises a persistent monitoring warning, also in `system.info.warnings`; dedicated log connections skip locks without a recent advertisement.
+- Reloading a lock-detail page waits for its event socket before issuing job-based requests, so fast results are received.
+
+- Unlock alerts match the lock's returned record id before using a time window, and each log page advances its cursor and consumes matching unlocks together.
+- Clock changes wait until the log backlog is read. Routine clock corrections preserve the preceding UTC offset, and old records across the most recent offset change keep their original times without raising duplicate alerts.
 
 ## [0.2.0] - 2026-11-08
 

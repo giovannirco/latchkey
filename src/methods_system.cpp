@@ -210,6 +210,7 @@ rpc::Reply info(const cJSON*, const rpc::Context&) {
     cJSON_AddNumberToObject(stacks, "mqtt", mqtt::stackFree());
     cJSON_AddNumberToObject(stacks, "mqttClient", mqtt::clientStackFree());
     cJSON_AddItemToObject(result, "ble", bleJson());
+    cJSON_AddItemToObject(result, "warnings", lock_manager::warnings());
     store::Usage usage;
     if (store::usage(usage) != ESP_OK) {
         cJSON_Delete(result);

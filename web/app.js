@@ -5,6 +5,7 @@ const BUTTON_TIMEOUT_MS = 45000;
 const SHORT_TIMEOUT_MS = 15000;
 const OTA_TIMEOUT_MS = 300000;
 const JOB_MEMORY_MS = 300000;
+const LOG_ROUNDS = 5;
 const TOAST_MS = 6000;
 const ERROR_TOAST_MS = 12000;
 const SVG_NS = 'http://www.w3.org/2000/svg';
@@ -41,7 +42,7 @@ const ERROR_TEXT = {
   too_large: 'The board does not have enough free memory to show this list.',
   already_claimed: 'This board already has an owner.',
   backup_required:
-    "Back up this lock's keys before hardening it. Hardening turns off the reset button, so the backup is the only way back if the board is lost.",
+    "Back up this lock's keys before hardening it or turning its reset button off: with the button off, the backup is the only way back if the board is lost.",
   network: 'Cannot reach the board. Check that this device is on the same network.',
   job_lost:
     'The connection to the board dropped before it reported the result. Check the lock, then try again if needed.',
@@ -56,7 +57,7 @@ const ACTION_TEXT = {
   'lock.factoryReset': 'Factory-reset the lock',
   'lock.adminPasscode.set': 'Change the super admin passcode',
   'lock.adminPasscode.get': 'Show the super admin passcode',
-  'lock.resetButton.set': 'Enable the reset button',
+  'lock.resetButton.set': 'Turn the reset button on or off',
   'keys.export': 'Export the key backup',
   'keys.import': 'Import a key backup',
   'auth.rotateTotp': 'Replace the authenticator secret',
@@ -100,6 +101,22 @@ const FEATURE_TEXT = {
   wireless_key_fob: 'Wireless key fob',
   accessory_battery: 'Accessory battery',
 };
+
+const FEATURES_USED = new Set([
+  'passcode',
+  'ic',
+  'finger_print',
+  'auto_lock',
+  'modify_passcode_function',
+  'manual_lock',
+  'audio_management',
+  'get_admin_code',
+  'passage_mode',
+  'tamper_alert',
+  'reset_button',
+  'privacy_lock',
+  'cyclic_ic_or_finger_print',
+]);
 
 const MQTT_STATUS_DELAY_MS = 5000;
 
@@ -454,10 +471,29 @@ const events = (() => {
   }
 
   return {
-    start() {
+    async start() {
       wanted = true;
       opened = false;
       connect();
+      const current = socket;
+      if (current.readyState === WebSocket.OPEN) return;
+      return new Promise((resolve, reject) => {
+        const onOpen = () => finish();
+        const onClose = () => finish(new ApiError('network', 'the events connection closed before it was ready'));
+        const timer = setTimeout(
+          () => finish(new ApiError('no_reply', 'the events connection did not open')),
+          SHORT_TIMEOUT_MS,
+        );
+        function finish(failure) {
+          clearTimeout(timer);
+          current.removeEventListener('open', onOpen);
+          current.removeEventListener('close', onClose);
+          if (failure) reject(failure);
+          else resolve();
+        }
+        current.addEventListener('open', onOpen);
+        current.addEventListener('close', onClose);
+      });
     },
     stop() {
       wanted = false;
@@ -540,12 +576,13 @@ function listen(name, handler) {
   cleanups.push(events.on(name, handler));
 }
 
-function toast(message, { error = false, warning = false, detail = null } = {}) {
-  const kind = error ? ' toast-error' : warning ? ' toast-warning' : '';
+function toast(message, { error = false, warning = false, alarm = false, detail = null } = {}) {
+  const kind = alarm ? ' toast-alarm' : error ? ' toast-error' : warning ? ' toast-warning' : '';
+  const loud = error || warning || alarm;
   const item = h(
     'div',
-    { class: `toast${kind}`, role: error || warning ? 'alert' : null },
-    icon(error || warning ? 'alert' : 'check'),
+    { class: `toast${kind}`, role: loud ? 'alert' : null },
+    icon(loud ? 'alert' : 'check'),
     h('div', { class: 'toast-body' }, h('strong', null, message), detail ? h('span', null, detail) : null),
     h(
       'button',
@@ -554,8 +591,24 @@ function toast(message, { error = false, warning = false, detail = null } = {}) 
     ),
   );
   toasts.append(item);
-  if (!warning) setTimeout(() => item.remove(), error ? ERROR_TOAST_MS : TOAST_MS);
+  if (!warning && !alarm) setTimeout(() => item.remove(), error ? ERROR_TOAST_MS : TOAST_MS);
 }
+
+function alertText(data) {
+  const lock = state.locks.find((item) => item.id === data.lock);
+  const name = lock ? lock.name : data.lock;
+  if (data.method === 'forced') return `${name} was forced open`;
+  const how = METHOD_TEXT[data.method];
+  return how ? `${name} was unlocked ${how}, and not by Latchkey` : `${name} was unlocked, and not by Latchkey`;
+}
+
+events.on('lock.alert', (data) => {
+  if (!data || typeof data.lock !== 'string') return;
+  toast(alertText(data), {
+    alarm: true,
+    detail: `${formatTime(data.time)}, read from the lock's log. Check who can open it.`,
+  });
+});
 
 function showWarning(result) {
   if (result && typeof result.warning === 'string' && result.warning) {
@@ -728,7 +781,8 @@ function checkField(label, control) {
 
 function switchControl(label, checked, onChange) {
   const input = h('input', { type: 'checkbox', role: 'switch', checked });
-  input.addEventListener('change', () => onChange(input.checked, input));
+  input.disabled = !onChange;
+  if (onChange) input.addEventListener('change', () => onChange(input.checked, input));
   return h('label', { class: 'switch' }, input, h('span', null, label));
 }
 
@@ -1092,7 +1146,7 @@ async function startApp() {
   state.info = await call('system.info');
   state.authed = true;
   renderShell();
-  events.start();
+  await events.start();
   await route();
 }
 
@@ -1238,6 +1292,31 @@ function lockCard(lock) {
   const warnings = h('p', { class: 'warnings' });
   if (!lock.hardened) warnings.append(h('span', { class: 'badge warn' }, icon('alert'), 'Not hardened'));
   if (!lock.backedUp) warnings.append(h('span', { class: 'badge warn' }, icon('download'), 'No key backup'));
+  if (lock.warnings.length) {
+    warnings.append(
+      h('span', { class: 'badge warn', title: lock.warnings.join(' ') }, icon('alert'), 'Monitoring warning'),
+    );
+  }
+  const alerts = h('span', { class: 'badge warn' });
+  warnings.append(alerts);
+  function showAlertCount(count) {
+    lock.alertCount = count;
+    alerts.textContent = `${count} ${count === 1 ? 'alert' : 'alerts'}`;
+    alerts.hidden = count === 0;
+    warnings.hidden = lock.hardened && lock.backedUp && count === 0 && !lock.warnings.length;
+  }
+  showAlertCount(lock.alertCount);
+  let alertGeneration = 0;
+  async function reloadAlertCount() {
+    const requested = ++alertGeneration;
+    const result = await rpc('lock.alerts.list', { lock: lock.id });
+    if (requested === alertGeneration) showAlertCount(result.alerts.length);
+  }
+  for (const name of ['lock.alert', 'lock.alerts.changed']) {
+    listen(name, (data) => {
+      if (data.lock === lock.id) reloadAlertCount().catch(toastError);
+    });
+  }
   return h(
     'article',
     { class: 'card lock-card', 'aria-labelledby': nameId },
@@ -1596,6 +1675,7 @@ async function viewLock(view, lockId, tab = 'access') {
     ),
     controls.actions,
   );
+  await renderAlerts(view, lock);
   const base = `#/lock/${encodeURIComponent(lock.id)}`;
   const tabs = [
     ['access', 'Access'],
@@ -1619,6 +1699,62 @@ async function viewLock(view, lockId, tab = 'access') {
   else if (tab === 'settings') await renderSettings(panel, lock, has);
   else if (tab === 'log') await renderLog(panel, lock);
   else await renderDevice(panel, lock, features);
+}
+
+async function renderAlerts(view, lock) {
+  const acknowledge = h('button', { class: 'button small', type: 'button', disabled: true }, 'Acknowledge alerts');
+  const part = section('Alerts', 'alert', [acknowledge]);
+  part.el.setAttribute('aria-busy', 'true');
+  view.append(part.el);
+  let through = 0;
+  let generation = 0;
+  async function load() {
+    const requested = ++generation;
+    const result = await rpc('lock.alerts.list', { lock: lock.id });
+    if (requested !== generation || !part.el.isConnected) return;
+    through = Math.max(0, ...result.alerts.map((alert) => alert.id));
+    acknowledge.disabled = through === 0;
+    part.body.replaceChildren(
+      ...result.warnings.map((warning) => h('p', { class: 'notice', role: 'status' }, warning)),
+      result.alerts.length
+        ? h(
+            'ul',
+            null,
+            result.alerts.map((alert) =>
+              h(
+                'li',
+                null,
+                alert.kind === 'watch_state_unreadable'
+                  ? 'The saved operation-log cursor could not be read. Some events may have been missed.'
+                  : `${alertText({ ...alert, lock: lock.id })} - ${formatTime(alert.time)}`,
+              ),
+            ),
+          )
+        : h('p', { class: 'muted' }, 'No unacknowledged alerts.'),
+    );
+  }
+  acknowledge.addEventListener('click', async () => {
+    acknowledge.disabled = true;
+    try {
+      await rpc('lock.alerts.ack', { lock: lock.id, through });
+      await load();
+    } catch (failure) {
+      toastError(failure);
+      acknowledge.disabled = through === 0;
+    }
+  });
+  for (const event of ['lock.alert', 'lock.alerts.changed']) {
+    listen(event, (data) => {
+      if (data.lock === lock.id) load().catch(toastError);
+    });
+  }
+  try {
+    await load();
+  } catch (failure) {
+    part.body.replaceChildren(errorBlock(failure));
+  } finally {
+    part.el.removeAttribute('aria-busy');
+  }
 }
 
 function validityText(validity) {
@@ -2121,12 +2257,14 @@ async function renderSettings(panel, lock, has) {
     const part = section('Auto-lock', 'clock');
     part.load = async () => {
       const setting = await rpc('lock.autolock.get', target);
+      const lowest = setting.min || 1;
+      const highest = setting.max || 65535;
       const enabled = h('input', { type: 'checkbox', checked: setting.seconds > 0 });
       const delay = h('input', {
         type: 'number',
-        min: String(setting.min || 1),
-        max: String(setting.max || 900),
-        value: String(setting.seconds || Math.max(setting.min || 1, 5)),
+        min: String(lowest),
+        max: String(highest),
+        value: String(setting.seconds || Math.max(lowest, 5)),
         required: true,
       });
       const save = h('button', { class: 'button small primary', type: 'submit' }, 'Save');
@@ -2134,7 +2272,7 @@ async function renderSettings(panel, lock, has) {
         'form',
         { class: 'stack' },
         checkField('Lock automatically', enabled),
-        field('Delay in seconds', delay, `From ${setting.min} to ${setting.max} s after unlocking.`),
+        field('Delay in seconds', delay, `From ${lowest} to ${highest} s after unlocking.`),
         h('div', { class: 'row' }, save),
       );
       form.addEventListener('submit', async (event) => {
@@ -2160,6 +2298,7 @@ async function renderSettings(panel, lock, has) {
     part.load = async () => {
       const sound = await rpc('lock.sound.get', target);
       const levels = sound.levels || 5;
+      const hasVolume = typeof sound.volume === 'number';
       const volume = h(
         'select',
         null,
@@ -2167,7 +2306,11 @@ async function renderSettings(panel, lock, has) {
           h('option', { value: String(index + 1), selected: sound.volume === index + 1 }, String(index + 1)),
         ),
       );
-      const apply = (enabled) => rpc('lock.sound.set', { ...target, enabled, volume: Number(volume.value) });
+      const apply = (enabled) =>
+        rpc(
+          'lock.sound.set',
+          hasVolume ? { ...target, enabled, volume: Number(volume.value) } : { ...target, enabled },
+        );
       const toggle = settingSwitch('Keypad sounds', sound.enabled, apply);
       volume.addEventListener('change', async () => {
         try {
@@ -2177,7 +2320,7 @@ async function renderSettings(panel, lock, has) {
           toastError(failure);
         }
       });
-      part.body.replaceChildren(toggle, field('Volume', volume));
+      part.body.replaceChildren(toggle, hasVolume ? field('Volume', volume) : null);
     };
     parts.push(part);
   }
@@ -2187,35 +2330,42 @@ async function renderSettings(panel, lock, has) {
     part.load = async () => {
       const { enabled } = await rpc('lock.resetButton.get', target);
       part.body.replaceChildren(
-        settingSwitch('Physical reset button', enabled, async (on) => {
-          const result = await rpc('lock.resetButton.set', { ...target, enabled: on });
-          toast(on ? 'Reset button turned on' : 'Reset button turned off');
-          return result;
-        }),
+        switchControl('Physical reset button', enabled),
         h(
           'p',
           { class: 'hint' },
-          'When on, anyone holding the reset button inside the lock can wipe it and pair it to their own app. Turning it on needs the button on the board.',
+          'When on, anyone holding the reset button inside the lock can wipe it and pair it to their own app. This switch is read-only until its write command is verified on a real lock.',
         ),
       );
     };
     parts.push(part);
   }
 
-  if (has('config_gateway_unlock')) {
-    const part = section('Remote unlock', 'wifi');
+  const switches = [
+    [
+      'privacy_lock',
+      'Privacy lock',
+      'lock.privacyLock',
+      'When on, a lock closed from inside ignores passcodes, cards and fingerprints until it is opened from inside.',
+    ],
+    [
+      'tamper_alert',
+      'Tamper alert',
+      'lock.tamperAlert',
+      'When on, the lock sounds an alarm when someone tries to force it.',
+    ],
+  ];
+  for (const [feature, title, method, hint] of switches) {
+    if (!has(feature)) continue;
+    const part = section(title, 'shield', [h('span', { class: 'badge' }, 'Read-only')]);
     part.load = async () => {
-      const { enabled } = await rpc('lock.remoteUnlock.get', target);
+      const { enabled } = await rpc(`${method}.get`, target);
       part.body.replaceChildren(
-        settingSwitch('Remote unlock', enabled, async (on) => {
-          const result = await rpc('lock.remoteUnlock.set', { ...target, enabled: on });
-          toast(on ? 'Remote unlock turned on' : 'Remote unlock turned off');
-          return result;
-        }),
+        switchControl(title, enabled),
         h(
           'p',
           { class: 'hint' },
-          'Lets the lock accept unlock commands relayed by a gateway. Latchkey itself does not need it.',
+          `${hint} This switch is read-only until its write command is verified on a real lock.`,
         ),
       );
     };
@@ -2457,22 +2607,33 @@ async function renderLog(panel, lock) {
     ),
   );
   const show = (entries) => {
-    rows.prepend(...[...entries].sort((a, b) => b.seq - a.seq).map(row));
-    for (const entry of entries) last = Math.max(last, entry.seq);
+    const fresh = entries.filter((entry) => entry.seq > last || !rows.childNodes.length);
+    rows.prepend(...[...fresh].sort((a, b) => b.seq - a.seq).map(row));
+    for (const entry of fresh) last = Math.max(last, entry.seq);
+    return fresh.length;
+  };
+  const readOn = async (first) => {
+    let result = first;
+    let added = show(result.entries || []);
+    for (let round = 0; result.more && round < LOG_ROUNDS; round += 1) {
+      result = await rpc('lock.log.fetch', { lock: lock.id, since: last });
+      added += show(result.entries || []);
+    }
+    return added;
   };
   fetchNew.addEventListener('click', async () => {
     try {
-      const result = await pending(fetchNew, () => rpc('lock.log.fetch', { lock: lock.id, since: last }));
-      show(result.entries || []);
-      toast(result.entries && result.entries.length ? `${result.entries.length} new entries` : 'No new entries');
+      const added = await pending(fetchNew, async () =>
+        readOn(await rpc('lock.log.fetch', { lock: lock.id, since: last })),
+      );
+      toast(added ? `${added} new entries` : 'No new entries');
     } catch (failure) {
       toastError(failure);
     }
   });
   panel.append(item.el);
   await load(item.body, async () => {
-    const result = await rpc('lock.log.fetch', { lock: lock.id });
-    show(result.entries || []);
+    await readOn(await rpc('lock.log.fetch', { lock: lock.id }));
     item.body.replaceChildren(
       rows.childNodes.length ? table : h('p', { class: 'empty' }, 'The lock has no log entries.'),
       h('p', { class: 'hint' }, 'Entries come from the lock itself, with the time on its own clock.'),
@@ -2483,14 +2644,24 @@ async function renderLog(panel, lock) {
 async function renderDevice(panel, lock, features) {
   const device = section('Device', 'info');
   const reported = section('Features', 'list');
+  const used = [...features].filter((name) => FEATURES_USED.has(name));
+  const unused = [...features].filter((name) => !FEATURES_USED.has(name));
+  const chips = (label, names) =>
+    h(
+      'ul',
+      { class: 'chips', 'aria-label': label },
+      names.map((name) => h('li', null, FEATURE_TEXT[name] || name)),
+    );
   reported.body.append(
-    features.size
+    features.size ? chips('Reported features', used) : h('p', { class: 'muted' }, 'The lock reported no features.'),
+    unused.length
       ? h(
-          'ul',
-          { class: 'chips', 'aria-label': 'Reported features' },
-          [...features].map((name) => h('li', null, FEATURE_TEXT[name] || name)),
+          'div',
+          { class: 'stack' },
+          h('p', { class: 'hint' }, 'The lock also reports these, which Latchkey does not use yet:'),
+          chips('Reported, not used by Latchkey', unused),
         )
-      : h('p', { class: 'muted' }, 'The lock reported no features.'),
+      : null,
   );
   const hardening = section('Hardening', 'shield');
   hardening.body.append(
