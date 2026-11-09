@@ -20,6 +20,8 @@ void registerPasscodes();
 void registerCredentials();
 
 void registerAdminPasscode();
+void registerBackup();
+void registerHarden();
 
 void registerMqtt();
 void registerSettings();

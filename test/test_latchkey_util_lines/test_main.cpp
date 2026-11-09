@@ -5,11 +5,12 @@
 #include <string>
 #include <vector>
 
+#include "../reference/allocation_failure.h"
 #include "latchkey_util/line_buffer.h"
 
-void setUp() {}
+void setUp() { allocation_failure::reset(); }
 
-void tearDown() {}
+void tearDown() { allocation_failure::resume(); }
 
 struct Collector {
     std::vector<std::string> events;
@@ -17,10 +18,13 @@ struct Collector {
 
     explicit Collector(size_t maxLength)
         : buffer(
-              maxLength, [this](std::string_view line) { events.emplace_back(line); },
-              [this]() { events.emplace_back("<overflow>"); }) {}
+              maxLength, [this](latchkey_util::RpcText line) { events.emplace_back(line.view()); },
+              [this](latchkey_util::LineBuffer::Error) { events.emplace_back("<overflow>"); }) {}
 
-    void feed(const char* text) { buffer.feed(text, std::strlen(text)); }
+    void feed(const char* text) {
+        std::string chunk(text);
+        buffer.consume(chunk.data(), chunk.size());
+    }
 
     std::string joined() const {
         std::string out;
@@ -73,6 +77,27 @@ static void test_overflow_inside_one_chunk() {
     TEST_ASSERT_EQUAL_STRING("<overflow>|fg|", collector.joined().c_str());
 }
 
+static void test_allocation_failure_discards_the_whole_line_and_recovers() {
+    Collector collector(16384);
+    allocation_failure::failNext();
+    collector.feed("secret request\n");
+    allocation_failure::resume();
+    collector.feed("next\n");
+    TEST_ASSERT_EQUAL_STRING("<overflow>|next|", collector.joined().c_str());
+}
+
+static void test_consumed_input_is_erased_before_the_completed_line_runs() {
+    char chunk[] = "owned secret\n";
+    bool called = false;
+    latchkey_util::LineBuffer buffer(16384, [&](latchkey_util::RpcText line) {
+        called = true;
+        TEST_ASSERT_EQUAL_STRING("owned secret", line.c_str());
+        for (char byte : chunk) TEST_ASSERT_EQUAL_INT(0, byte);
+    }, [](auto) { TEST_FAIL_MESSAGE("unexpected input error"); });
+    buffer.consume(chunk, sizeof(chunk) - 1);
+    TEST_ASSERT_TRUE(called);
+}
+
 int main() {
     UNITY_BEGIN();
     RUN_TEST(test_lines_end_at_newline);
@@ -81,5 +106,7 @@ int main() {
     RUN_TEST(test_a_line_of_exactly_max_length_passes);
     RUN_TEST(test_an_overlong_line_is_dropped_and_reported_once);
     RUN_TEST(test_overflow_inside_one_chunk);
+    RUN_TEST(test_allocation_failure_discards_the_whole_line_and_recovers);
+    RUN_TEST(test_consumed_input_is_erased_before_the_completed_line_runs);
     return UNITY_END();
 }

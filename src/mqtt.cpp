@@ -493,8 +493,8 @@ void startPoll(State& state, int64_t now) {
     rpc::JobSpec spec;
     spec.action = "lock.status";
     spec.context = rpc::Context{rpc::Transport::Mqtt, std::nullopt};
-    spec.run = [mac] { return lock_manager::status(mac); };
-    spec.finish = [lockId = *id](const rpc::Reply& reply) {
+    spec.run = [mac](const cJSON*, const rpc::Context&) { return lock_manager::status(mac); };
+    spec.finish = [lockId = *id](const rpc::JobSpec&, const rpc::Reply& reply) {
         Item done;
         done.kind = Kind::PollDone;
         done.text = lockId;
@@ -521,8 +521,10 @@ void runCommand(State& state, const std::string& id, bool unlock) {
     rpc::JobSpec spec;
     spec.action = method;
     spec.context = rpc::Context{rpc::Transport::Mqtt, std::nullopt};
-    spec.run = [mac, unlock] { return unlock ? lock_manager::unlock(mac) : lock_manager::lock(mac); };
-    spec.finish = [id, mac, method](const rpc::Reply& reply) {
+    spec.run = [mac, unlock](const cJSON*, const rpc::Context&) {
+        return unlock ? lock_manager::unlock(mac) : lock_manager::lock(mac);
+    };
+    spec.finish = [id, mac, method](const rpc::JobSpec&, const rpc::Reply& reply) {
         auditCommand(method, mac, reply);
         Item done;
         done.kind = Kind::CommandDone;

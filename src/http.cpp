@@ -22,6 +22,7 @@
 #include "mbedtls/platform_util.h"
 #include "sdkconfig.h"
 
+#include "auth.h"
 #include "certs.h"
 #include "latchkey_util/web.h"
 #include "rpc.h"
@@ -62,7 +63,7 @@ constexpr size_t kTokenBuffer = 65;
 
 struct Request {
     httpd_req_t* req;
-    std::string body;
+    latchkey_util::RpcText body;
 };
 
 struct ErrorReply {
@@ -103,11 +104,12 @@ void securityHeaders(httpd_req_t* req) {
     httpd_resp_set_hdr(req, "Cache-Control", "no-store");
 }
 
-esp_err_t sendJson(httpd_req_t* req, const char* status, const std::string& json) {
+esp_err_t sendJson(httpd_req_t* req, const char* status, const latchkey_util::RpcText& json) {
     securityHeaders(req);
-    httpd_resp_set_status(req, status);
+    httpd_resp_set_status(req, json.empty() ? "503 Service Unavailable" : status);
     httpd_resp_set_type(req, "application/json");
-    return httpd_resp_send(req, json.data(), static_cast<ssize_t>(json.size()));
+    const auto text = json.empty() ? rpc::kRenderFailure : json.view();
+    return httpd_resp_send(req, text.data(), static_cast<ssize_t>(text.size()));
 }
 
 esp_err_t refuse(httpd_req_t* req, const char* status, const char* code, const char* message) {
@@ -159,8 +161,8 @@ esp_err_t servePage(httpd_req_t* req) {
     return httpd_resp_send(req, reinterpret_cast<const char*>(kPageStart), kPageEnd - kPageStart);
 }
 
-bool readBody(httpd_req_t* req, std::string& body) {
-    body.resize(req->content_len);
+bool readBody(httpd_req_t* req, latchkey_util::RpcText& body) {
+    if (!body.resize(req->content_len)) return false;
     const int64_t deadline = esp_timer_get_time() + kBodyDeadlineUs;
     size_t received = 0;
     while (received < body.size()) {
@@ -179,6 +181,17 @@ bool readBody(httpd_req_t* req, std::string& body) {
     return true;
 }
 
+bool bodyAllowed(httpd_req_t* req) {
+    if (req->content_len <= kMaxBody) return true;
+    if (req->content_len > latchkey_util::kMaxRpcText) return false;
+    char token[kTokenBuffer] = {};
+    size_t length = sizeof(token);
+    const bool allowed = httpd_req_get_cookie_val(req, latchkey_util::kSessionCookieName, token, &length) == ESP_OK &&
+                         auth::sessionFor(token).has_value();
+    mbedtls_platform_zeroize(token, sizeof(token));
+    return allowed;
+}
+
 esp_err_t acceptRpc(httpd_req_t* req) {
     noteServerTask();
     if (!fromBoardAddress(req)) {
@@ -188,7 +201,7 @@ esp_err_t acceptRpc(httpd_req_t* req) {
     if (!header(req, "Content-Type", type) || !latchkey_util::isJsonContentType(type)) {
         return refuse(req, "415 Unsupported Media Type", "invalid_argument", "send application/json");
     }
-    if (req->content_len > kMaxBody) {
+    if (!bodyAllowed(req)) {
         return refuse(req, "413 Content Too Large", "invalid_argument", "request too large");
     }
     auto* request = new (std::nothrow) Request{nullptr, {}};
@@ -225,15 +238,19 @@ void abandon(httpd_req_t* req) {
 
 void answer(Request& request) {
     httpd_req_t* req = request.req;
+    if (!bodyAllowed(req)) {
+        refuse(req, "401 Unauthorized", "unauthorized", "the session ended before the request was read");
+        abandon(req);
+        return;
+    }
     if (!readBody(req, request.body)) {
-        mbedtls_platform_zeroize(request.body.data(), request.body.size());
+        request.body.clear();
         abandon(req);
         return;
     }
     std::string token = sessionToken(req);
-    rpc::Response response = rpc::dispatch(request.body.c_str(), rpc::Transport::Web, token);
+    rpc::Response response = rpc::dispatch(std::move(request.body), rpc::Transport::Web, token);
     mbedtls_platform_zeroize(token.data(), token.size());
-    mbedtls_platform_zeroize(request.body.data(), request.body.size());
     std::string cookie;
     if (!response.sessionToken.empty()) {
         cookie = latchkey_util::sessionCookie(response.sessionToken);

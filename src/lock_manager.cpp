@@ -4,12 +4,15 @@
 #include "lock_manager.h"
 
 #include <algorithm>
+#include <array>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <functional>
 #include <memory>
 #include <mutex>
+#include <new>
+#include <span>
 #include <set>
 #include <string_view>
 #include <utility>
@@ -27,6 +30,7 @@
 #include "ble_central.h"
 #include "clock.h"
 #include "events.h"
+#include "key_store.h"
 #include "latchkey_util/ble_adv.h"
 #include "latchkey_util/job_queue.h"
 #include "latchkey_util/lock_watch.h"
@@ -79,6 +83,7 @@ constexpr size_t kUnlocksKept = 16;
 constexpr int64_t kUnlockKeepSeconds = 24 * 3600;
 
 enum class Kind : uint8_t {
+    Storage,
     Scan,
     Pair,
     Status,
@@ -101,6 +106,8 @@ struct Job {
     std::optional<uint16_t> since;
     const char* action = nullptr;
     LockWork work;
+    bool automaticPreparation = true;
+    StorageWork storageWork;
     rpc::Reply reply;
     StaticSemaphore_t doneBuffer{};
     SemaphoreHandle_t done = nullptr;
@@ -127,11 +134,14 @@ struct Live {
     bool alertWriteFailed = false;
     bool watchReadFailed = false;
     bool watchWriteFailed = false;
+    bool metadataReadFailed = false;
 };
 
 struct Lock {
     Record record;
     Live live;
+    latchkey_util::LockMetadata metadata;
+    ~Lock() { mbedtls_platform_zeroize(&record, sizeof(record)); }
 };
 
 struct Link {
@@ -158,7 +168,9 @@ public:
 void track(const ble::Advert& raw);
 
 std::mutex s_mutex;
-std::vector<Lock> s_locks;
+std::array<std::unique_ptr<Lock>, store::locks::kMaxLocks> s_locks;
+size_t s_lockCount = 0;
+key_store::Restore s_restore;
 latchkey_util::JobQueue<Job*> s_queue;
 bool s_erased = false;
 TaskHandle_t s_worker = nullptr;
@@ -166,6 +178,16 @@ WallClock s_clock;
 HardwareRandom s_random;
 ble::LinkTransport s_transport([](const ble::Advert& advert) { track(advert); });
 Link s_link;
+
+std::span<const std::unique_ptr<Lock>> visibleLocks() { return {s_locks.data(), s_lockCount}; }
+
+bool storageBlocked() { return s_erased || s_restore.recoveryRequired(); }
+
+rpc::Reply storageUnavailable() {
+    return s_restore.recoveryRequired()
+        ? rpc::fail("recovery_required", "lock storage requires recovery and a restart before more changes")
+        : rpc::fail("unavailable", "lock storage is being erased");
+}
 
 uint32_t nowMs() { return static_cast<uint32_t>(esp_timer_get_time() / 1000); }
 
@@ -193,6 +215,7 @@ const char* kindName(Kind kind) {
             return "lock.factoryReset";
         case Kind::Log:
             return "lock.log.fetch";
+        case Kind::Storage:
         case Kind::Access:
             break;
     }
@@ -200,7 +223,7 @@ const char* kindName(Kind kind) {
 }
 
 const char* jobName(const Job& job) {
-    return job.kind == Kind::Access && job.action != nullptr ? job.action : kindName(job.kind);
+    return (job.kind == Kind::Access || job.kind == Kind::Storage) && job.action != nullptr ? job.action : kindName(job.kind);
 }
 
 const char* stateName(LockState state) {
@@ -254,7 +277,6 @@ void storeKeys(Record& record, const ttlock::LockKeys& keys) {
     record.unlockKey = keys.unlockKey;
     record.lockFlagPos = keys.lockFlagPos;
     record.features = keys.features;
-    copyText(record.adminPasscode, keys.adminPasscode);
 }
 
 void copyDeviceInfo(Record& record, const ttlock::DeviceInfo& info) {
@@ -272,7 +294,8 @@ ble::Address addressOf(const Record& record) {
 }
 
 Lock* findLocked(std::string_view mac) {
-    for (Lock& lock : s_locks) {
+    for (const auto& held : visibleLocks()) {
+        Lock& lock = *held;
         if (mac == lock.record.mac) {
             return &lock;
         }
@@ -307,29 +330,72 @@ bool storedFeatures(std::string_view mac, uint64_t& out) {
 
 esp_err_t persist(const Record& record) {
     std::lock_guard<std::mutex> guard(s_mutex);
-    if (s_erased) {
-        return ESP_ERR_INVALID_STATE;
-    }
+    if (storageBlocked()) return ESP_ERR_INVALID_STATE;
     Lock* existing = findLocked(record.mac);
-    if (existing == nullptr && s_locks.size() >= store::locks::kMaxLocks) {
-        return ESP_ERR_NO_MEM;
+    std::unique_ptr<Lock> prepared;
+    if (existing == nullptr) {
+        if (s_lockCount == s_locks.size()) return ESP_ERR_NO_MEM;
+        prepared.reset(new (std::nothrow) Lock);
+        if (!prepared) return ESP_ERR_NO_MEM;
+        const auto error = key_store::loadMetadata(record.mac, prepared->metadata);
+        if (error != ESP_OK) return error;
+        prepared->record = record;
     }
     const esp_err_t error = store::locks::save(record);
-    if (error != ESP_OK) {
-        return error;
-    }
-    if (existing == nullptr) {
-        s_locks.push_back(Lock{record, Live{}});
-    } else {
-        existing->record = record;
-    }
+    if (error != ESP_OK) return error;
+    if (existing == nullptr) s_locks[s_lockCount++] = std::move(prepared);
+    else existing->record = record;
     return ESP_OK;
 }
+
+class Publication final : public StoragePublication {
+public:
+    ~Publication() { discard(); }
+
+    bool prepare(std::span<const latchkey_util::BackupLock> locks) override {
+        if (locks.size() > s_locks.size() - s_lockCount) return false;
+        for (const auto& source : locks) {
+            auto& held = s_locks[s_lockCount + prepared_];
+            held.reset(new (std::nothrow) Lock);
+            if (!held) return false;
+            ++prepared_;
+            if (!key_store::makeRecord(source, held->record)) return false;
+            held->metadata.lifecycle = source.lifecycle;
+            held->metadata.provenance = source.provenance;
+            held->metadata.pendingProvenance = source.pendingProvenance;
+            if (source.pendingAdminPasscode.size() >= held->metadata.pendingAdminPasscode.size()) return false;
+            std::copy(source.pendingAdminPasscode.begin(), source.pendingAdminPasscode.end(),
+                      held->metadata.pendingAdminPasscode.begin());
+            held->live.schedule.begin(s_lockCount + prepared_ - 1, esp_timer_get_time() / 1000,
+                                       kWatchFirstMs, kWatchSpreadMs);
+        }
+        return true;
+    }
+
+    void publish() noexcept override {
+        s_lockCount += prepared_;
+        prepared_ = 0;
+    }
+
+    void discard() noexcept override {
+        while (prepared_ != 0) s_locks[s_lockCount + --prepared_].reset();
+    }
+
+    void metadataChanged(std::string_view mac, const latchkey_util::LockMetadata* metadata) noexcept override {
+        Lock* lock = findLocked(mac);
+        if (lock == nullptr) return;
+        lock->live.metadataReadFailed = metadata == nullptr;
+        lock->metadata = metadata == nullptr ? latchkey_util::LockMetadata{} : *metadata;
+    }
+
+private:
+    size_t prepared_ = 0;
+};
 
 bool updateRecord(std::string_view mac, const std::function<void(Record&)>& change) {
     std::lock_guard<std::mutex> guard(s_mutex);
     Lock* lock = findLocked(mac);
-    if (lock == nullptr || s_erased) {
+    if (lock == nullptr || storageBlocked()) {
         return false;
     }
     Record record = lock->record;
@@ -351,12 +417,28 @@ esp_err_t eraseDescriptions(const std::string& mac) {
     if (error == ESP_OK) {
         error = store::watch::erase(mac.c_str());
     }
-    return error == ESP_OK ? store::alerts::erase(mac.c_str()) : error;
+    if (error == ESP_OK) error = store::alerts::erase(mac.c_str());
+    if (error != ESP_OK) return error;
+    error = key_store::eraseMetadata(mac);
+    Lock* lock = findLocked(mac);
+    if (lock != nullptr) {
+        lock->metadata = {};
+        lock->live.metadataReadFailed = error != ESP_OK;
+    }
+    return error;
 }
 
-esp_err_t removeRecord(std::string_view mac) {
+esp_err_t clearPairingDescriptions(const std::string& mac) {
+    std::lock_guard<std::mutex> guard(s_mutex);
+    return storageBlocked() ? ESP_ERR_INVALID_STATE : eraseDescriptions(mac);
+}
+
+esp_err_t removeRecord(std::string_view mac, bool protectReset = false) {
     const std::string key(mac);
     std::lock_guard<std::mutex> guard(s_mutex);
+    if (storageBlocked()) return ESP_ERR_INVALID_STATE;
+    const auto allowed = protectReset ? key_store::checkErase(mac) : ESP_OK;
+    if (allowed != ESP_OK) return allowed;
     esp_err_t error = eraseDescriptions(key);
     if (error != ESP_OK) {
         return error;
@@ -365,9 +447,12 @@ esp_err_t removeRecord(std::string_view mac) {
     if (error != ESP_OK) {
         return error;
     }
-    s_locks.erase(std::remove_if(s_locks.begin(), s_locks.end(),
-                                 [&mac](const Lock& lock) { return mac == lock.record.mac; }),
-                  s_locks.end());
+    for (size_t i = 0; i < s_lockCount; ++i) {
+        if (mac != s_locks[i]->record.mac) continue;
+        for (size_t j = i; j + 1 < s_lockCount; ++j) s_locks[j] = std::move(s_locks[j + 1]);
+        s_locks[--s_lockCount].reset();
+        break;
+    }
     return ESP_OK;
 }
 
@@ -406,6 +491,9 @@ const char* alertKindName(latchkey_util::LockAlertKind kind) {
 
 cJSON* lockWarnings(const Live& live) {
     cJSON* warnings = cJSON_CreateArray();
+    if (live.metadataReadFailed) {
+        cJSON_AddItemToArray(warnings, cJSON_CreateString("The stored backup and hardening state could not be verified."));
+    }
     if (holdsAlertOf(live, latchkey_util::LockAlertKind::AlertsUnreadable)) {
         cJSON_AddItemToArray(warnings, cJSON_CreateString(
             "The stored alerts could not be read and were cleared; alerts raised before then are lost."));
@@ -460,8 +548,10 @@ cJSON* summaryJson(const Lock& lock) {
     } else {
         cJSON_AddNullToObject(json, "lastEvent");
     }
-    cJSON_AddBoolToObject(json, "hardened", false);
-    cJSON_AddBoolToObject(json, "backedUp", false);
+    cJSON_AddBoolToObject(json, "hardened", !lock.live.metadataReadFailed &&
+                           (lock.metadata.lifecycle & latchkey_util::kBackupHardened) != 0);
+    cJSON_AddBoolToObject(json, "backedUp", !lock.live.metadataReadFailed &&
+                           (lock.metadata.lifecycle & latchkey_util::kBackupBackedUp) != 0);
     cJSON_AddBoolToObject(json, "pairComplete", (lock.record.flags & store::locks::kFlagPairComplete) != 0);
     cJSON_AddNumberToObject(json, "alertCount", lock.live.alerts.entries().size());
     cJSON_AddItemToObject(json, "warnings", lockWarnings(lock.live));
@@ -755,6 +845,7 @@ Status openLink(const Record& record) {
 int64_t monotonicMs() { return esp_timer_get_time() / 1000; }
 
 void saveWatch(Lock& lock, const latchkey_util::WatchState& state) {
+    if (storageBlocked()) return;
     if (state == lock.live.watch.state() && !lock.live.watchWriteFailed &&
         !(lock.live.watchReadFailed && lock.live.alertWriteFailed)) {
         return;
@@ -783,18 +874,19 @@ void saveWatch(Lock& lock, const latchkey_util::WatchState& state) {
     lock.live.watch.state() = state;
 }
 
-void noteClockSet(const std::string& mac, int32_t offset, int64_t utc) {
+bool noteClockSet(const std::string& mac, int32_t offset, int64_t utc) {
     std::lock_guard<std::mutex> guard(s_mutex);
     Lock* lock = findLocked(mac);
-    if (lock == nullptr || s_erased) {
-        return;
+    if (lock == nullptr || storageBlocked()) {
+        return false;
     }
     latchkey_util::WatchState state = lock->live.watch.state();
     latchkey_util::clockSet(state, offset, utc);
     saveWatch(*lock, state);
+    return !lock->live.watchWriteFailed && !lock->live.alertWriteFailed;
 }
 
-Status readBeforeClock(ttlock::Session& session, const std::string& mac);
+Status readBeforeClock(ttlock::Session& session, const std::string& mac, bool stopOnFailure = false);
 
 Status setLockClock(ttlock::Session& session, const std::string& mac) {
     if (!wallclock::synced()) {
@@ -964,7 +1056,7 @@ bool watchView(const std::string& mac, WatchView& out) {
 void keepWatch(const std::string& mac, const WatchView& view, bool answered, bool more) {
     std::lock_guard<std::mutex> guard(s_mutex);
     Lock* lock = findLocked(mac);
-    if (lock == nullptr || s_erased) {
+    if (lock == nullptr || storageBlocked()) {
         return;
     }
     saveWatch(*lock, view.watch.state());
@@ -980,23 +1072,24 @@ int32_t logOffset(const latchkey_util::WatchState& state) {
 }
 
 Status readNewEntries(ttlock::Session& session, const std::string& mac, WatchView& view, lock_log::Entries& fresh,
-                      bool& more) {
+                      bool& more, bool stopOnFailure = false) {
     more = false;
     const int32_t offset = logOffset(view.watch.state());
     if (!view.watch.state().baselined) {
         return lock_log::findEnd(session, offset, view.watch.state());
     }
-    return lock_log::catchUp(session, mac, offset, view.watch, fresh, more, utcNow());
+    return lock_log::catchUp(session, mac, offset, view.watch, fresh, more, utcNow(), stopOnFailure);
 }
 
-Status readBeforeClock(ttlock::Session& session, const std::string& mac) {
+Status readBeforeClock(ttlock::Session& session, const std::string& mac, bool stopOnFailure) {
     WatchView view;
     if (!watchView(mac, view)) {
         return Status::NotPaired;
     }
     lock_log::Entries fresh;
     bool more = false;
-    const Status status = readNewEntries(session, mac, view, fresh, more);
+    const Status status = readNewEntries(session, mac, view, fresh, more, stopOnFailure);
+    if (status != Status::Ok && stopOnFailure) return status;
     keepWatch(mac, view, status == Status::Ok, more);
     return status == Status::Ok && more ? Status::Busy : status;
 }
@@ -1083,7 +1176,8 @@ void runLockJob(Job& job) {
         return;
     }
     ttlock::Session& session = *s_link.session;
-    catchUp(session, lock);
+    if (job.automaticPreparation) catchUp(session, lock);
+    else session.setEventSink({});
     rpc::Reply reply;
     bool userOperation = false;
     switch (job.kind) {
@@ -1116,6 +1210,7 @@ void runLockJob(Job& job) {
         case Kind::Log:
             status = readLog(session, lock, job.since, reply);
             break;
+        case Kind::Storage:
         case Kind::Scan:
         case Kind::Pair:
             break;
@@ -1127,7 +1222,7 @@ void runLockJob(Job& job) {
             reply = failure(status, lockError);
         }
     }
-    if (s_link.open && (breaksLink(status) || !ble::connected())) {
+    if (s_link.open && (!job.automaticPreparation || breaksLink(status) || !ble::connected())) {
         closeLink();
     } else if (s_link.open) {
         s_link.keepUntilMs = nowMs() + (userOperation ? kUserKeepAliveMs : kLingerMs);
@@ -1199,7 +1294,7 @@ bool awaitAdvert(const std::string& mac, uint32_t waitMs, ble::Advert& raw, ttlo
 
 bool roomFor(const std::string& mac) {
     std::lock_guard<std::mutex> guard(s_mutex);
-    return findLocked(mac) != nullptr || s_locks.size() < store::locks::kMaxLocks;
+    return findLocked(mac) != nullptr || s_lockCount < store::locks::kMaxLocks;
 }
 
 struct PairStores {
@@ -1224,7 +1319,7 @@ struct SeedsWipe {
 
 esp_err_t saveSeeds(const std::string& mac, const latchkey_util::SeedTable& table) {
     std::lock_guard<std::mutex> guard(s_mutex);
-    if (findLocked(mac) == nullptr || s_erased) {
+    if (findLocked(mac) == nullptr || storageBlocked()) {
         return ESP_ERR_NOT_FOUND;
     }
     return store::seeds::save(mac.c_str(), table);
@@ -1338,12 +1433,14 @@ void runPair(Job& job) {
         finish(job, rpc::fail("unsupported", "only TTLock protocol 3 locks can be paired"));
         return;
     }
-    Record record = blankRecord();
+    AdminState pairingState;
+    Record& record = pairingState.record;
+    record = blankRecord();
     record.addressType = raw.address.type;
     std::memcpy(record.address, raw.address.value, sizeof(record.address));
     copyText(record.mac, job.mac);
     copyText(record.name, job.name);
-    const esp_err_t leftovers = eraseDescriptions(job.mac);
+    const esp_err_t leftovers = clearPairingDescriptions(job.mac);
     if (leftovers != ESP_OK) {
         ESP_LOGE(TAG, "cannot erase the names and seeds an earlier pairing left: %s", esp_err_to_name(leftovers));
         finish(job, rpc::fail("internal", "cannot erase what an earlier pairing of this lock left on the board"));
@@ -1372,6 +1469,24 @@ void runPair(Job& job) {
     SeedStore seeds;
     ttlock::PairOptions options;
     options.adminPasscode = job.adminPasscode;
+    options.prepareAdminPasscode = [&job, &stores](std::string_view candidate) {
+        const auto provenance = job.adminPasscode.empty() ? latchkey_util::AdminProvenance::PairingGenerated
+                                                          : latchkey_util::AdminProvenance::Owner;
+        const bool stored = stores.keysStored && stageAdminPasscode(job.mac, candidate, provenance) == ESP_OK;
+        stores.storeFailed = stores.storeFailed || !stored;
+        return stored;
+    };
+    options.finishAdminPasscode = [&job, &record, &stores](bool accepted) {
+        const auto error = accepted ? confirmAdminPasscode(job.mac) : rejectAdminPasscode(job.mac);
+        AdminState state;
+        const bool stored = error == ESP_OK && readAdminState(job.mac, state) == ESP_OK;
+        if (stored) {
+            copyText(record.adminPasscode, state.record.adminPasscode);
+            record.flags = state.record.flags;
+        }
+        stores.storeFailed = stores.storeFailed || !stored;
+        return stored;
+    };
     options.persistSeeds = [&job, &seeds](uint16_t year,
                                           const std::array<ttlock::CodeSecret, ttlock::kCodeSecretCount>& table) {
         seeds.table.year = year;
@@ -1442,7 +1557,8 @@ void runPair(Job& job) {
         session.reset();
         ble::disconnect();
         if (verdict == latchkey_util::PairVerdict::KeysNotStored) {
-            const esp_err_t erased = store::seeds::erase(job.mac.c_str());
+            std::lock_guard<std::mutex> guard(s_mutex);
+            const esp_err_t erased = storageBlocked() ? ESP_ERR_INVALID_STATE : store::seeds::erase(job.mac.c_str());
             if (erased != ESP_OK) {
                 ESP_LOGE(TAG, "cannot erase the seed table of keys that were not stored: %s", esp_err_to_name(erased));
             }
@@ -1498,6 +1614,18 @@ void runScan(Job& job) {
 }
 
 void run(Job& job) {
+    {
+        std::lock_guard<std::mutex> guard(s_mutex);
+        if (storageBlocked()) {
+            finish(job, storageUnavailable());
+            return;
+        }
+        if (job.kind == Kind::Storage) {
+            Publication publication;
+            finish(job, job.storageWork(s_restore, publication));
+            return;
+        }
+    }
     if (!ble::ready()) {
         finish(job, rpc::fail("unavailable", "Bluetooth is not ready"));
         return;
@@ -1539,7 +1667,7 @@ void idle() {
     bool wanted = false;
     {
         std::lock_guard<std::mutex> guard(s_mutex);
-        wanted = !s_locks.empty();
+        wanted = s_lockCount != 0;
     }
     const ble::ScanMode target = wanted ? ble::ScanMode::Background : ble::ScanMode::Off;
     if (ble::scanMode() != target) {
@@ -1556,7 +1684,7 @@ void idle() {
 
 bool queueIdle() {
     std::lock_guard<std::mutex> guard(s_mutex);
-    return s_queue.empty();
+    return !storageBlocked() && s_queue.empty();
 }
 
 bool watchWithLinkDue(const std::string& mac) {
@@ -1596,7 +1724,8 @@ bool nextWatched(Lock& out) {
     const int64_t utc = utcNow();
     std::lock_guard<std::mutex> guard(s_mutex);
     const Lock* chosen = nullptr;
-    for (const Lock& lock : s_locks) {
+    for (const auto& held : visibleLocks()) {
+        const Lock& lock = *held;
         if (dueAlone(lock, nowMs, utc) &&
             (chosen == nullptr || lock.live.schedule.dueAtMs() < chosen->live.schedule.dueAtMs())) {
             chosen = &lock;
@@ -1732,7 +1861,12 @@ void start() {
         std::lock_guard<std::mutex> guard(s_mutex);
         const int64_t nowMs = monotonicMs();
         for (const Record& record : records) {
-            Lock lock{record, Live{}};
+            if (s_lockCount == s_locks.size()) abort();
+            std::unique_ptr<Lock> held(new (std::nothrow) Lock);
+            if (!held) abort();
+            Lock& lock = *held;
+            lock.record = record;
+            lock.live.metadataReadFailed = key_store::loadMetadata(record.mac, lock.metadata) != ESP_OK;
             bool alertsChanged = false;
             const esp_err_t alertRead = store::alerts::load(record.mac, lock.live.alerts);
             if (alertRead != ESP_OK) {
@@ -1753,8 +1887,8 @@ void start() {
             if (alertsChanged) {
                 lock.live.alertWriteFailed = store::alerts::save(record.mac, lock.live.alerts) != ESP_OK;
             }
-            lock.live.schedule.begin(s_locks.size(), nowMs, kWatchFirstMs, kWatchSpreadMs);
-            s_locks.push_back(std::move(lock));
+            lock.live.schedule.begin(s_lockCount, nowMs, kWatchFirstMs, kWatchSpreadMs);
+            s_locks[s_lockCount++] = std::move(held);
         }
     }
     ESP_LOGI(TAG, "%u lock(s) stored", static_cast<unsigned>(records.size()));
@@ -1764,6 +1898,14 @@ void start() {
         ESP_LOGE(TAG, "cannot start the lock worker");
         abort();
     }
+}
+
+rpc::Reply runStorage(const char* action, StorageWork work) {
+    Job job;
+    job.kind = Kind::Storage;
+    job.action = action;
+    job.storageWork = std::move(work);
+    return submit(job);
 }
 
 rpc::Reply scan(uint32_t seconds) { return submit(Kind::Scan, {}, {}, seconds); }
@@ -1785,7 +1927,8 @@ rpc::Reply list() {
     cJSON* result = cJSON_CreateObject();
     cJSON* locks = cJSON_AddArrayToObject(result, "locks");
     std::lock_guard<std::mutex> guard(s_mutex);
-    for (const Lock& lock : s_locks) {
+    for (const auto& held : visibleLocks()) {
+        const Lock& lock = *held;
         cJSON_AddItemToArray(locks, summaryJson(lock));
     }
     return rpc::ok(result);
@@ -1823,7 +1966,7 @@ rpc::Reply featureMask(const std::string& mac, uint64_t& out) {
 
 esp_err_t loadLabels(const std::string& mac, store::labels::Kind kind, latchkey_util::LabelTable& out) {
     std::lock_guard<std::mutex> guard(s_mutex);
-    if (findLocked(mac) == nullptr || s_erased) {
+    if (findLocked(mac) == nullptr || storageBlocked()) {
         return ESP_ERR_NOT_FOUND;
     }
     return store::labels::load(mac.c_str(), kind, out);
@@ -1831,14 +1974,15 @@ esp_err_t loadLabels(const std::string& mac, store::labels::Kind kind, latchkey_
 
 esp_err_t saveLabels(const std::string& mac, store::labels::Kind kind, const latchkey_util::LabelTable& table) {
     std::lock_guard<std::mutex> guard(s_mutex);
-    if (findLocked(mac) == nullptr || s_erased) {
+    if (findLocked(mac) == nullptr || storageBlocked()) {
         return ESP_ERR_NOT_FOUND;
     }
     return store::labels::save(mac.c_str(), kind, table);
 }
 
 bool labelsFit(const std::string& mac, store::labels::Kind kind, const latchkey_util::LabelTable& table) {
-    return store::labels::fits(mac.c_str(), kind, table);
+    std::lock_guard<std::mutex> guard(s_mutex);
+    return !storageBlocked() && store::labels::fits(mac.c_str(), kind, table);
 }
 
 rpc::Reply runOnLock(const std::string& mac, const char* action, LockWork work) {
@@ -1853,34 +1997,147 @@ rpc::Reply runOnLock(const std::string& mac, const char* action, LockWork work) 
     return submit(job);
 }
 
-AdminPasscodeCopy::~AdminPasscodeCopy() { mbedtls_platform_zeroize(code.data(), code.size()); }
-
-bool stageAdminPasscode(const std::string& mac, const std::string& candidate, AdminPasscodeCopy& previous) {
-    return updateRecord(mac, [&candidate, &previous](Record& stored) {
-        previous.code.assign(stored.adminPasscode);
-        previous.confirmed = (stored.flags & store::locks::kFlagAdminPasscodeConfirmed) != 0;
-        copyText(stored.adminPasscode, candidate);
-        stored.flags &= static_cast<uint8_t>(~store::locks::kFlagAdminPasscodeConfirmed);
-    });
+rpc::Reply runOnLockDirect(const std::string& mac, const char* action, LockWork work) {
+    if (!exists(mac)) return notPaired();
+    Job job;
+    job.kind = Kind::Access;
+    job.mac = mac;
+    job.action = action;
+    job.work = std::move(work);
+    job.automaticPreparation = false;
+    return submit(job);
 }
 
-bool confirmAdminPasscode(const std::string& mac) {
-    return updateRecord(mac, [](Record& stored) { stored.flags |= store::locks::kFlagAdminPasscodeConfirmed; });
-}
-
-bool restoreAdminPasscode(const std::string& mac, const AdminPasscodeCopy& previous) {
-    return updateRecord(mac, [&previous](Record& stored) {
-        copyText(stored.adminPasscode, previous.code);
-        if (previous.confirmed) {
-            stored.flags |= store::locks::kFlagAdminPasscodeConfirmed;
-        } else {
-            stored.flags &= static_cast<uint8_t>(~store::locks::kFlagAdminPasscodeConfirmed);
+rpc::Reply synchronizeHardeningTime(ttlock::Session& session, const std::string& mac) {
+    if (!wallclock::synced()) return failure(Status::TimeUnsynced, 0);
+    const auto read = readBeforeClock(session, mac, true);
+    if (read != Status::Ok) return failure(read, session.lockErrorCode());
+    {
+        std::lock_guard<std::mutex> guard(s_mutex);
+        const Lock* lock = findLocked(mac);
+        if (lock == nullptr || storageBlocked() || lock->live.watchWriteFailed || lock->live.alertWriteFailed) {
+            return rpc::fail("storage_error", "cannot preserve the log position before setting the clock");
         }
-    });
+    }
+    const auto synced = session.syncTime();
+    if (synced != Status::Ok) return failure(synced, session.lockErrorCode());
+    if (!noteClockSet(mac, wallclock::utcOffsetSeconds(), utcNow())) {
+        return rpc::fail("storage_error", "cannot store the clock offset for log records");
+    }
+    if (!updateRecord(mac, [](Record& record) { record.flags |= store::locks::kFlagTimeCalibrated; })) {
+        return rpc::fail("storage_error", "cannot store clock confirmation");
+    }
+    std::lock_guard<std::mutex> guard(s_mutex);
+    const Lock* lock = findLocked(mac);
+    if (lock == nullptr || lock->live.watchWriteFailed || lock->live.alertWriteFailed) {
+        return rpc::fail("storage_error", "cannot store the clock offset for log records");
+    }
+    return rpc::ok();
+}
+
+AdminState::~AdminState() { mbedtls_platform_zeroize(&record, sizeof(record)); }
+
+namespace {
+
+esp_err_t loadAdminStateLocked(const std::string& mac, AdminState& out) {
+    if (storageBlocked()) return ESP_ERR_INVALID_STATE;
+    if (findLocked(mac) == nullptr) return ESP_ERR_NOT_FOUND;
+    AdminState state;
+    auto error = key_store::loadRecord(mac, state.record);
+    if (error == ESP_OK) error = key_store::loadMetadata(mac, state.metadata);
+    if (error == ESP_OK) out = state;
+    return error;
+}
+
+esp_err_t saveAdminMetadataLocked(Lock& lock, const latchkey_util::LockMetadata& metadata) {
+    const auto error = key_store::saveMetadata(lock.record.mac, metadata);
+    lock.live.metadataReadFailed = error != ESP_OK;
+    if (error == ESP_OK) lock.metadata = metadata;
+    return error;
+}
+
+esp_err_t finishAdminStateLocked(const std::string& mac, AdminState& state, std::string_view observed) {
+    if (state.metadata.pendingAdminPasscode[0] == 0 || !ttlock::isPasscode(observed)) return ESP_ERR_INVALID_STATE;
+    const bool accepted = observed == state.metadata.pendingAdminPasscode.data();
+    if (!accepted && observed != state.record.adminPasscode) return ESP_ERR_INVALID_STATE;
+    Lock& lock = *findLocked(mac);
+    copyText(state.record.adminPasscode, observed);
+    state.record.flags |= store::locks::kFlagAdminPasscodeConfirmed;
+    const auto stored = store::locks::save(state.record);
+    lock.record = state.record;
+    if (stored != ESP_OK) {
+        lock.live.metadataReadFailed = true;
+        return stored;
+    }
+    if (accepted) state.metadata.provenance = state.metadata.pendingProvenance;
+    state.metadata.pendingProvenance = latchkey_util::AdminProvenance::LegacyUnknown;
+    state.metadata.pendingAdminPasscode.fill(0);
+    return saveAdminMetadataLocked(lock, state.metadata);
+}
+
+}
+
+esp_err_t readAdminState(const std::string& mac, AdminState& out) {
+    std::lock_guard<std::mutex> guard(s_mutex);
+    return loadAdminStateLocked(mac, out);
+}
+
+esp_err_t beginHardening(const std::string& mac) {
+    std::lock_guard<std::mutex> guard(s_mutex);
+    AdminState state;
+    const auto loaded = loadAdminStateLocked(mac, state);
+    if (loaded != ESP_OK) return loaded;
+    if ((state.metadata.lifecycle & latchkey_util::kBackupBackedUp) == 0) return ESP_ERR_INVALID_STATE;
+    if ((state.metadata.lifecycle & latchkey_util::kBackupHardened) == 0) return ESP_OK;
+    state.metadata.lifecycle &= ~latchkey_util::kBackupHardened;
+    return saveAdminMetadataLocked(*findLocked(mac), state.metadata);
+}
+
+esp_err_t stageAdminPasscode(const std::string& mac, std::string_view candidate,
+                              latchkey_util::AdminProvenance provenance) {
+    if (!ttlock::isPasscode(candidate) || provenance == latchkey_util::AdminProvenance::LegacyUnknown ||
+        provenance > latchkey_util::AdminProvenance::HardeningGenerated) return ESP_ERR_INVALID_ARG;
+    std::lock_guard<std::mutex> guard(s_mutex);
+    AdminState state;
+    const auto loaded = loadAdminStateLocked(mac, state);
+    if (loaded != ESP_OK) return loaded;
+    if (state.metadata.pendingAdminPasscode[0] != 0 || candidate == state.record.adminPasscode) {
+        return ESP_ERR_INVALID_STATE;
+    }
+    std::copy(candidate.begin(), candidate.end(), state.metadata.pendingAdminPasscode.begin());
+    state.metadata.pendingProvenance = provenance;
+    return saveAdminMetadataLocked(*findLocked(mac), state.metadata);
+}
+
+esp_err_t confirmAdminPasscode(const std::string& mac) {
+    std::lock_guard<std::mutex> guard(s_mutex);
+    AdminState state;
+    const auto loaded = loadAdminStateLocked(mac, state);
+    if (loaded != ESP_OK) return loaded;
+    return finishAdminStateLocked(mac, state, state.metadata.pendingAdminPasscode.data());
+}
+
+esp_err_t reconcileAdminPasscode(const std::string& mac, std::string_view observed) {
+    std::lock_guard<std::mutex> guard(s_mutex);
+    AdminState state;
+    const auto loaded = loadAdminStateLocked(mac, state);
+    return loaded == ESP_OK ? finishAdminStateLocked(mac, state, observed) : loaded;
+}
+
+esp_err_t rejectAdminPasscode(const std::string& mac) {
+    std::lock_guard<std::mutex> guard(s_mutex);
+    AdminState state;
+    const auto loaded = loadAdminStateLocked(mac, state);
+    if (loaded != ESP_OK) return loaded;
+    if (state.metadata.pendingAdminPasscode[0] == 0) return ESP_ERR_INVALID_STATE;
+    state.metadata.pendingProvenance = latchkey_util::AdminProvenance::LegacyUnknown;
+    state.metadata.pendingAdminPasscode.fill(0);
+    return saveAdminMetadataLocked(*findLocked(mac), state.metadata);
 }
 
 rpc::Reply rename(const std::string& mac, const std::string& name) {
     std::lock_guard<std::mutex> guard(s_mutex);
+    if (storageBlocked()) return storageUnavailable();
     Lock* lock = findLocked(mac);
     if (lock == nullptr) {
         return notPaired();
@@ -1897,11 +2154,15 @@ rpc::Reply rename(const std::string& mac, const std::string& name) {
 }
 
 rpc::Reply forget(const std::string& mac) {
+    {
+        std::lock_guard<std::mutex> guard(s_mutex);
+        if (storageBlocked()) return storageUnavailable();
+    }
     if (!exists(mac)) {
         return notPaired();
     }
-    if (removeRecord(mac) != ESP_OK) {
-        return rpc::fail("internal", "cannot erase the lock's keys");
+    if (removeRecord(mac, true) != ESP_OK) {
+        return rpc::fail("recovery_protected", "cannot erase keys: the reset button is disabled or stored recovery state cannot be verified");
     }
     ESP_LOGW(TAG, "forgot lock %s", mac.c_str());
     return rpc::ok();
@@ -1950,11 +2211,12 @@ rpc::Reply readLog(const std::string& mac, std::optional<uint16_t> since) {
     return submit(job);
 }
 
-esp_err_t rememberAlert(const std::string& mac, const latchkey_util::LockAlert& alert, bool& added) {
+esp_err_t rememberAlert(const std::string& mac, const latchkey_util::LockAlert& alert, bool& added,
+                        bool stopOnFailure) {
     added = false;
     std::lock_guard<std::mutex> guard(s_mutex);
     Lock* lock = findLocked(mac);
-    if (lock == nullptr || s_erased) {
+    if (lock == nullptr || storageBlocked()) {
         return ESP_ERR_INVALID_STATE;
     }
     latchkey_util::LockAlerts changed = lock->live.alerts;
@@ -1965,10 +2227,11 @@ esp_err_t rememberAlert(const std::string& mac, const latchkey_util::LockAlert& 
     if (!fresh && !lock->live.alertWriteFailed) {
         return ESP_OK;
     }
-    lock->live.alerts = changed;
-    added = fresh;
     const esp_err_t error = store::alerts::save(mac.c_str(), changed);
     lock->live.alertWriteFailed = error != ESP_OK;
+    if (error != ESP_OK && stopOnFailure) return error;
+    lock->live.alerts = changed;
+    added = fresh;
     return error;
 }
 
@@ -1986,6 +2249,7 @@ rpc::Reply acknowledgeAlerts(const std::string& mac, uint32_t through) {
     size_t remaining = 0;
     {
         std::lock_guard<std::mutex> guard(s_mutex);
+        if (storageBlocked()) return storageUnavailable();
         Lock* lock = findLocked(mac);
         if (lock == nullptr) {
             return notPaired();
@@ -2016,7 +2280,8 @@ rpc::Reply acknowledgeAlerts(const std::string& mac, uint32_t through) {
 cJSON* warnings() {
     cJSON* warnings = cJSON_CreateArray();
     std::lock_guard<std::mutex> guard(s_mutex);
-    for (const Lock& lock : s_locks) {
+    for (const auto& held : visibleLocks()) {
+        const Lock& lock = *held;
         cJSON* messages = lockWarnings(lock.live);
         if (cJSON_GetArraySize(messages) == 0) {
             cJSON_Delete(messages);
@@ -2043,12 +2308,20 @@ esp_err_t storedCount(size_t& out) {
         return error;
     }
     std::lock_guard<std::mutex> guard(s_mutex);
-    out = std::max(entries, s_locks.size());
+    out = std::max(entries, s_lockCount);
     return ESP_OK;
+}
+
+esp_err_t checkEraseAll() {
+    std::lock_guard<std::mutex> guard(s_mutex);
+    return storageBlocked() ? ESP_ERR_INVALID_STATE : key_store::checkErase({});
 }
 
 esp_err_t eraseAll() {
     std::lock_guard<std::mutex> guard(s_mutex);
+    if (storageBlocked()) return ESP_ERR_INVALID_STATE;
+    const auto allowed = key_store::checkErase({});
+    if (allowed != ESP_OK) return allowed;
     s_erased = true;
     esp_err_t error = store::seeds::eraseAll();
     if (error == ESP_OK) {
@@ -2061,13 +2334,21 @@ esp_err_t eraseAll() {
         error = store::alerts::eraseAll();
     }
     if (error == ESP_OK) {
+        error = key_store::eraseAllMetadata();
+        for (const auto& held : visibleLocks()) {
+            held->metadata = {};
+            held->live.metadataReadFailed = error != ESP_OK;
+        }
+    }
+    if (error == ESP_OK) {
         error = store::locks::eraseAll();
     }
     if (error != ESP_OK) {
         s_erased = false;
         return error;
     }
-    s_locks.clear();
+    for (auto& lock : s_locks) lock.reset();
+    s_lockCount = 0;
     return ESP_OK;
 }
 

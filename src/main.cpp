@@ -18,9 +18,11 @@
 #include "console.h"
 #include "http.h"
 #include "jobs.h"
+#include "key_store.h"
 #include "lock_manager.h"
 #include "methods.h"
 #include "mqtt.h"
+#include "rpc.h"
 #include "store.h"
 #include "syslog_client.h"
 #include "wifi.h"
@@ -32,6 +34,7 @@ constexpr const char* TAG = "latchkey";
 }
 
 extern "C" void app_main() {
+    rpc::init();
     console::begin();
     esp_log_write(ESP_LOG_INFO, TAG, "latchkey %s board=%s chip=%s idf=%s\n", esp_app_get_description()->version,
                   board::name(), CONFIG_IDF_TARGET, esp_get_idf_version());
@@ -40,6 +43,7 @@ extern "C" void app_main() {
         abort();
     }
     store::init();
+    ESP_ERROR_CHECK(key_store::recover());
     audit::init();
     auth::init();
     certs::init();
@@ -60,6 +64,8 @@ extern "C" void app_main() {
     methods::registerPasscodes();
     methods::registerCredentials();
     methods::registerAdminPasscode();
+    methods::registerBackup();
+    methods::registerHarden();
     methods::registerMqtt();
     methods::registerSettings();
     methods::registerLog();

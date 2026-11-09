@@ -10,7 +10,7 @@
 
 namespace jobs {
 
-using Work = std::function<rpc::Reply(bool expired)>;
+using Work = std::unique_ptr<rpc::JobSpec>;
 
 void start();
 

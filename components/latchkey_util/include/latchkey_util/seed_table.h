@@ -12,6 +12,7 @@ namespace latchkey_util {
 inline constexpr size_t kSeedTableSize = 4 + ttlock::kCodeSecretCount * 10;
 
 struct SeedTable {
+    ~SeedTable();
     uint16_t year = 0;
     bool confirmed = false;
     std::array<ttlock::CodeSecret, ttlock::kCodeSecretCount> seeds{};

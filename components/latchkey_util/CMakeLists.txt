@@ -1,5 +1,9 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
-file(GLOB latchkey_util_sources "${CMAKE_CURRENT_LIST_DIR}/src/*.cpp")
+set(latchkey_glob_options)
+if(NOT CMAKE_SCRIPT_MODE_FILE)
+    list(APPEND latchkey_glob_options CONFIGURE_DEPENDS)
+endif()
+file(GLOB latchkey_util_sources ${latchkey_glob_options} "${CMAKE_CURRENT_LIST_DIR}/src/*.cpp")
 
 idf_component_register(
     SRCS ${latchkey_util_sources}

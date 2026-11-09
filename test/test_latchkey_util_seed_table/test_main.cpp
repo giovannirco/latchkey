@@ -2,7 +2,9 @@
 #include <unity.h>
 
 #include <array>
+#include <cstddef>
 #include <cstdint>
+#include <new>
 
 #include "latchkey_util/seed_table.h"
 
@@ -62,13 +64,29 @@ static void test_damaged_blobs_are_refused_and_leave_the_output_alone() {
     wrongVersion[0] = 0x02;
     std::array<uint8_t, latchkey_util::kSeedTableSize> wrongFlag = good;
     wrongFlag[1] = 0x02;
-    SeedTable out;
+    SeedTable out = sample();
     out.year = 1999;
+    const auto before = latchkey_util::encodeSeedTable(out);
     TEST_ASSERT_FALSE(latchkey_util::decodeSeedTable(good.data(), good.size() - 1, out));
+    TEST_ASSERT_TRUE(before == latchkey_util::encodeSeedTable(out));
     TEST_ASSERT_FALSE(latchkey_util::decodeSeedTable(wrongVersion.data(), wrongVersion.size(), out));
+    TEST_ASSERT_TRUE(before == latchkey_util::encodeSeedTable(out));
     TEST_ASSERT_FALSE(latchkey_util::decodeSeedTable(wrongFlag.data(), wrongFlag.size(), out));
+    TEST_ASSERT_TRUE(before == latchkey_util::encodeSeedTable(out));
     TEST_ASSERT_FALSE(latchkey_util::decodeSeedTable(nullptr, 0, out));
-    TEST_ASSERT_EQUAL_UINT16(1999, out.year);
+    TEST_ASSERT_TRUE(before == latchkey_util::encodeSeedTable(out));
+}
+
+static void test_destroying_a_decoded_table_wipes_its_seeds_without_changing_a_copy() {
+    const auto encoded = latchkey_util::encodeSeedTable(sample());
+    alignas(SeedTable) std::array<uint8_t, sizeof(SeedTable)> storage{};
+    auto* table = new (storage.data()) SeedTable;
+    TEST_ASSERT_TRUE(latchkey_util::decodeSeedTable(encoded.data(), encoded.size(), *table));
+    const SeedTable retained = *table;
+    table->~SeedTable();
+    const volatile uint8_t* bytes = storage.data() + offsetof(SeedTable, seeds);
+    for (size_t i = 0; i < sizeof(retained.seeds); ++i) TEST_ASSERT_EQUAL_UINT8(0, bytes[i]);
+    TEST_ASSERT_TRUE(encoded == latchkey_util::encodeSeedTable(retained));
 }
 
 int main(int, char**) {
@@ -77,5 +95,6 @@ int main(int, char**) {
     RUN_TEST(test_an_unconfirmed_table_says_so);
     RUN_TEST(test_the_table_survives_a_round_trip);
     RUN_TEST(test_damaged_blobs_are_refused_and_leave_the_output_alone);
+    RUN_TEST(test_destroying_a_decoded_table_wipes_its_seeds_without_changing_a_copy);
     return UNITY_END();
 }

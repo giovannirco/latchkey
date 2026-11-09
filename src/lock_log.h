@@ -36,7 +36,8 @@ private:
 ttlock::Status findEnd(ttlock::Session& session, int32_t offset, latchkey_util::WatchState& state);
 
 ttlock::Status catchUp(ttlock::Session& session, const std::string& mac, int32_t offset,
-                       latchkey_util::LogWatch& watch, Entries& fresh, bool& more, int64_t nowUtc);
+                       latchkey_util::LogWatch& watch, Entries& fresh, bool& more, int64_t nowUtc,
+                       bool stopOnFailure = false);
 
 ttlock::Status readSlots(ttlock::Session& session, uint16_t from, uint16_t to, Entries& out);
 

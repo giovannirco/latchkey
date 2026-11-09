@@ -6,6 +6,7 @@
 #include <cstdint>
 #include <functional>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include "ttlock/bytes.h"
@@ -43,6 +44,8 @@ struct PairResult {
 struct PairOptions {
     std::string adminPasscode;
     SeedsCallback persistSeeds;
+    std::function<bool(std::string_view)> prepareAdminPasscode;
+    std::function<bool(bool)> finishAdminPasscode;
 };
 
 class Session {

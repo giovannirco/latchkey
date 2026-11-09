@@ -2,7 +2,9 @@
 #include "latchkey_util/pbkdf2.h"
 
 #include <cstring>
-#include <vector>
+#include <memory>
+#include <new>
+#include <span>
 
 namespace latchkey_util {
 
@@ -29,7 +31,7 @@ public:
     Derivation(const KeyedHmacSha256& hmac, uint32_t iterations, uint32_t yieldEvery, const Pbkdf2Yield& yield)
         : hmac_(hmac), iterations_(iterations), yieldEvery_(yieldEvery), yield_(yield) {}
 
-    bool block(std::vector<uint8_t>& saltAndIndex, uint32_t index, uint8_t (&out)[kHmacSha256Size]) {
+    bool block(std::span<uint8_t> saltAndIndex, uint32_t index, uint8_t (&out)[kHmacSha256Size]) {
         const size_t at = saltAndIndex.size() - kBlockIndexSize;
         for (size_t i = 0; i < kBlockIndexSize; ++i) {
             saltAndIndex[at + i] = static_cast<uint8_t>(index >> (8 * (kBlockIndexSize - 1 - i)));
@@ -78,15 +80,24 @@ bool pbkdf2HmacSha256(const KeyedHmacSha256& passwordHmac, const uint8_t* salt, 
         (salt == nullptr && saltLength > 0) || (outLength - 1) / kHmacSha256Size >= kMaxBlocks) {
         return false;
     }
-    std::vector<uint8_t> saltAndIndex(saltLength + kBlockIndexSize);
+    if (saltLength > SIZE_MAX - kBlockIndexSize) {
+        wipe(out, outLength);
+        return false;
+    }
+    const size_t scratchSize = saltLength + kBlockIndexSize;
+    const std::unique_ptr<uint8_t[]> saltAndIndex(new (std::nothrow) uint8_t[scratchSize]);
+    if (saltAndIndex == nullptr) {
+        wipe(out, outLength);
+        return false;
+    }
     if (saltLength > 0) {
-        std::memcpy(saltAndIndex.data(), salt, saltLength);
+        std::memcpy(saltAndIndex.get(), salt, saltLength);
     }
     Derivation derivation(passwordHmac, iterations, yieldEvery, yield);
     Digest block;
     uint32_t index = 1;
     for (size_t written = 0; written < outLength; written += kHmacSha256Size, ++index) {
-        if (!derivation.block(saltAndIndex, index, block.bytes)) {
+        if (!derivation.block({saltAndIndex.get(), scratchSize}, index, block.bytes)) {
             wipe(out, outLength);
             return false;
         }

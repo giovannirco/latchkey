@@ -31,6 +31,8 @@ esp_err_t usage(Usage& out);
 
 size_t reservedEntries();
 
+size_t reservedEntries(uint32_t nextAuditSequence);
+
 namespace cfg {
 
 struct Wifi {

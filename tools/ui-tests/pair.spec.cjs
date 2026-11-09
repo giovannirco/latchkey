@@ -3,7 +3,7 @@ const { test, expect, mock, calls, login, lockCard, boardButton } = require('./s
 
 const PASSPHRASE = 'correct horse battery staple';
 
-test('the pair wizard scans, pairs with a button press, backs up keys and hardens', async ({ page, request }) => {
+test('the pair wizard scans, pairs, backs up keys and applies partial hardening', async ({ page, request }) => {
   await login(page);
   await page.getByRole('link', { name: 'Add lock' }).click();
   await expect(page.getByRole('heading', { level: 1, name: 'Add a lock' })).toBeVisible();
@@ -27,12 +27,13 @@ test('the pair wizard scans, pairs with a button press, backs up keys and harden
   const steps = page.getByRole('list', { name: 'Hardening steps' });
   await expect(steps.getByRole('listitem')).toHaveCount(5);
 
-  await page.getByRole('button', { name: 'Harden lock' }).click();
-  const needBackup = page.getByRole('alert').filter({ hasText: "Back up this lock's keys before hardening it" });
+  await page.getByRole('button', { name: 'Preview hardening' }).click();
+  const needBackup = page.getByRole('status').filter({ hasText: "Back up this lock's keys" });
   await expect(needBackup).toBeVisible();
   await expect(confirm).toBeHidden();
 
-  await needBackup.getByRole('button', { name: 'Export keys now' }).click();
+  await expect(page.getByRole('button', { name: 'Apply hardening' })).toBeDisabled();
+  await page.getByRole('button', { name: 'Export keys' }).click();
   const exportDialog = page.getByRole('dialog', { name: 'Export keys' });
   await exportDialog.getByLabel('Passphrase', { exact: true }).fill(PASSPHRASE);
   await exportDialog.getByLabel('Repeat passphrase').fill(PASSPHRASE);
@@ -44,17 +45,19 @@ test('the pair wizard scans, pairs with a button press, backs up keys and harden
   await expect(exportDialog).toBeHidden();
   await expect(steps.getByRole('listitem').filter({ hasText: 'Back up' })).toContainText('Done');
 
-  await page.getByRole('button', { name: 'Harden lock' }).click();
+  await page.getByRole('button', { name: 'Preview hardening' }).click();
+  await page.getByRole('button', { name: 'Apply hardening' }).click();
   await expect(confirm).toBeVisible();
   await expect(confirm).toContainText('Harden the lock');
-  await expect(page.getByText('Lock hardened')).toBeVisible({ timeout: 15_000 });
-  for (const item of await steps.getByRole('listitem').all()) await expect(item).toContainText('Done');
+  await expect(page.getByText('Hardening partially completed', { exact: false })).toBeVisible({ timeout: 15_000 });
+  for (const item of (await steps.getByRole('listitem').all()).slice(0, 4)) await expect(item).toContainText('Done');
+  await expect(steps.getByRole('listitem').last()).toContainText('Skipped');
   await expect(steps).toContainText('1 removed');
 
   await page.getByRole('link', { name: 'Go to the locks' }).click();
   const back = lockCard(page, 'Back door');
   await expect(back).toBeVisible();
-  await expect(back).not.toContainText('Not hardened');
+  await expect(back).toContainText('Not hardened');
 
   const exportCall = (await calls(request)).find((call) => call.method === 'keys.export');
   expect(exportCall.params.passphrase).toBe('***');

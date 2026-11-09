@@ -59,6 +59,8 @@ jobs:
           key: platformio-native-${{ runner.os }}-${{ hashFiles('platformio.ini', 'dependencies.lock.*') }}
       - name: Unity tests on the host
         run: uvx "platformio==${PLATFORMIO_VERSION}" test -e native
+      - name: Locked native parser bootstrap tests
+        run: uv run --no-project --with idf-component-manager==3.1.2 python -m unittest discover -s tools -p test_prepare_native.py
 
   firmware:
     name: Firmware builds

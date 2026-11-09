@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-const { test, expect, login, PASSWORD, TOTP } = require('./support.cjs');
+const { test, expect, login, mock, FRONT_DOOR, PASSWORD, TOTP } = require('./support.cjs');
 
 function rpc(request, method, params = {}, options = {}) {
   return request.post('/api/rpc', { data: { id: 7, method, params }, ...options });
@@ -197,6 +197,88 @@ function sawJobDone(page, job) {
     (id) => window.__events.some((event) => event.event === 'job.done' && event.data.job === id),
     job,
   );
+}
+
+async function hardeningOutcome(page, params) {
+  const reply = await (await rpc(page.request, 'lock.harden', { lock: FRONT_DOOR, ...params })).json();
+  expect(reply.result.job).toEqual(expect.any(String));
+  await expect.poll(() => sawJobDone(page, reply.result.job)).toBe(true);
+  return page.evaluate(
+    (job) => window.__events.find((event) => event.event === 'job.done' && event.data.job === job).data,
+    reply.result.job,
+  );
+}
+
+test('hardening plans and completes the passcodes step with zero deletions', async ({ page, request }) => {
+  await mock(request, { confirmDelayMs: 20 });
+  await login(page);
+  await recordEvents(page);
+  const preview = (await hardeningOutcome(page, { dryRun: true })).result;
+  expect(preview.steps.map((step) => step.status)).toEqual(['planned', 'planned', 'preserved', 'skipped']);
+  expect(preview.steps[1]).toMatchObject({ planned: 0, removed: 0, preserved: 2 });
+  const completed = (await hardeningOutcome(page, { dryRun: false })).result;
+  expect(completed).toMatchObject({ completion: 'partial', hardened: false });
+  expect(completed.steps.map((step) => step.status)).toEqual(['done', 'done', 'preserved', 'skipped']);
+  expect(completed.steps[1]).toMatchObject({ planned: 0, removed: 0, preserved: 2 });
+  expect(completed.steps[1].entries).toEqual([
+    { id: expect.stringMatching(/^[a-f0-9]{12}$/), status: 'preserved', reason: 'managed' },
+    { id: expect.stringMatching(/^[a-f0-9]{12}$/), status: 'preserved', reason: 'managed' },
+  ]);
+});
+
+test('hardening preview skips the unsynced clock with its public reason', async ({ page, request }) => {
+  await login(page);
+  await recordEvents(page);
+  await mock(request, { timeSynced: false });
+  const outcome = (await hardeningOutcome(page, { dryRun: true })).result;
+  expect(outcome).toMatchObject({ completion: 'preview', executable: false, hardened: false });
+  expect(outcome.steps[0]).toEqual({ step: 'time', status: 'skipped', error: 'time_unsynced' });
+});
+
+test('unresolved admin hardening returns a flattened failure report after a skipped preview', async ({ page, request }) => {
+  await mock(request, { confirmDelayMs: 20, setLock: { id: FRONT_DOOR, adminProvenance: 'admin_unresolved' } });
+  await login(page);
+  await recordEvents(page);
+  const preview = (await hardeningOutcome(page, { dryRun: true })).result;
+  expect(preview).toMatchObject({ completion: 'preview', executable: false });
+  expect(preview.steps[2]).toEqual({ step: 'admin', status: 'skipped', reason: 'admin_unresolved' });
+  const outcome = await hardeningOutcome(page, { dryRun: false });
+  expect(outcome.result).toBeUndefined();
+  expect(outcome.error).toMatchObject({ code: 'hardening_failed', completion: 'failed', dryRun: false, hardened: false });
+  expect(outcome.error.steps.map((step) => step.status)).toEqual(['skipped', 'skipped', 'failed', 'skipped']);
+  expect(outcome.error.steps[2]).toMatchObject({ reason: 'admin_unresolved', error: 'admin_unresolved' });
+});
+
+for (const [failedStep, statuses, entryStatuses, removed] of [
+  ['time', ['failed', 'skipped', 'skipped', 'skipped'], ['skipped', 'skipped'], 0],
+  ['passcodes', ['done', 'failed', 'skipped', 'skipped'], ['failed', 'skipped'], 0],
+  ['admin', ['done', 'done', 'failed', 'skipped'], ['done', 'done'], 2],
+]) {
+  test(`hardening stops at ${failedStep} and reports unrun mutations as skipped`, async ({ page, request }) => {
+    await mock(request, { confirmDelayMs: 20, setLock: {
+      id: FRONT_DOOR, adminProvenance: 'pairing_generated', adminPasscode: '12345678',
+      passcodes: [
+        { id: 'unmanaged-one', code: '123451', type: 'permanent', managed: false },
+        { id: 'unmanaged-two', code: '123452', type: 'permanent', managed: false },
+        { id: 'managed', code: '123453', type: 'permanent', managed: true },
+        { id: 'admin', code: '12345678', type: 'permanent', managed: false },
+      ],
+    }, failHardenStep: { step: failedStep, code: 'storage_error' } });
+    await login(page);
+    await recordEvents(page);
+    const outcome = await hardeningOutcome(page, { dryRun: false });
+    expect(outcome.result).toBeUndefined();
+    expect(outcome.error).toMatchObject({ code: 'hardening_failed', completion: 'failed', dryRun: false, hardened: false });
+    expect(outcome.error.steps.map((step) => step.status)).toEqual(statuses);
+    expect(outcome.error.steps.find((step) => step.step === failedStep).error).toBe('storage_error');
+    expect(outcome.error.steps[1]).toMatchObject({ planned: 2, removed, preserved: 2 });
+    expect(outcome.error.steps[1].entries).toEqual([
+      { id: expect.stringMatching(/^[a-f0-9]{12}$/), status: entryStatuses[0], reason: 'unmanaged' },
+      { id: expect.stringMatching(/^[a-f0-9]{12}$/), status: entryStatuses[1], reason: 'unmanaged' },
+      { id: expect.stringMatching(/^[a-f0-9]{12}$/), status: 'preserved', reason: 'managed' },
+      { id: expect.stringMatching(/^[a-f0-9]{12}$/), status: 'preserved', reason: 'admin' },
+    ]);
+  });
 }
 
 test('lock methods answer with a job whose job.done reaches only the session that asked', async ({ page, browser }) => {

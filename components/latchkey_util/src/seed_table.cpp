@@ -13,6 +13,11 @@ constexpr size_t kSeedSize = 10;
 
 }
 
+SeedTable::~SeedTable() {
+    auto* bytes = reinterpret_cast<volatile uint8_t*>(seeds.data());
+    for (size_t i = 0; i < sizeof(seeds); ++i) bytes[i] = 0;
+}
+
 std::array<uint8_t, kSeedTableSize> encodeSeedTable(const SeedTable& table) {
     std::array<uint8_t, kSeedTableSize> out{};
     out[0] = kVersion;
