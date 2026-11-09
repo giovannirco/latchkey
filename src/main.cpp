@@ -64,6 +64,7 @@ extern "C" void app_main() {
     methods::registerPasscodes();
     methods::registerCredentials();
     methods::registerAdminPasscode();
+    methods::registerBackup();
     methods::registerMqtt();
     methods::registerSettings();
     methods::registerLog();

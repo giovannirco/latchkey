@@ -254,6 +254,8 @@ bool readLock(Reader& reader, BackupLock& lock) {
 
 }
 
+bool isBackupPassphrase(std::string_view password) { return password.size() >= 12 && validUtf8(password, 128); }
+
 SensitiveBuffer::~SensitiveBuffer() { clear(); }
 
 BackupLock::~BackupLock() {
@@ -397,7 +399,7 @@ bool parseBackupHeader(std::span<const uint8_t> bytes, BackupHeader& out) {
 
 BackupStatus sealBackup(SensitiveBuffer plaintext, std::string_view password, BackupCrypto& crypto,
                          SensitiveBuffer& out) {
-    if (plaintext.size() < 2 || password.size() < 12 || !validUtf8(password, 128)) return BackupStatus::Invalid;
+    if (plaintext.size() < 2 || !isBackupPassphrase(password)) return BackupStatus::Invalid;
     if (plaintext.size() > kMaxBackupPlaintext) return BackupStatus::TooLarge;
     const size_t plainSize = plaintext.size();
     const size_t envelopeSize = kBackupHeaderSize + plainSize + kBackupTagSize;
@@ -426,7 +428,7 @@ BackupStatus sealBackup(SensitiveBuffer plaintext, std::string_view password, Ba
 BackupStatus openBackup(SensitiveBuffer envelope, std::string_view password, BackupCrypto& crypto,
                          SensitiveBuffer& out) {
     if (envelope.size() < kBackupHeaderSize + kBackupTagSize + 2 || envelope.size() > kMaxBackupEnvelope ||
-        password.size() < 12 || !validUtf8(password, 128)) return BackupStatus::Invalid;
+        !isBackupPassphrase(password)) return BackupStatus::Invalid;
     BackupHeader header;
     if (!parseBackupHeader({envelope.data(), kBackupHeaderSize}, header)) return BackupStatus::Invalid;
     BackupKey key;

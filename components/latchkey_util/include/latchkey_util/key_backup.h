@@ -94,6 +94,7 @@ private:
 
 BackupStatus encodeBackup(std::span<const BackupLock> locks, SensitiveBuffer& out);
 BackupStatus decodeBackup(SensitiveBuffer plaintext, DecodedBackup& out);
+bool isBackupPassphrase(std::string_view password);
 
 struct BackupHeader {
     std::array<uint8_t, 16> salt{};

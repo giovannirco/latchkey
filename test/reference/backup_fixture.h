@@ -72,4 +72,43 @@ inline latchkey_util::DecodedBackup make(size_t count = 1, bool maximum = false)
     return decoded;
 }
 
+inline latchkey_util::DecodedBackup maximum() {
+    using namespace latchkey_util;
+    auto baseline = make(kMaxBackupLocks);
+    SensitiveBuffer original;
+    TEST_ASSERT_EQUAL_INT(static_cast<int>(BackupStatus::Ok), static_cast<int>(encodeBackup(baseline.locks(), original)));
+    size_t remaining = kMaxBackupPlaintext - original.size();
+    original.clear();
+    std::array<BackupLock, kMaxBackupLocks> locks;
+    std::copy(baseline.locks().begin(), baseline.locks().end(), locks.begin());
+    std::array<std::vector<uint8_t>, 3 * kMaxBackupLocks> bytes;
+    for (size_t index = 0; index < bytes.size() && remaining != 0; ++index) {
+        auto& labels = locks[index / 3].labels[index % 3];
+        const size_t added = std::min(remaining, size_t{2 + kMaxLabels * 63} - labels.size());
+        const size_t target = labels.size() + added;
+        const size_t count = (target - 2 + 62) / 63;
+        size_t names = target - 2 - count * 15;
+        LabelTable table;
+        for (size_t i = 0; i < count; ++i) {
+            const size_t length = std::min(names, size_t{48});
+            std::string name;
+            for (size_t j = 0; j < length / 2; ++j) name += "\xC3\xA9";
+            if (length % 2 != 0) name += 'X';
+            TEST_ASSERT_TRUE(table.put({i + 1, true, name, WeeklyWindow{0x7F, 0, 1440}}));
+            names -= length;
+        }
+        bytes[index] = table.encode();
+        TEST_ASSERT_EQUAL_UINT(target, bytes[index].size());
+        labels = bytes[index];
+        remaining -= added;
+    }
+    TEST_ASSERT_EQUAL_UINT(0, remaining);
+    SensitiveBuffer plaintext;
+    TEST_ASSERT_EQUAL_INT(static_cast<int>(BackupStatus::Ok), static_cast<int>(encodeBackup(locks, plaintext)));
+    TEST_ASSERT_EQUAL_UINT(kMaxBackupPlaintext, plaintext.size());
+    DecodedBackup decoded;
+    TEST_ASSERT_EQUAL_INT(static_cast<int>(BackupStatus::Ok), static_cast<int>(decodeBackup(std::move(plaintext), decoded)));
+    return decoded;
+}
+
 }

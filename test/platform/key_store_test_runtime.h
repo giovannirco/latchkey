@@ -162,4 +162,3 @@ size_t reservedEntries(uint32_t nextSequence) {
 }
 
 }
-
