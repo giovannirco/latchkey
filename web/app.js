@@ -44,6 +44,8 @@ const ERROR_TEXT = {
   already_claimed: 'This board already has an owner.',
   backup_required:
     "Back up this lock's keys before hardening it or turning its reset button off: with the button off, the backup is the only way back if the board is lost.",
+  admin_reconciled: 'The previous admin-code change was checked. No new code was sent. Review the current code before requesting another change.',
+  admin_unresolved: 'The previous admin-code outcome is still uncertain. The board kept its recovery information; check the lock before requesting another change.',
   network: 'Cannot reach the board. Check that this device is on the same network.',
   job_lost:
     'The connection to the board dropped before it reported the result. Check the lock, then try again if needed.',
@@ -188,11 +190,21 @@ const WEEKDAY_NAMES = ['Mondays', 'Tuesdays', 'Wednesdays', 'Thursdays', 'Friday
 
 const HARDEN_ITEMS = [
   ['backup', 'Back up the keys to an encrypted file'],
-  ['admin_passcode', 'Replace the super admin passcode with a random one'],
-  ['passcodes', 'Delete passcodes Latchkey did not create, the factory 123456 included'],
-  ['reset_button', 'Turn off the physical reset button'],
   ['time', "Set the lock's clock"],
+  ['passcodes', 'Remove known unmanaged passcodes'],
+  ['admin', 'Check the super admin passcode'],
+  ['resetButton', 'Protect the physical reset button'],
 ];
+const HARDEN_REASON_TEXT = {
+  owner: 'Preserve the owner-managed admin passcode.',
+  legacy_unknown: 'Its origin is unknown. Preserve it; review it in the admin-passcode settings.',
+  pairing_generated: 'Replace the admin code generated during pairing.',
+  hardening_generated: 'Preserve the admin code already replaced by hardening.',
+  confirm_candidate: 'Confirm the pending admin-code change without sending another code.',
+  confirm_previous: 'Confirm the previous admin code without sending another code.',
+  admin_unresolved: 'The admin-code outcome is unresolved. Review it before continuing.',
+  unverified_switch_layout: 'Reset-button protection is unavailable: its write command is unverified.',
+};
 const STATUS_TEXT = {
   pending: 'Pending',
   todo: 'To do',
@@ -200,6 +212,8 @@ const STATUS_TEXT = {
   done: 'Done',
   skipped: 'Skipped',
   failed: 'Failed',
+  planned: 'Planned',
+  preserved: 'Preserved',
 };
 
 const CREDENTIALS = {
@@ -345,7 +359,7 @@ function apiError(error) {
   return new ApiError(code || 'http', message, extra);
 }
 
-const CHAINED_METHODS = new Set(['locks.pair', 'lock.harden', 'lock.factoryReset']);
+const CHAINED_METHODS = new Set(['locks.pair', 'lock.harden', 'lock.factoryReset', 'keys.export', 'keys.import']);
 
 function timeoutFor(method) {
   if (CHAINED_METHODS.has(method)) return CHAINED_TIMEOUT_MS;
@@ -1511,7 +1525,7 @@ async function viewPair(view) {
   });
 }
 
-function hardeningPanel(lock, { title, finish = false, onDone } = {}) {
+function hardeningPanel(lock, { title, finish = false } = {}) {
   const rows = new Map();
   const items = HARDEN_ITEMS.map(([key, text]) => {
     const badge = h('span', { class: 'badge' }, STATUS_TEXT.pending);
@@ -1527,65 +1541,97 @@ function hardeningPanel(lock, { title, finish = false, onDone } = {}) {
     row.badge.textContent = STATUS_TEXT[status];
     if (text !== undefined) row.detail.textContent = text ? `(${text})` : '';
   };
-  const markStep = (step) => mark(step.step, step.skipped ? 'skipped' : step.ok ? 'done' : 'failed', step.detail || '');
-  if (lock.backedUp) mark('backup', 'done');
-
+  mark('backup', lock.backedUp ? 'done' : 'todo');
   const alert = h('div', { class: 'alert', role: 'alert', hidden: true });
+  const summary = h('p', { class: 'notice', role: 'status' }, 'Preview the current plan before making changes.');
   const exportButton = h('button', { class: 'button', type: 'button' }, icon('download'), 'Export keys…');
-  const hardenButton = h('button', { class: 'button primary', type: 'button' }, icon('shield'), 'Harden lock');
-  const done = h(
-    'div',
-    { class: 'success', hidden: true },
-    icon('check'),
-    h('p', null, h('strong', null, 'Lock hardened.'), ' Only Latchkey and the credentials you add here open it now.'),
-    finish ? h('a', { class: 'button primary', href: '#/locks' }, 'Go to the locks') : null,
-  );
+  const previewButton = h('button', { class: 'button', type: 'button' }, icon('list'), 'Preview hardening');
+  const hardenButton = h('button', { class: 'button primary', type: 'button', disabled: true }, icon('shield'), 'Apply hardening');
+  let executable = false;
+
+  function paint(result, dryRun) {
+    const names = HARDEN_ITEMS.slice(1).map(([key]) => key);
+    const valid = result && result.dryRun === dryRun && result.hardened === false &&
+      typeof result.executable === 'boolean' &&
+      (dryRun ? result.completion === 'preview' : ['partial', 'failed'].includes(result.completion)) &&
+      Array.isArray(result.steps) && result.steps.length === names.length &&
+      result.steps.every((step, index) => step && step.step === names[index] &&
+        ['planned', 'preserved', 'done', 'skipped', 'failed'].includes(step.status) &&
+        (!dryRun || !['done', 'failed'].includes(step.status))) &&
+      ['planned', 'removed', 'preserved'].every((key) => Number.isInteger(result.steps[1][key]) && result.steps[1][key] >= 0) &&
+      Object.hasOwn(HARDEN_REASON_TEXT, result.steps[2].reason) &&
+      result.steps[3].status === 'skipped' && result.steps[3].reason === 'unverified_switch_layout';
+    if (!valid) throw new Error('The board sent an invalid hardening report. Preview again before making changes.');
+    for (const step of result.steps) {
+      const detail = step.step === 'passcodes'
+        ? `${step.planned} planned, ${step.removed} removed, ${step.preserved} preserved`
+        : HARDEN_REASON_TEXT[step.reason] || '';
+      mark(step.step, step.status, step.error ? `${detail} ${errorText(new ApiError(step.error))}` : detail);
+    }
+    if (!dryRun) lock.hardened = false;
+    executable = dryRun && result.executable;
+    summary.textContent = dryRun
+      ? 'Preview only. No changes have been made.'
+      : result.completion === 'failed'
+        ? 'Hardening stopped. Confirmed steps remain applied. Preview the current state before another attempt.'
+        : 'Hardening partially completed. Reset-button protection was skipped; the lock is not fully hardened.';
+    if (dryRun && !result.executable) {
+      summary.textContent += lock.backedUp
+        ? ' The plan cannot run yet. Check the board clock and the admin-code outcome shown below.'
+        : " Back up this lock's keys before applying the plan.";
+    }
+  }
+
+  async function run(dryRun, button) {
+    executable = false;
+    alert.hidden = true;
+    exportButton.disabled = previewButton.disabled = hardenButton.disabled = true;
+    try {
+      await pending(button, async () => {
+        if (dryRun) {
+          const list = await rpc('locks.list');
+          const current = list.locks.find((item) => item.id === lock.id);
+          if (!current) throw new ApiError('not_paired');
+          Object.assign(lock, current);
+          mark('backup', lock.backedUp ? 'done' : 'todo');
+          for (const [key] of HARDEN_ITEMS.slice(1)) mark(key, 'pending', '');
+        }
+        paint(await rpc('lock.harden', { lock: lock.id, dryRun }), dryRun);
+      });
+    } catch (failure) {
+      if (failure.code === 'hardening_failed') {
+        try {
+          paint(failure.extra, false);
+        } catch (invalid) {
+          showError(alert, invalid);
+          summary.textContent = 'Confirmed changes may remain. Preview the current state before requesting another attempt.';
+        }
+      } else {
+        showError(alert, failure);
+        summary.textContent = dryRun
+          ? 'Preview could not be completed. No hardening was requested.'
+          : 'Confirmed changes may remain. Refresh with Preview hardening before requesting another attempt.';
+        if (!dryRun) alert.append(h('p', null, 'Confirmed changes may remain. Preview the current state before retrying.'));
+      }
+    } finally {
+      exportButton.disabled = previewButton.disabled = false;
+      hardenButton.disabled = !executable;
+    }
+  }
 
   async function runExport() {
     const result = await exportKeysDialog(lock);
     if (!result) return;
-    lock.backedUp = true;
-    mark('backup', 'done');
+    lock.backedUp = result.locks.includes(lock.id);
+    mark('backup', lock.backedUp ? 'done' : 'todo');
+    executable = false;
+    hardenButton.disabled = true;
+    summary.textContent = 'Backup saved. Preview the current plan before applying hardening.';
     alert.hidden = true;
   }
-
-  async function runHarden() {
-    alert.hidden = true;
-    for (const [key] of HARDEN_ITEMS) if (key !== 'backup') mark(key, 'pending', '');
-    const off = events.on('harden.step', (data) => {
-      if (data.lock === lock.id) markStep(data);
-    });
-    try {
-      const { steps = [] } = await pending(hardenButton, () => rpc('lock.harden', { lock: lock.id }));
-      for (const step of steps) markStep(step);
-      lock.hardened = true;
-      exportButton.hidden = true;
-      hardenButton.hidden = true;
-      done.hidden = false;
-      if (onDone) onDone(lock);
-    } catch (failure) {
-      if (failure.code !== 'backup_required') {
-        toastError(failure);
-        return;
-      }
-      mark('backup', 'todo');
-      alert.replaceChildren(
-        h('p', null, errorText(failure)),
-        h(
-          'button',
-          { class: 'button primary', type: 'button', onclick: runExport },
-          icon('download'),
-          'Export keys now',
-        ),
-      );
-      alert.hidden = false;
-    } finally {
-      off();
-    }
-  }
-
   exportButton.addEventListener('click', runExport);
-  hardenButton.addEventListener('click', runHarden);
+  previewButton.addEventListener('click', () => run(true, previewButton));
+  hardenButton.addEventListener('click', () => run(false, hardenButton));
   return h(
     'div',
     { class: 'stack' },
@@ -1593,41 +1639,77 @@ function hardeningPanel(lock, { title, finish = false, onDone } = {}) {
     h(
       'p',
       null,
-      'Hardening closes the doors a factory lock leaves open. The board asks for its button once, then runs every step.',
+      'Review passcode cleanup and admin-code handling first. Applying the plan needs the board button. Reset-button writes remain unavailable.',
     ),
     h('ol', { class: 'checklist', 'aria-label': 'Hardening steps' }, items),
+    summary,
     alert,
-    done,
-    h('div', { class: 'row' }, exportButton, hardenButton),
+    h('div', { class: 'row' }, exportButton, previewButton, hardenButton),
+    finish ? h('a', { class: 'button', href: '#/locks' }, 'Go to the locks') : null,
   );
 }
 
+function backupPassphrase(input) {
+  const length = new TextEncoder().encode(input.value).length;
+  const message = input.value.includes('\0')
+    ? 'The passphrase cannot contain a NUL character.'
+    : length < 12 || length > 128
+      ? 'Use a passphrase of 12 to 128 UTF-8 bytes. Accented characters and emoji use more than one byte.'
+      : '';
+  input.setCustomValidity(message);
+  if (message) throw new Error(message);
+  return input.value;
+}
+
+function backupPassphraseInput(autocomplete) {
+  const input = h('input', { type: 'password', required: true, autocomplete });
+  input.addEventListener('input', () => input.setCustomValidity(''));
+  return input;
+}
+
 function exportKeysDialog(lock) {
-  const passphrase = h('input', {
-    type: 'password',
-    minlength: '12',
-    maxlength: '128',
-    required: true,
-    autocomplete: 'new-password',
-  });
+  const passphrase = backupPassphraseInput('new-password');
   const repeat = h('input', { type: 'password', required: true, autocomplete: 'new-password' });
   return formDialog('Export keys', {
     intro: lock
       ? `Saves the keys of ${lock.name} to a file encrypted with this passphrase. The board asks for its button.`
       : 'Saves the keys of every lock to a file encrypted with this passphrase. The board asks for its button.',
     fields: [
-      field('Passphrase', passphrase, 'At least 12 characters. Without it nobody can open the file, you included.'),
+      field('Passphrase', passphrase, '12 to 128 UTF-8 bytes. Spaces are kept exactly. Without it you cannot open the file.'),
       field('Repeat passphrase', repeat),
     ],
     submit: 'Export',
     onSubmit: async () => {
       if (passphrase.value !== repeat.value) throw new Error('The passphrases do not match.');
-      const params = { passphrase: passphrase.value };
+      const params = { passphrase: backupPassphrase(passphrase) };
       if (lock) params.lock = lock.id;
-      const result = await rpc('keys.export', params);
+      let result;
+      try {
+        result = await rpc('keys.export', params);
+      } catch (failure) {
+        if (failure.code === 'too_large') {
+          throw new Error('The backup exceeds the board limit. Please export individual locks from their Device pages.');
+        }
+        throw failure;
+      }
       passphrase.value = '';
       repeat.value = '';
-      download(base64Bytes(result.backup || ''), `latchkey-backup-${localDate()}.lkb`);
+      if (typeof result.backup !== 'string' || !result.backup || !Array.isArray(result.locks) ||
+          !result.locks.length || result.locks.some((id) => typeof id !== 'string') ||
+          (lock && (result.locks.length !== 1 || result.locks[0] !== lock.id))) {
+        throw new Error('The board sent an invalid backup. No file was saved; export again.');
+      }
+      let bytes;
+      try {
+        bytes = base64Bytes(result.backup);
+      } catch {
+        throw new Error('The board sent an invalid backup. No file was saved; export again.');
+      }
+      if (!bytes.length || bytesBase64(bytes) !== result.backup) {
+        throw new Error('The board sent an invalid backup. No file was saved; export again.');
+      }
+      download(bytes, `latchkey-backup-${localDate()}.lkb`);
+      for (const held of state.locks) if (result.locks.includes(held.id)) held.backedUp = true;
       toast('Key backup saved', { detail: 'Keep the file and its passphrase in different places.' });
       return result;
     },
@@ -1636,17 +1718,25 @@ function exportKeysDialog(lock) {
 
 function importKeysDialog() {
   const file = h('input', { type: 'file', accept: '.lkb,application/octet-stream', required: true });
-  const passphrase = h('input', { type: 'password', required: true, autocomplete: 'off' });
+  const passphrase = backupPassphraseInput('off');
   return formDialog('Import keys', {
     intro:
       'Restores locks from a backup made by keys.export, on this board or another one. The board asks for its button.',
     fields: [field('Backup file (.lkb)', file), field('Passphrase', passphrase)],
     submit: 'Import',
     onSubmit: async () => {
+      const phrase = backupPassphrase(passphrase);
+      if (!file.files[0].size || file.files[0].size > 8246) {
+        throw new Error('Choose a nonempty Latchkey backup of at most 8,246 bytes.');
+      }
       const bytes = new Uint8Array(await file.files[0].arrayBuffer());
-      const result = await rpc('keys.import', { passphrase: passphrase.value, backup: bytesBase64(bytes) });
+      const result = await rpc('keys.import', { passphrase: phrase, backup: bytesBase64(bytes) });
       passphrase.value = '';
-      const count = (result.imported || []).length;
+      if (!Array.isArray(result.imported) || !result.imported.length || result.imported.some((id) => typeof id !== 'string')) {
+        throw new Error('The board sent an invalid import report. Refresh the lock list before retrying.');
+      }
+      ({ locks: state.locks } = await rpc('locks.list'));
+      const count = result.imported.length;
       toast(count === 1 ? 'Imported 1 lock' : `Imported ${count} locks`);
       return result;
     },
@@ -2463,7 +2553,7 @@ async function renderSettings(panel, lock, has) {
         h(
           'p',
           { class: 'hint' },
-          'This passcode always opens the lock from the keypad. Hardening replaces it with a random one.',
+          'This passcode always opens the lock from the keypad. Hardening preserves owner-managed codes and codes of unknown origin.',
         ),
         h('div', { class: 'row' }, show, change),
       );
@@ -2708,16 +2798,7 @@ async function renderDevice(panel, lock, features) {
       : null,
   );
   const hardening = section('Hardening', 'shield');
-  hardening.body.append(
-    lock.hardened
-      ? h(
-          'p',
-          null,
-          h('span', { class: 'badge ok' }, icon('check'), 'Hardened'),
-          ' Default passcodes are gone and the reset button is off.',
-        )
-      : hardeningPanel(lock, {}),
-  );
+  hardening.body.append(hardeningPanel(lock));
   const forget = h('button', { class: 'button small', type: 'button' }, icon('trash'), 'Forget lock');
   const reset = h('button', { class: 'button small danger', type: 'button' }, icon('power'), 'Factory-reset lock');
   const danger = section('Danger zone', 'alert', [], 'danger-zone');

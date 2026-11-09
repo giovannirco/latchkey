@@ -19,7 +19,8 @@ As on the board, the lock methods (locks.scan, locks.pair, lock.status, lock.inf
 lock.unlock, lock.lock, lock.time.sync, lock.factoryReset, lock.passcodes.*, lock.fingerprints.*,
 lock.cards.*, lock.adminPasscode.*, lock.autolock.*, lock.passage.*, lock.sound.*, lock.resetButton.*,
 lock.privacyLock.*, lock.tamperAlert.*, lock.log.fetch) and the button-gated auth.rotateTotp and
-system.factoryReset run as jobs: the reply is {"job": id} and the outcome arrives as a job.done event
+system.factoryReset, keys.export, keys.import and lock.harden run as jobs: the reply is {"job": id}
+and the outcome arrives as a job.done event
 {"job", "result"} or {"job", "error"}, sent only to the sockets of the session that asked.
 
 lock.log.fetch answers {"entries", "last", "more"}: without "since" the newest 16 entries, with "since"
@@ -35,6 +36,11 @@ watch_state_unreadable (the log cursor was lost) or alerts_unreadable (the store
 read, so the board started a new list). These two methods do not use Bluetooth or run as jobs.
 locks.list includes alertCount and warnings; system.info includes warnings grouped by lock.
 
+lock.harden with dryRun:true previews without confirmation or mutation. Execution reports partial
+completion, preserves managed/admin codes and skips the unverified reset-button write. Backups use
+opaque fixture-only tokens tied to in-memory snapshots, not encryption or the board's backup format.
+They can be restored only within the same mock lifetime and never overwrite existing locks.
+
 Test hooks used by tools/ui-tests/:
 
 - POST /__mock/control  {"reset": true} restores the demo state; other keys: "confirm" ("auto" or
@@ -43,6 +49,7 @@ Test hooks used by tools/ui-tests/:
   lock without an event), "failNext" {"method", "code", "message"}, "failPassageAdd" {"after",
   "code", "message"} (the next lock.passage.add stores that many new windows, then fails like the
   board: with "after" above 0 the error carries "added" and its message says how many were added),
+  "failHardenStep" {"step", "code"} (stops execution at that planned step, retaining prior changes),
   "warnNext" {"method", "warning"} (adds a warning to the next result), "delay" {"method", "ms"} (holds the next reply), "scanExtra"
   [devices], "emit" [{"event", "data"}], "logLines" [{"level", "tag", "message"}] (adds lines to the
   board's log);
@@ -133,7 +140,6 @@ FULL_FEATURES = [
 ]
 BASIC_FEATURES = ["passcode", "auto_lock", "manual_lock"]
 PASSCODE_TYPES = ("permanent", "timed", "one_time", "cyclic")
-HARDEN_STEPS = ("admin_passcode", "passcodes", "reset_button", "time")
 ADMIN_PASSCODE_DIGITS = 7
 IN_USE = "that code is already in use on the lock"
 EASY_CODE_WARNING = (
@@ -301,6 +307,19 @@ def bool_param(params: dict, key: str) -> bool:
     return value
 
 
+def backup_passphrase(params: dict) -> str:
+    value = params.get("passphrase")
+    if not isinstance(value, str) or "\0" in value:
+        raise invalid("passphrase must be a string without NUL characters")
+    try:
+        length = len(value.encode("utf-8"))
+    except UnicodeEncodeError as error:
+        raise invalid("passphrase must be valid UTF-8") from error
+    if not 12 <= length <= 128:
+        raise invalid("passphrase must contain 12 to 128 UTF-8 bytes")
+    return value
+
+
 def digits_param(value: Any, *, lo: int = 4, hi: int = 9) -> str:
     if not isinstance(value, str) or not value.isdigit() or not lo <= len(value) <= hi:
         raise invalid(f"a passcode is {lo} to {hi} digits")
@@ -408,7 +427,7 @@ def demo_locks() -> list[dict]:
         "rssi": -61,
         "lastSeen": stamp - 12,
         "lastEvent": {"action": "lock", "method": "auto", "time": stamp - 600},
-        "hardened": True,
+        "hardened": False,
         "backedUp": True,
         "autolock": {"seconds": 5, "min": 1, "max": 900},
         "sound": {"enabled": True, "volume": 3},
@@ -416,6 +435,7 @@ def demo_locks() -> list[dict]:
         "privacyLock": False,
         "tamperAlert": True,
         "adminPasscode": random_digits(8),
+        "adminProvenance": "owner",
         "passcodes": [
             passcode("permanent", "Family", None),
             passcode("timed", "Cleaner", {"start": stamp - day, "end": stamp + 30 * day}),
@@ -460,6 +480,7 @@ def demo_locks() -> list[dict]:
         "privacyLock": None,
         "tamperAlert": None,
         "adminPasscode": "123456",
+        "adminProvenance": "legacy_unknown",
         "passcodes": [passcode("one_time", "Delivery", {"start": stamp, "end": stamp + 6 * 3600})],
         "fingerprints": [],
         "cards": [],
@@ -505,6 +526,7 @@ def new_lock(mac: str, name: str, admin_passcode: str) -> dict:
         "privacyLock": False,
         "tamperAlert": False,
         "adminPasscode": admin_passcode,
+        "adminProvenance": "pairing_generated",
         "passcodes": [passcode("permanent", "", None, managed=False, code="123456")],
         "fingerprints": [],
         "cards": [],
@@ -577,13 +599,14 @@ class Mock:
             self.blocked_until = 0.0
             self.fail_next: dict[str, RpcError] = {}
             self.fail_passage_add: dict[str, Any] | None = None
+            self.fail_harden_step: dict[str, Any] | None = None
             self.warn_next: dict[str, str] = {}
             self.delay_next: dict[str, float] = {}
             self.calls: list[dict] = []
             self.audit: list[dict] = []
             self.locks: dict[str, dict] = {lock["id"]: lock for lock in demo_locks()}
             self.nearby = demo_nearby()
-            self.backups: dict[str, dict] = {lock_id: copy.deepcopy(lock) for lock_id, lock in self.locks.items()}
+            self.backups: dict[bytes, tuple[bytes, dict[str, dict]]] = {}
             self.wifi = {
                 "configured": True,
                 "connected": True,
@@ -758,6 +781,7 @@ class Mock:
         if method.session and not self.session_valid(ctx.token):
             raise RpcError("unauthorized", "sign in first")
         generation = self.generation
+        audited = method.audited and not (name == "lock.harden" and params.get("dryRun") is True)
         try:
             with self.lock:
                 injected = self.fail_next.pop(name, None)
@@ -774,10 +798,10 @@ class Mock:
                 return self._start_job(name, method, ctx, params)
             result = self._warned(name, method.handler(self, ctx, params))
         except RpcError as err:
-            if method.audited and generation == self.generation:
+            if audited and generation == self.generation:
                 self.append_audit(name, ctx, params, err.code)
             raise
-        if method.audited and generation == self.generation:
+        if audited and generation == self.generation:
             self.append_audit(name, ctx, params, "ok")
         return result
 
@@ -791,18 +815,19 @@ class Mock:
     def _start_job(self, name: str, method: Method, ctx: Context, params: dict) -> dict[str, Any]:
         job = new_id("job")
         generation = self.generation
+        audited = method.audited and not (name == "lock.harden" and params.get("dryRun") is True)
 
         def run() -> None:
             try:
                 result = self._warned(name, method.handler(self, ctx, params))
             except RpcError as err:
                 if generation == self.generation:
-                    if method.audited:
+                    if audited:
                         self.append_audit(name, ctx, params, err.code)
                     self.emit("job.done", {"job": job, "error": err.to_json()}, generation, {ctx.token})
                 return
             if generation == self.generation:
-                if method.audited:
+                if audited:
                     self.append_audit(name, ctx, params, "ok")
                 self.emit("job.done", {"job": job, "result": result}, generation, {ctx.token})
 
@@ -835,6 +860,8 @@ class Mock:
                 self.fail_next[failure["method"]] = RpcError(failure["code"], failure.get("message", failure["code"]))
             if "failPassageAdd" in body:
                 self.fail_passage_add = dict(body["failPassageAdd"])
+            if "failHardenStep" in body:
+                self.fail_harden_step = dict(body["failHardenStep"])
             if "scanExtra" in body:
                 self.nearby.extend(dict(device) for device in body["scanExtra"])
             for line in body.get("logLines", []):
@@ -1098,7 +1125,6 @@ class Mock:
     def locks_forget(self, ctx: Context, params: dict) -> dict:
         lock = self.get_lock(params)
         with self.lock:
-            self.backups.setdefault(lock["id"], copy.deepcopy(lock))
             del self.locks[lock["id"]]
         return {}
 
@@ -1118,6 +1144,8 @@ class Mock:
         self.confirm("locks.pair")
         with self.radio(extra_s=1.0):
             lock = new_lock(mac, name, admin_passcode)
+            if chosen not in (None, ""):
+                lock["adminProvenance"] = "owner"
             with self.lock:
                 self.locks[mac] = lock
                 self.nearby = [item for item in self.nearby if item["mac"].upper() != mac]
@@ -1535,6 +1563,7 @@ class Mock:
             raise RpcError("lock_error", IN_USE)
         with self.radio():
             lock["adminPasscode"] = code
+            lock["adminProvenance"] = "owner"
         if generated:
             return {"code": code}
         return {"warning": EASY_CODE_WARNING} if is_easy_code(code) else {}
@@ -1548,39 +1577,102 @@ class Mock:
         with self.radio():
             return {"code": lock["adminPasscode"], "source": "lock", "matchesBoard": True}
 
-    def _harden_step(self, lock: dict, step: str) -> dict:
-        if step == "admin_passcode":
-            lock["adminPasscode"] = random_digits(8)
-            return {"step": step, "ok": True}
-        if step == "passcodes":
-            unknown = [entry for entry in lock["passcodes"] if not entry["managed"]]
-            lock["passcodes"] = [entry for entry in lock["passcodes"] if entry["managed"]]
-            return {"step": step, "ok": True, "detail": f"{len(unknown)} removed"}
-        if step == "reset_button":
-            if "reset_button" not in lock["features"]:
-                return {"step": step, "ok": True, "skipped": True, "detail": "the lock has no reset button switch"}
-            lock["resetButton"] = False
-            return {"step": step, "ok": True}
-        return {"step": step, "ok": True}
-
-    @rpc("lock.harden")
+    @rpc("lock.harden", job=True)
     def lock_harden(self, ctx: Context, params: dict) -> dict:
+        dry_run = bool_param(params, "dryRun") if "dryRun" in params else False
         lock = self.get_lock(params)
-        if not lock["backedUp"]:
-            raise RpcError("backup_required", "export this lock's keys with keys.export before hardening it")
-        if not self.config.time_synced:
-            raise RpcError("time_unsynced", "the board clock is not set yet")
-        self.confirm("lock.harden")
-        steps = []
-        with self.radio() as generation:
-            for step in HARDEN_STEPS:
-                if not self.wait(0.25, generation):
-                    raise RpcError("disconnected", "the mock was reset")
-                result = self._harden_step(lock, step)
-                steps.append(result)
-                self.emit("harden.step", {"lock": lock["id"], **result}, generation)
-            lock["hardened"] = True
-        return {"steps": steps}
+        if not dry_run:
+            if not lock["backedUp"]:
+                raise RpcError("backup_required", "export this lock's keys before hardening it")
+            if not self.config.time_synced:
+                raise RpcError("time_unsynced", "the board clock is not set yet")
+            self.confirm("lock.harden")
+            if not self.session_valid(ctx.token):
+                raise RpcError("unauthorized", "the session ended")
+            lock = self.get_lock(params)
+            if not lock["backedUp"]:
+                raise RpcError("backup_required", "export this lock's keys before hardening it")
+            if not self.config.time_synced:
+                raise RpcError("time_unsynced", "the board clock is not set yet")
+        with self.radio():
+            reason = lock.get("adminProvenance", "legacy_unknown")
+            entries = []
+            for entry in lock["passcodes"]:
+                kind = "unknown"
+                if entry["code"] == lock["adminPasscode"]:
+                    kind = "admin"
+                elif entry["managed"]:
+                    kind = "managed"
+                elif entry["type"] in PASSCODE_TYPES:
+                    kind = "unmanaged"
+                entries.append(
+                    {
+                        "id": hashlib.sha256(entry["id"].encode()).hexdigest()[:12],
+                        "status": "planned" if kind == "unmanaged" else "preserved",
+                        "reason": kind,
+                    }
+                )
+            planned = sum(entry["status"] == "planned" for entry in entries)
+            steps = [
+                {"step": "time", "status": "planned"},
+                {
+                    "step": "passcodes",
+                    "status": "planned" if planned else "preserved",
+                    "planned": planned,
+                    "removed": 0,
+                    "preserved": len(entries) - planned,
+                    "entries": entries,
+                },
+                {
+                    "step": "admin",
+                    "status": "planned"
+                    if reason in ("pairing_generated", "confirm_candidate", "confirm_previous")
+                    else "preserved",
+                    "reason": reason,
+                },
+                {
+                    "step": "resetButton",
+                    "status": "skipped",
+                    "reason": "unverified_switch_layout",
+                },
+            ]
+            result = {
+                "dryRun": dry_run,
+                "completion": "preview" if dry_run else "partial",
+                "executable": bool(lock["backedUp"] and self.config.time_synced and reason != "admin_unresolved"),
+                "hardened": False,
+                "steps": steps,
+            }
+            if dry_run:
+                return result
+            if not result["executable"]:
+                raise RpcError("admin_unresolved", "admin-code outcome is unresolved")
+            lock["hardened"] = False
+            stop, self.fail_harden_step = self.fail_harden_step, None
+            for step in steps:
+                if step["status"] != "planned":
+                    continue
+                if stop and step["step"] == stop["step"]:
+                    step.update(status="failed", error=stop["code"])
+                    result["completion"] = "failed"
+                    raise RpcError(
+                        "hardening_failed",
+                        "hardening stopped after a failed step",
+                        **result,
+                    )
+                if step["step"] == "passcodes":
+                    lock["passcodes"] = [
+                        entry for entry, view in zip(lock["passcodes"], entries) if view["status"] != "planned"
+                    ]
+                    step["removed"] = planned
+                    for entry in entries:
+                        if entry["status"] == "planned":
+                            entry["status"] = "done"
+                elif step["step"] == "admin" and reason == "pairing_generated":
+                    lock["adminPasscode"] = random_digits(ADMIN_PASSCODE_DIGITS)
+                    lock["adminProvenance"] = "hardening_generated"
+                step["status"] = "done"
+            return result
 
     @rpc("lock.factoryReset", job=True)
     def lock_factory_reset(self, ctx: Context, params: dict) -> dict:
@@ -1594,12 +1686,10 @@ class Mock:
                 )
         return {}
 
-    @rpc("keys.export")
+    @rpc("keys.export", job=True)
     def keys_export(self, ctx: Context, params: dict) -> dict:
-        passphrase = params.get("passphrase")
-        if not isinstance(passphrase, str) or not 12 <= len(passphrase) <= 128:
-            raise invalid("the passphrase needs 12 to 128 characters")
-        if params.get("lock") is not None:
+        passphrase = backup_passphrase(params)
+        if "lock" in params:
             ids = [self.get_lock(params)["id"]]
         else:
             with self.lock:
@@ -1607,37 +1697,48 @@ class Mock:
         if not ids:
             raise invalid("there are no locks to export")
         self.confirm("keys.export")
-        salt = secrets.token_bytes(16)
-        check = hmac.new(passphrase.encode(), salt, "sha256").digest()[:16]
-        blob = b"LKB1" + salt + check + json.dumps(ids).encode()
+        if not self.session_valid(ctx.token):
+            raise RpcError("unauthorized", "the session ended")
+        blob = b"LATCHKEY-MOCK-ONLY\0" + secrets.token_bytes(32)
         with self.lock:
+            if any(lock_id not in self.locks for lock_id in ids):
+                raise RpcError("not_paired", "a selected lock is no longer stored")
             for lock_id in ids:
                 self.locks[lock_id]["backedUp"] = True
-                self.backups[lock_id] = copy.deepcopy(self.locks[lock_id])
+            self.backups[blob] = (
+                hashlib.sha256(passphrase.encode()).digest(),
+                {lock_id: copy.deepcopy(self.locks[lock_id]) for lock_id in ids},
+            )
         return {"backup": base64.b64encode(blob).decode(), "locks": ids}
 
-    @rpc("keys.import")
+    @rpc("keys.import", job=True)
     def keys_import(self, ctx: Context, params: dict) -> dict:
-        passphrase = params.get("passphrase")
+        passphrase = backup_passphrase(params)
         backup = params.get("backup")
-        if not isinstance(passphrase, str) or not isinstance(backup, str):
+        if not isinstance(backup, str):
             raise invalid("passphrase and backup are required")
         try:
             blob = base64.b64decode(backup, validate=True)
-            ids = json.loads(blob[36:]) if blob.startswith(b"LKB1") else None
         except ValueError:
-            ids = None
-        if not isinstance(ids, list):
-            raise invalid("this is not a Latchkey key backup")
-        check = hmac.new(passphrase.encode(), blob[4:20], "sha256").digest()[:16]
-        if not hmac.compare_digest(check, blob[20:36]):
-            raise invalid("wrong passphrase, or the backup is damaged")
+            raise invalid("this is not a mock backup fixture") from None
+        saved = self.backups.get(blob)
+        if saved is None:
+            raise invalid("this is not a mock backup fixture")
         self.confirm("keys.import")
+        if not self.session_valid(ctx.token):
+            raise RpcError("unauthorized", "the session ended")
+        if not hmac.compare_digest(hashlib.sha256(passphrase.encode()).digest(), saved[0]):
+            raise invalid("wrong passphrase, or the backup is damaged")
         with self.lock:
-            restored = [lock_id for lock_id in ids if lock_id in self.backups]
-            for lock_id in restored:
-                self.locks.setdefault(lock_id, copy.deepcopy(self.backups[lock_id]))
-        return {"imported": restored}
+            if any(lock_id in self.locks for lock_id in saved[1]):
+                raise RpcError(
+                    "conflict",
+                    "a backup lock is already stored; existing locks are never overwritten",
+                )
+            if len(self.locks) + len(saved[1]) > 8:
+                raise RpcError("storage_full", "not enough room for every lock in the backup")
+            self.locks.update(copy.deepcopy(saved[1]))
+        return {"imported": list(saved[1])}
 
     @rpc("audit.list", audited=False)
     def audit_list(self, ctx: Context, params: dict) -> dict:

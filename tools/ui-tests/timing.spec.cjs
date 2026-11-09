@@ -27,7 +27,16 @@ async function startExport(page) {
 
 async function startHarden(page) {
   await openLock(page, 'Shed', 'Device');
-  await page.getByRole('button', { name: 'Harden lock' }).click();
+  await page.getByRole('button', { name: 'Preview hardening' }).click();
+}
+
+async function startImport(page) {
+  await page.getByRole('link', { name: 'Security', exact: true }).click();
+  await page.getByRole('button', { name: 'Import keys' }).click();
+  const dialog = page.getByRole('dialog', { name: 'Import keys' });
+  await dialog.getByLabel('Backup file (.lkb)').setInputFiles({ name: 'fixture.lkb', mimeType: 'application/octet-stream', buffer: Buffer.from('opaque fixture') });
+  await dialog.getByLabel('Passphrase').fill(PASSPHRASE);
+  await dialog.getByRole('button', { name: 'Import', exact: true }).click();
 }
 
 async function startPair(page) {
@@ -48,7 +57,8 @@ async function startFactoryReset(page) {
 
 const BUDGETS = [
   ['system.reboot', 15, startReboot],
-  ['keys.export', 45, startExport],
+  ['keys.export', 240, startExport],
+  ['keys.import', 240, startImport],
   ['lock.unlock', 100, startUnlock],
   ['lock.harden', 240, startHarden],
   ['locks.pair', 240, startPair],
@@ -60,7 +70,9 @@ for (const [method, seconds, start] of BUDGETS) {
     await page.clock.install();
     await login(page);
     await mock(request, { delay: { method, ms: 600_000 } });
+    const sent = page.waitForRequest((request) => request.url().endsWith('/api/rpc') && request.postDataJSON()?.method === method);
     await start(page);
+    await sent;
     await page.clock.fastForward((seconds - 5) * 1000);
     await page.waitForTimeout(300);
     await expect(page.getByText(NO_REPLY)).toHaveCount(0);

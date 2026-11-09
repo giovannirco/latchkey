@@ -8,7 +8,7 @@ test('the dashboard lists each lock with state, battery and warnings', async ({ 
   const front = lockCard(page, 'Front door');
   await expect(front).toContainText('Locked');
   await expect(front).toContainText('87%');
-  await expect(front).not.toContainText('Not hardened');
+  await expect(front).toContainText('Not hardened');
 
   const shed = lockCard(page, 'Shed');
   await expect(shed).toContainText('Unlocked');
