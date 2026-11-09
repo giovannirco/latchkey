@@ -40,6 +40,8 @@ In progress: the Bluetooth link and lock manager on the board, over-the-air upda
 
 [SECURITY.md](SECURITY.md) has the full model and how to report a vulnerability; [docs/protocol.md](docs/protocol.md) has the protocol notes and its limits.
 
+An unlock alert just after a board restart can be the board's own unlock if it restarted before reading that unlock from the lock's log. Otherwise its unlock replies are matched by record id; only replies without an id use a time window. Log timestamps use the current and preceding clock offsets, so older history spanning more offset changes can have inaccurate times.
+
 ## Supported boards
 
 | Env | Board name | Flash | Button | Console |

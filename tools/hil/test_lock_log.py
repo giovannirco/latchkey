@@ -4,7 +4,7 @@ TTLock lock held by the ESP32-S3. The checks that need no lock run on any board.
 
 Log entries carry what the lock recorded, and passcode entries record the code typed, so the suite asserts on the
 entry shape, the record numbers and the record types only, and never prints an entry. Reading the log changes
-nothing on the lock. The unlock test moves the owner's bolt once and locks it again. The time-zone test changes the
+nothing on the lock. The unlock test restores the bolt's starting state. The time-zone test changes the
 board's time zone for a few minutes and puts the one it found back, so the lock clock is set twice.
 """
 
@@ -126,6 +126,8 @@ def test_the_log_shows_the_newest_entries_then_only_newer_ones(
 
 
 def test_an_unlock_by_the_board_raises_no_alert(console: Console, held: dict[str, Any], lock_mac: str) -> None:
+    initial = console.call("lock.status", {"lock": lock_mac}, timeout=LOCK_TIMEOUT_S)["state"]
+    assert initial in {"locked", "unlocked"}
     before = fetch(console, lock_mac)
     console.events.clear()
     seen = len(console.lines)
@@ -133,7 +135,8 @@ def test_an_unlock_by_the_board_raises_no_alert(console: Console, held: dict[str
     try:
         assert console.call("lock.unlock", {"lock": lock_mac}, timeout=LOCK_TIMEOUT_S)["state"] == "unlocked"
     finally:
-        console.call("lock.lock", {"lock": lock_mac}, timeout=LOCK_TIMEOUT_S)
+        if initial == "locked":
+            assert console.call("lock.lock", {"lock": lock_mac}, timeout=LOCK_TIMEOUT_S)["state"] == initial
     ended = time.time()
     wait_line(console, READ_LINE, seen, 60.0)
     after = fetch(console, lock_mac, since=before["last"])
@@ -144,6 +147,7 @@ def test_an_unlock_by_the_board_raises_no_alert(console: Console, held: dict[str
     assert alerts(console, lock_mac) == []
     replied = [found.group(1) for line in console.lines[seen:] if (found := REPLY_ID.search(line))]
     logged = [found.group(2) for line in console.lines[seen:] if (found := LOGGED_ID.search(line))]
+    assert replied and replied == logged[:1]
     print(
         f"unlock: log entry {unlocks[0]['time'] - int(started):+d} s from the request, "
         f"{len(after['entries'])} new entries {[entry['type'] for entry in after['entries']]}; record id in the reply "

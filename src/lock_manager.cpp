@@ -30,10 +30,10 @@
 #include "latchkey_util/ble_adv.h"
 #include "latchkey_util/job_queue.h"
 #include "latchkey_util/lock_watch.h"
+#include "latchkey_util/log_watch.h"
 #include "latchkey_util/pair_verdict.h"
 #include "latchkey_util/repeat_filter.h"
 #include "latchkey_util/seed_table.h"
-#include "latchkey_util/unlock_ledger.h"
 #include "latchkey_util/watch_schedule.h"
 #include "lock_log.h"
 #include "store.h"
@@ -119,9 +119,8 @@ struct Live {
     bool timeSyncTried = false;
     bool featuresTried = false;
     bool warnedUnpaired = false;
-    latchkey_util::WatchState watch;
+    latchkey_util::LogWatch watch{kUnlocksKept, kUnlockKeepSeconds};
     latchkey_util::WatchSchedule schedule{kWatchIntervalMs, kWatchRetryMs, kWatchGapMs};
-    latchkey_util::UnlockLedger ledger{kUnlocksKept, kUnlockKeepSeconds};
 };
 
 struct Lock {
@@ -723,14 +722,14 @@ Status openLink(const Record& record) {
 int64_t monotonicMs() { return esp_timer_get_time() / 1000; }
 
 void saveWatch(Lock& lock, const latchkey_util::WatchState& state) {
-    if (state == lock.live.watch) {
+    if (state == lock.live.watch.state()) {
         return;
     }
     const esp_err_t error = store::watch::save(lock.record.mac, state);
     if (error != ESP_OK) {
         ESP_LOGE(TAG, "cannot store where the log of %s was read up to: %s", lock.record.mac, esp_err_to_name(error));
     }
-    lock.live.watch = state;
+    lock.live.watch.state() = state;
 }
 
 void noteClockSet(const std::string& mac, int32_t offset, int64_t utc) {
@@ -739,14 +738,21 @@ void noteClockSet(const std::string& mac, int32_t offset, int64_t utc) {
     if (lock == nullptr || s_erased) {
         return;
     }
-    latchkey_util::WatchState state = lock->live.watch;
-    state.clockKnown = true;
-    state.clockOffset = offset;
-    state.clockSetUtc = static_cast<uint32_t>(utc);
+    latchkey_util::WatchState state = lock->live.watch.state();
+    latchkey_util::clockSet(state, offset, utc);
     saveWatch(*lock, state);
 }
 
+Status readBeforeClock(ttlock::Session& session, const std::string& mac);
+
 Status setLockClock(ttlock::Session& session, const std::string& mac) {
+    if (!wallclock::synced()) {
+        return Status::TimeUnsynced;
+    }
+    const Status read = readBeforeClock(session, mac);
+    if (read != Status::Ok) {
+        return read;
+    }
     const int32_t offset = wallclock::utcOffsetSeconds();
     const Status status = session.syncTime();
     if (status == Status::Ok) {
@@ -828,13 +834,13 @@ Status readFeatures(ttlock::Session& session, const Lock& lock, rpc::Reply& repl
     return Status::Ok;
 }
 
-void noteUnlockAttempt(const std::string& mac, int64_t fromUtc, int64_t toUtc) {
+void noteUnlockAttempt(const std::string& mac, int64_t fromUtc, int64_t toUtc, std::optional<uint32_t> recordId) {
     std::lock_guard<std::mutex> guard(s_mutex);
     Lock* lock = findLocked(mac);
     if (lock == nullptr) {
         return;
     }
-    lock->live.ledger.note(fromUtc, toUtc);
+    lock->live.watch.noteUnlock(fromUtc, toUtc, recordId);
     lock->live.schedule.unlocked();
 }
 
@@ -843,7 +849,8 @@ Status operate(ttlock::Session& session, const Lock& lock, bool open, rpc::Reply
     const int64_t sentFrom = utcNow();
     const Status status = open ? session.unlock(out) : session.lock(out);
     if (open) {
-        noteUnlockAttempt(lock.record.mac, sentFrom, utcNow());
+        noteUnlockAttempt(lock.record.mac, sentFrom, utcNow(),
+                          out.hasRecord ? std::optional(out.recordId) : std::nullopt);
     }
     if (status != Status::Ok) {
         return status;
@@ -890,8 +897,7 @@ Status resetLock(ttlock::Session& session, const Lock& lock, rpc::Reply& reply) 
 }
 
 struct WatchView {
-    latchkey_util::WatchState state;
-    latchkey_util::UnlockLedger ledger{kUnlocksKept, kUnlockKeepSeconds};
+    latchkey_util::LogWatch watch{kUnlocksKept, kUnlockKeepSeconds};
 };
 
 bool watchView(const std::string& mac, WatchView& out) {
@@ -900,8 +906,7 @@ bool watchView(const std::string& mac, WatchView& out) {
     if (lock == nullptr) {
         return false;
     }
-    out.state = lock->live.watch;
-    out.ledger = lock->live.ledger;
+    out.watch = lock->live.watch;
     return true;
 }
 
@@ -911,8 +916,8 @@ void keepWatch(const std::string& mac, const WatchView& view, bool answered, boo
     if (lock == nullptr || s_erased) {
         return;
     }
-    lock->live.ledger = view.ledger;
-    saveWatch(*lock, view.state);
+    saveWatch(*lock, view.watch.state());
+    lock->live.watch = view.watch;
     lock->live.schedule.attempted(monotonicMs(), answered);
     if (more) {
         lock->live.schedule.more();
@@ -926,21 +931,30 @@ int32_t logOffset(const latchkey_util::WatchState& state) {
 Status readNewEntries(ttlock::Session& session, const std::string& mac, WatchView& view, lock_log::Entries& fresh,
                       bool& more) {
     more = false;
-    const int32_t offset = logOffset(view.state);
-    if (!view.state.baselined) {
-        return lock_log::findEnd(session, offset, view.state);
+    const int32_t offset = logOffset(view.watch.state());
+    if (!view.watch.state().baselined) {
+        return lock_log::findEnd(session, offset, view.watch.state());
     }
-    const Status status = lock_log::catchUp(session, offset, view.state, fresh, more);
-    if (!fresh.items().empty()) {
-        lock_log::judge(mac, fresh, view.ledger, offset, utcNow());
+    return lock_log::catchUp(session, mac, offset, view.watch, fresh, more, utcNow());
+}
+
+Status readBeforeClock(ttlock::Session& session, const std::string& mac) {
+    WatchView view;
+    if (!watchView(mac, view)) {
+        return Status::NotPaired;
     }
-    return status;
+    lock_log::Entries fresh;
+    bool more = false;
+    const Status status = readNewEntries(session, mac, view, fresh, more);
+    keepWatch(mac, view, status == Status::Ok, more);
+    return status == Status::Ok && more ? Status::Busy : status;
 }
 
 Status keepClock(ttlock::Session& session, const std::string& mac, WatchView& view) {
     const int64_t now = utcNow();
     const int32_t offset = wallclock::utcOffsetAt(now);
-    const latchkey_util::ClockSync need = latchkey_util::clockSyncNeeded(view.state, offset, now, kClockDriftSeconds);
+    const latchkey_util::ClockSync need =
+        latchkey_util::clockSyncNeeded(view.watch.state(), offset, now, kClockDriftSeconds);
     if (need == latchkey_util::ClockSync::None) {
         return Status::Ok;
     }
@@ -949,9 +963,7 @@ Status keepClock(ttlock::Session& session, const std::string& mac, WatchView& vi
              need == latchkey_util::ClockSync::Now ? "set" : "corrected", mac.c_str(), static_cast<long>(offset),
              ttlock::toString(status));
     if (status == Status::Ok) {
-        view.state.clockKnown = true;
-        view.state.clockOffset = offset;
-        view.state.clockSetUtc = static_cast<uint32_t>(utcNow());
+        latchkey_util::clockSet(view.watch.state(), offset, utcNow());
         updateRecord(mac, [](Record& record) { record.flags |= store::locks::kFlagTimeCalibrated; });
     }
     return status;
@@ -967,7 +979,7 @@ Status watchLock(ttlock::Session& session, const std::string& mac) {
     Status status = readNewEntries(session, mac, view, fresh, more);
     ESP_LOGI(TAG, "read %u new log records of %s: %s", static_cast<unsigned>(fresh.items().size()), mac.c_str(),
              ttlock::toString(status));
-    if (status == Status::Ok) {
+    if (status == Status::Ok && !more) {
         status = keepClock(session, mac, view);
     }
     if (status != Status::Ok) {
@@ -988,7 +1000,7 @@ Status readLog(ttlock::Session& session, const Lock& lock, std::optional<uint16_
     bool more = false;
     Status status = readNewEntries(session, mac, view, shown, more);
     if (status == Status::Ok) {
-        const uint32_t top = view.state.cursor;
+        const uint32_t top = view.watch.state().cursor;
         uint32_t from = top > lock_log::kShownSlots ? top - lock_log::kShownSlots : 0;
         uint32_t to = top;
         if (since.has_value()) {
@@ -999,7 +1011,8 @@ Status readLog(ttlock::Session& session, const Lock& lock, std::optional<uint16_
             status = lock_log::readSlots(session, static_cast<uint16_t>(from), static_cast<uint16_t>(to), shown);
         }
         if (status == Status::Ok) {
-            reply = rpc::ok(lock_log::fetchResult(shown, since, to, more || to < top, logOffset(view.state)));
+            reply = rpc::ok(lock_log::fetchResult(shown, since, to, more || to < top,
+                                                 view.watch.state(), logOffset(view.watch.state())));
         }
     }
     keepWatch(mac, view, status == Status::Ok, more);
@@ -1520,7 +1533,7 @@ bool dueAlone(const Lock& lock, int64_t nowMs, int64_t utc) {
         return true;
     }
     const latchkey_util::ClockSync need =
-        latchkey_util::clockSyncNeeded(lock.live.watch, wallclock::utcOffsetAt(utc), utc, kClockDriftSeconds);
+        latchkey_util::clockSyncNeeded(lock.live.watch.state(), wallclock::utcOffsetAt(utc), utc, kClockDriftSeconds);
     return need == latchkey_util::ClockSync::Now && lock.live.schedule.dueWithLink(nowMs);
 }
 
@@ -1632,7 +1645,7 @@ void start() {
         const int64_t nowMs = monotonicMs();
         for (const Record& record : records) {
             Lock lock{record, Live{}};
-            const esp_err_t read = store::watch::load(record.mac, lock.live.watch);
+            const esp_err_t read = store::watch::load(record.mac, lock.live.watch.state());
             if (read != ESP_OK) {
                 ESP_LOGE(TAG, "cannot read where the log of %s was read up to: %s", record.mac, esp_err_to_name(read));
             }

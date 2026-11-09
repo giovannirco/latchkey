@@ -18,6 +18,11 @@ Notable changes to Latchkey, in the format of [Keep a Changelog](https://keepach
 
 - The remote unlock control is gone from the web UI and the mock: the board does not implement it, and the lock's `config_gateway_unlock` bit is listed as reported but not used.
 
+### Fixed
+
+- Unlock alerts match the lock's returned record id before using a time window, and each log page advances its cursor and consumes matching unlocks together.
+- Clock changes wait until the log backlog is read. Routine clock corrections preserve the preceding UTC offset, and old records across the most recent offset change keep their original times without raising duplicate alerts.
+
 ## [0.2.0] - 2026-11-08
 
 ### Added

@@ -8,8 +8,7 @@
 #include <vector>
 
 #include "cJSON.h"
-#include "latchkey_util/lock_watch.h"
-#include "latchkey_util/unlock_ledger.h"
+#include "latchkey_util/log_watch.h"
 #include "ttlock/session.h"
 #include "ttlock/types.h"
 
@@ -36,14 +35,12 @@ private:
 
 ttlock::Status findEnd(ttlock::Session& session, int32_t offset, latchkey_util::WatchState& state);
 
-ttlock::Status catchUp(ttlock::Session& session, int32_t offset, latchkey_util::WatchState& state, Entries& fresh,
-                       bool& more);
+ttlock::Status catchUp(ttlock::Session& session, const std::string& mac, int32_t offset,
+                       latchkey_util::LogWatch& watch, Entries& fresh, bool& more, int64_t nowUtc);
 
 ttlock::Status readSlots(ttlock::Session& session, uint16_t from, uint16_t to, Entries& out);
 
-void judge(const std::string& mac, const Entries& fresh, latchkey_util::UnlockLedger& ledger, int32_t offset,
-           int64_t nowUtc);
-
-cJSON* fetchResult(const Entries& entries, std::optional<uint16_t> since, uint32_t until, bool more, int32_t offset);
+cJSON* fetchResult(const Entries& entries, std::optional<uint16_t> since, uint32_t until, bool more,
+                    const latchkey_util::WatchState& state, int32_t offset);
 
 }

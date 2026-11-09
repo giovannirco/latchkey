@@ -100,25 +100,28 @@ Status findEnd(ttlock::Session& session, int32_t offset, latchkey_util::WatchSta
     return Status::Ok;
 }
 
-Status catchUp(ttlock::Session& session, int32_t offset, latchkey_util::WatchState& state, Entries& fresh,
-               bool& more) {
+void report(const std::string& mac, const LogPage& page, const latchkey_util::PageJudgement& judged,
+            const latchkey_util::WatchState& state, int32_t offset, int64_t nowUtc);
+
+Status catchUp(ttlock::Session& session, const std::string& mac, int32_t offset, latchkey_util::LogWatch& watch,
+               Entries& fresh, bool& more, int64_t nowUtc) {
     more = false;
     for (size_t pages = 0; pages < kPagesPerRead; ++pages) {
         LogPage page;
         const PageWipe wipe{page};
-        const Status status = session.fetchLogPage(state.cursor, page);
+        const Status status = session.fetchLogPage(watch.state().cursor, page);
         if (status != Status::Ok) {
             return status;
         }
-        const latchkey_util::LogStep step = latchkey_util::stepLog(state, page, offset);
-        if (step.fresh.empty()) {
+        const latchkey_util::PageJudgement judged = watch.readPage(page, offset, kToleranceSeconds, nowUtc);
+        if (judged.fresh.empty()) {
             return Status::Ok;
         }
-        for (const size_t index : step.fresh) {
+        report(mac, page, judged, watch.state(), offset, nowUtc);
+        for (const size_t index : judged.fresh) {
             fresh.add(page.entries[index]);
         }
-        state = step.state;
-        if (!step.more) {
+        if (!judged.more) {
             return Status::Ok;
         }
     }
@@ -146,16 +149,17 @@ Status readSlots(ttlock::Session& session, uint16_t from, uint16_t to, Entries& 
     return Status::Ok;
 }
 
-void judge(const std::string& mac, const Entries& fresh, latchkey_util::UnlockLedger& ledger, int32_t offset,
-           int64_t nowUtc) {
-    const std::vector<UnlockFinding> findings = ledger.judge(fresh.items(), offset, kToleranceSeconds, nowUtc);
+void report(const std::string& mac, const LogPage& page, const latchkey_util::PageJudgement& judged,
+            const latchkey_util::WatchState& state, int32_t offset, int64_t nowUtc) {
+    const std::vector<UnlockFinding>& findings = judged.findings;
     for (size_t i = 0; i < findings.size(); ++i) {
-        const LogEntry& entry = fresh.items()[i];
+        const LogEntry& entry = page.entries[judged.fresh[i]];
         ESP_LOGD(TAG, "log record %u type %u uid %u record id %u", entry.recordNumber, entry.type,
                  static_cast<unsigned>(entry.uid), static_cast<unsigned>(entry.recordId));
         switch (findings[i].verdict) {
             case UnlockVerdict::Alert:
-                raise(mac, entry, findings[i].method, offset, nowUtc);
+                raise(mac, entry, findings[i].method,
+                      latchkey_util::recordOffset(state, entry.recordNumber, offset), nowUtc);
                 break;
             case UnlockVerdict::Latchkey:
                 ESP_LOGI(TAG, "log record %u: the board's own unlock", entry.recordNumber);
@@ -170,7 +174,8 @@ void judge(const std::string& mac, const Entries& fresh, latchkey_util::UnlockLe
     }
 }
 
-cJSON* fetchResult(const Entries& entries, std::optional<uint16_t> since, uint32_t until, bool more, int32_t offset) {
+cJSON* fetchResult(const Entries& entries, std::optional<uint16_t> since, uint32_t until, bool more,
+                    const latchkey_util::WatchState& state, int32_t offset) {
     std::vector<LogEntry> listed;
     for (const LogEntry& entry : entries.items()) {
         if ((since.has_value() && entry.recordNumber <= *since) || entry.recordNumber >= until) {
@@ -184,7 +189,7 @@ cJSON* fetchResult(const Entries& entries, std::optional<uint16_t> since, uint32
         listed.push_back(shown);
     }
     cJSON* result = cJSON_CreateObject();
-    cJSON_AddItemToObject(result, "entries", lock_access::rawJson(latchkey_util::logEntriesJson(listed, offset)));
+    cJSON_AddItemToObject(result, "entries", lock_access::rawJson(latchkey_util::logEntriesJson(listed, state, offset)));
     const uint16_t last = listed.empty() ? since.value_or(0) : listed.back().recordNumber;
     cJSON_AddNumberToObject(result, "last", last);
     cJSON_AddBoolToObject(result, "more", more);
