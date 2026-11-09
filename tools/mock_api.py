@@ -25,9 +25,9 @@ system.factoryReset run as jobs: the reply is {"job": id} and the outcome arrive
 lock.log.fetch answers {"entries", "last", "more"}: without "since" the newest 16 entries, with "since"
 up to 16 entries after that record number, with "more" when others follow. The board reads the log in the
 background and sends lock.alert {"lock", "method", "time", "seq", "type"} for an unlock from an app it
-did not make, or a forced opening; tests emit one with the emit hook. lock.resetButton.set needs the
-board button both ways and refuses to turn the button off until the lock's keys are backed up
-(backup_required).
+did not make, or a forced opening; tests emit one with the emit hook. Switch writes refuse with
+unverified before any radio traffic or board-button wait. Turning the reset button off without a
+key backup refuses first with backup_required.
 
 Test hooks used by tools/ui-tests/:
 
@@ -1239,17 +1239,14 @@ class Mock:
             raise RpcError(
                 "backup_required", "export this lock's keys with keys.export before turning its reset button off"
             )
-        self.confirm("lock.resetButton.set")
-        with self.radio():
-            lock["resetButton"] = enabled
-        return {"enabled": enabled}
+        raise RpcError("unverified", "switch writes are not yet verified on this lock")
 
     def _switch(self, params: dict, key: str, *, write: bool) -> dict:
         lock = self.get_lock(params)
-        enabled = bool_param(params, "enabled") if write else None
+        if write:
+            bool_param(params, "enabled")
+            raise RpcError("unverified", "switch writes are not yet verified on this lock")
         with self.radio():
-            if write:
-                lock[key] = enabled
             return {"enabled": lock[key]}
 
     @rpc("lock.privacyLock.get", feature="privacy_lock", audited=False, job=True)

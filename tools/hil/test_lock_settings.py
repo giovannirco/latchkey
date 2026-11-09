@@ -4,8 +4,7 @@ lock held by the ESP32-S3. The checks that need no lock run on any board.
 
 The lock belongs to its owner: every setting the suite changes is put back exactly as it was read, in a finally
 block. The suite never clears the passage schedule and deletes only the window it added. It sends no SWITCH write
-(reset button, privacy lock, tamper alert) to the owner's lock: those are checked up to the point where the board
-would send one.
+(reset button, privacy lock, tamper alert) to the owner's lock: every write must refuse before sending a frame.
 """
 
 from __future__ import annotations
@@ -208,6 +207,21 @@ def test_the_reset_button_is_not_turned_off_without_a_key_backup(
     assert reply["error"]["code"] == "backup_required"
     assert "keys.export" in reply["error"]["message"]
     assert time.monotonic() - started < 5.0
+    assert frames(console) == before
+
+
+def test_unverified_switch_writes_send_no_frames(
+    console: Console, held: dict[str, Any], lock_mac: str
+) -> None:
+    features = features_of(console, lock_mac)
+    wait_idle(console)
+    before = frames(console)
+    for feature, prefix in SWITCHES.items():
+        if feature not in features:
+            continue
+        for enabled in (True, False):
+            expected = "backup_required" if feature == "reset_button" and not enabled else "unverified"
+            assert code_of(console, f"{prefix}.set", {"lock": lock_mac, "enabled": enabled}) == expected
     assert frames(console) == before
 
 

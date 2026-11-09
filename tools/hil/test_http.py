@@ -472,8 +472,8 @@ def test_the_reset_button_switch_is_checked_before_the_press(
     assert job_outcome(off)["error"]["code"] == "backup_required"
     assert events_named(off, "confirm.required") == []
     on = job_run(relay, session, origin, "lock.resetButton.set", {"lock": lock_mac, "enabled": True}, 45)
-    assert events_named(on, "confirm.required") == [{"action": "lock.resetButton.set", "timeoutMs": CONFIRM_TIMEOUT_MS}]
-    assert job_outcome(on)["error"]["code"] == "confirm_timeout"
+    assert events_named(on, "confirm.required") == []
+    assert job_outcome(on)["error"]["code"] == "unverified"
 
 
 def test_ending_the_session_ends_its_button_wait(

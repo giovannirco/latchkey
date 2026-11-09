@@ -5,41 +5,37 @@ async function headings(page) {
   return page.locator('#main h2').allInnerTexts();
 }
 
-test('privacy lock and tamper alert are marked experimental and remote unlock has no control', async ({
-  page,
-  request,
-}) => {
+test('unverified switches are read-only and remote unlock has no control', async ({ page, request }) => {
   await login(page);
   await openLock(page, 'Front door', 'Settings');
   const titles = await headings(page);
   expect(titles).toEqual(expect.arrayContaining(['Privacy lock', 'Tamper alert']));
   expect(titles).not.toContain('Remote unlock');
-  for (const name of ['Privacy lock', 'Tamper alert']) {
-    await expect(page.getByRole('region', { name })).toContainText('Experimental');
+  for (const [title, label] of [
+    ['Privacy lock', 'Privacy lock'],
+    ['Tamper alert', 'Tamper alert'],
+    ['Reset button', 'Physical reset button'],
+  ]) {
+    await expect(page.getByRole('region', { name: title })).toContainText('read-only');
+    await expect(page.getByRole('switch', { name: label })).toBeDisabled();
   }
   const privacy = page.getByRole('switch', { name: 'Privacy lock' });
   await expect(privacy).not.toBeChecked();
-  await privacy.check();
-  await expect(toast(page, 'Privacy lock turned on')).toBeVisible();
-  await expect(privacy).toBeChecked();
   const made = await calls(request);
   expect(made.some((call) => call.method.startsWith('lock.remoteUnlock.'))).toBe(false);
-  expect(made).toContainEqual({ method: 'lock.privacyLock.set', params: { lock: FRONT_DOOR, enabled: true } });
+  expect(made.some((call) => /lock\.(privacyLock|tamperAlert|resetButton)\.set/.test(call.method))).toBe(false);
 });
 
-test('the reset button cannot be turned off without a key backup', async ({ page, request }) => {
+test('the reset button stays read-only without a key backup', async ({ page, request }) => {
   await mock(request, { setLock: { id: FRONT_DOOR, resetButton: true, backedUp: false } });
   await login(page);
   await openLock(page, 'Front door', 'Settings');
   const reset = page.getByRole('switch', { name: 'Physical reset button' });
   await expect(reset).toBeChecked();
-  await expect(page.getByRole('region', { name: 'Reset button' })).toContainText('needs a key backup');
-  await reset.uncheck();
-  await expect(page.locator('#toasts [role="alert"]')).toContainText('Back up this lock');
-  await expect(reset).toBeChecked();
+  await expect(reset).toBeDisabled();
   await expect(boardButton(page)).toBeHidden();
   const refused = (await calls(request)).filter((call) => call.method === 'lock.resetButton.set');
-  expect(refused).toEqual([{ method: 'lock.resetButton.set', params: { lock: FRONT_DOOR, enabled: false } }]);
+  expect(refused).toEqual([]);
 });
 
 test('a sound setting without a volume shows only the switch', async ({ page, request }) => {

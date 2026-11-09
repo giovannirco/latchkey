@@ -752,7 +752,8 @@ function checkField(label, control) {
 
 function switchControl(label, checked, onChange) {
   const input = h('input', { type: 'checkbox', role: 'switch', checked });
-  input.addEventListener('change', () => onChange(input.checked, input));
+  input.disabled = !onChange;
+  if (onChange) input.addEventListener('change', () => onChange(input.checked, input));
   return h('label', { class: 'switch' }, input, h('span', null, label));
 }
 
@@ -2215,15 +2216,11 @@ async function renderSettings(panel, lock, has) {
     part.load = async () => {
       const { enabled } = await rpc('lock.resetButton.get', target);
       part.body.replaceChildren(
-        settingSwitch('Physical reset button', enabled, async (on) => {
-          const result = await rpc('lock.resetButton.set', { ...target, enabled: on });
-          toast(on ? 'Reset button turned on' : 'Reset button turned off');
-          return result;
-        }),
+        switchControl('Physical reset button', enabled),
         h(
           'p',
           { class: 'hint' },
-          'When on, anyone holding the reset button inside the lock can wipe it and pair it to their own app. Both ways need the button on the board, and turning it off needs a key backup made since pairing.',
+          'When on, anyone holding the reset button inside the lock can wipe it and pair it to their own app. This switch is read-only until its write command is verified on a real lock.',
         ),
       );
     };
@@ -2241,19 +2238,15 @@ async function renderSettings(panel, lock, has) {
   ];
   for (const [feature, title, method, hint] of switches) {
     if (!has(feature)) continue;
-    const part = section(title, 'shield', [h('span', { class: 'badge warn' }, 'Experimental')]);
+    const part = section(title, 'shield', [h('span', { class: 'badge' }, 'Read-only')]);
     part.load = async () => {
       const { enabled } = await rpc(`${method}.get`, target);
       part.body.replaceChildren(
-        settingSwitch(title, enabled, async (on) => {
-          const result = await rpc(`${method}.set`, { ...target, enabled: on });
-          toast(on ? `${title} turned on` : `${title} turned off`);
-          return result;
-        }),
+        switchControl(title, enabled),
         h(
           'p',
           { class: 'hint' },
-          `${hint} Latchkey has not yet confirmed this switch on a real lock, so check the lock after a change.`,
+          `${hint} This switch is read-only until its write command is verified on a real lock.`,
         ),
       );
     };

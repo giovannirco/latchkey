@@ -7,11 +7,11 @@ Notable changes to Latchkey, in the format of [Keep a Changelog](https://keepach
 
 ### Added
 
-- Lock settings from the board, each checked against the lock's feature bits before any Bluetooth: `lock.autolock.get`/`set`, `lock.passage.list`/`add`/`delete`/`clear` (weekly windows in the lock's local time), `lock.sound.get`/`set`, `lock.resetButton.get`/`set`, and `lock.privacyLock.*` and `lock.tamperAlert.*` (experimental). `lock.resetButton.set` needs the board's button from the web either way and answers `backup_required` to turning the button off until the encrypted key backup exists.
+- Lock settings from the board, each checked against the lock's feature bits before any Bluetooth: `lock.autolock.get`/`set`, `lock.passage.list`/`add`/`delete`/`clear` (weekly windows in the lock's local time), `lock.sound.get`/`set`, `lock.resetButton.get`, `lock.privacyLock.get` and `lock.tamperAlert.get`. All three switches are read-only until their write layout is verified on hardware; writes refuse with `unverified` before any Bluetooth frame or button prompt. Turning the reset button off without a key backup refuses first with `backup_required`.
 - The lock's operation log: `lock.log.fetch` reads new records from a cursor the board keeps per lock in NVS (found by bisection the first time) and answers the newest entries, or those after `since`, as `{entries, last, more}`; passcodes the lock records in its log never leave the board.
 - Unlock alerts: the board reads each lock's log after the connections it makes anyway, and about every six hours otherwise, and raises `lock.alert {lock, method, time, seq, type}` with an audit entry (source `board`) for every unlock from an app it did not make and every forced opening. The web UI shows a notice that stays until dismissed.
 - The lock's clock follows the board's time zone: the board sets it again after a time-zone change or a daylight-saving change, and once a day against drift.
-- Web UI: privacy lock and tamper alert marked experimental, features the board does not use listed apart, and the log reads on until it has every new entry.
+- Web UI: reset button, privacy lock and tamper alert shown read-only, features the board does not use listed apart, and the log reads on until it has every new entry.
 - `tools/hil/test_lock_settings.py` and `tools/hil/test_lock_log.py`, run on the owner's lock.
 
 ### Changed

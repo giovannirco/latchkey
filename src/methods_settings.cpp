@@ -8,6 +8,8 @@
 #include <utility>
 #include <vector>
 
+#include "mbedtls/platform_util.h"
+
 #include "access_requests.h"
 #include "latchkey_util/lock_settings.h"
 #include "lock_manager.h"
@@ -48,7 +50,6 @@ constexpr const char* kBackupFirst =
     "is the only way back if the board is lost";
 
 using SwitchRead = Status (Session::*)(bool&);
-using SwitchWrite = Status (Session::*)(bool);
 
 bool readWhole(const cJSON* item, double low, double high, double& out) {
     if (!cJSON_IsNumber(item) || std::floor(item->valuedouble) != item->valuedouble || item->valuedouble < low ||
@@ -159,21 +160,8 @@ rpc::Handler switchGet(Feature feature, const char* action, SwitchRead read) {
     };
 }
 
-Status writeSwitch(Session& session, SwitchWrite write, SwitchRead read, bool enabled, rpc::Reply& out) {
-    Status status = (session.*write)(enabled);
-    if (status != Status::Ok) {
-        return status;
-    }
-    bool now = false;
-    status = (session.*read)(now);
-    if (status == Status::Ok) {
-        out = rpc::ok(switchJson(now));
-    }
-    return status;
-}
-
-rpc::Handler switchSet(Feature feature, const char* action, SwitchWrite write, SwitchRead read) {
-    return [feature, action, write, read](const cJSON* params, const rpc::Context&) {
+rpc::Handler switchSet(Feature feature) {
+    return [feature](const cJSON* params, const rpc::Context&) {
         std::string mac;
         if (!lock_access::readLock(params, mac)) {
             return lock_access::invalid(lock_access::kLockMessage);
@@ -182,10 +170,20 @@ rpc::Handler switchSet(Feature feature, const char* action, SwitchWrite write, S
         if (!readEnabled(params, enabled)) {
             return lock_access::withTarget(lock_access::invalid(kEnabledMessage), mac);
         }
-        return onHeldLock(mac, feature, action,
-                          [write, read, enabled](Session& session, const Record&, rpc::Reply& out) {
-                              return writeSwitch(session, write, read, enabled, out);
-                          });
+        Record record{};
+        const bool held = lock_manager::record(mac, record);
+        const bool supported = ttlock::hasFeature(record.features, feature);
+        mbedtls_platform_zeroize(&record, sizeof(record));
+        if (!held) {
+            return lock_access::withTarget(rpc::fail("not_paired", "the board has no keys for this lock"), mac);
+        }
+        if (!supported) {
+            return lock_access::withTarget(rpc::fail("unsupported", "the lock does not report this switch"), mac);
+        }
+        if (feature == Feature::ResetButton && !enabled) {
+            return lock_access::withTarget(rpc::fail("backup_required", kBackupFirst), mac);
+        }
+        return lock_access::withTarget(rpc::fail("unverified", "switch writes are not yet verified on this lock"), mac);
     };
 }
 
@@ -383,44 +381,6 @@ rpc::Reply soundSet(const cJSON* params, const rpc::Context&) {
                       });
 }
 
-rpc::Reply readResetButton(const cJSON* params, std::string& mac, bool& enabled) {
-    if (!lock_access::readLock(params, mac)) {
-        return lock_access::invalid(lock_access::kLockMessage);
-    }
-    if (!readEnabled(params, enabled)) {
-        return lock_access::withTarget(lock_access::invalid(kEnabledMessage), mac);
-    }
-    rpc::Reply gated = lock_access::gate(mac, {Feature::ResetButton});
-    if (!gated.error.empty()) {
-        return lock_access::withTarget(std::move(gated), mac);
-    }
-    if (!enabled) {
-        return lock_access::withTarget(rpc::fail("backup_required", kBackupFirst), mac);
-    }
-    return lock_access::withTarget(rpc::ok(), mac);
-}
-
-rpc::Reply checkResetButton(const cJSON* params, const rpc::Context&) {
-    std::string mac;
-    bool enabled = false;
-    return readResetButton(params, mac, enabled);
-}
-
-rpc::Reply resetButtonSet(const cJSON* params, const rpc::Context&) {
-    std::string mac;
-    bool enabled = false;
-    rpc::Reply problem = readResetButton(params, mac, enabled);
-    if (!problem.error.empty()) {
-        return problem;
-    }
-    return lock_access::withTarget(
-        lock_manager::runOnLock(mac, "lock.resetButton.set",
-                                [enabled](Session& session, const Record&, rpc::Reply& out) {
-                                    return writeSwitch(session, &Session::resetButtonSet, &Session::resetButtonGet,
-                                                       enabled, out);
-                                }),
-        mac);
-}
 
 }
 
@@ -437,18 +397,16 @@ void registerSettings() {
     rpc::registerMethod("lock.sound.set", kWrite, soundSet);
     rpc::registerMethod("lock.resetButton.get", kRead,
                         switchGet(Feature::ResetButton, "lock.resetButton.get", &Session::resetButtonGet));
-    rpc::registerMethod("lock.resetButton.set", {.needsButton = true, .job = true}, resetButtonSet,
-                        checkResetButton);
+    const rpc::Handler resetButtonSet = switchSet(Feature::ResetButton);
+    rpc::registerMethod("lock.resetButton.set", {.needsButton = true, .job = true}, resetButtonSet, resetButtonSet);
     rpc::registerMethod("lock.privacyLock.get", kRead,
                         switchGet(Feature::PrivacyLock, "lock.privacyLock.get", &Session::privacyLockGet));
     rpc::registerMethod("lock.privacyLock.set", kWrite,
-                        switchSet(Feature::PrivacyLock, "lock.privacyLock.set", &Session::privacyLockSet,
-                                  &Session::privacyLockGet));
+                        switchSet(Feature::PrivacyLock));
     rpc::registerMethod("lock.tamperAlert.get", kRead,
                         switchGet(Feature::TamperAlert, "lock.tamperAlert.get", &Session::tamperAlertGet));
     rpc::registerMethod("lock.tamperAlert.set", kWrite,
-                        switchSet(Feature::TamperAlert, "lock.tamperAlert.set", &Session::tamperAlertSet,
-                                  &Session::tamperAlertGet));
+                        switchSet(Feature::TamperAlert));
 }
 
 }
