@@ -397,8 +397,7 @@ void registerSettings() {
     rpc::registerMethod("lock.sound.set", kWrite, soundSet);
     rpc::registerMethod("lock.resetButton.get", kRead,
                         switchGet(Feature::ResetButton, "lock.resetButton.get", &Session::resetButtonGet));
-    const rpc::Handler resetButtonSet = switchSet(Feature::ResetButton);
-    rpc::registerMethod("lock.resetButton.set", {.needsButton = true, .job = true}, resetButtonSet, resetButtonSet);
+    rpc::registerMethod("lock.resetButton.set", kWrite, switchSet(Feature::ResetButton));
     rpc::registerMethod("lock.privacyLock.get", kRead,
                         switchGet(Feature::PrivacyLock, "lock.privacyLock.get", &Session::privacyLockGet));
     rpc::registerMethod("lock.privacyLock.set", kWrite,
