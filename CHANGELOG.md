@@ -17,6 +17,7 @@ Notable changes to Latchkey, in the format of [Keep a Changelog](https://keepach
 - Repeated Wi-Fi changes release their temporary configuration instead of retaining heap.
 - Leaving System during a log read stops polling, including an unfinished page of results.
 - Lower task-stack allocation leaves more heap available for concurrent Bluetooth, MQTT, syslog and HTTPS.
+- HTTPS releases temporary startup credentials and completed-handshake allocations, and sends large responses in smaller TLS records.
 
 ## [0.3.0] - 2026-11-09
 

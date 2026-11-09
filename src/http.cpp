@@ -351,12 +351,15 @@ esp_err_t startRedirect() {
 
 void startServers(void* arg) {
     const uint32_t ipv4 = static_cast<uint32_t>(reinterpret_cast<uintptr_t>(arg));
-    latchkey_util::TlsIdentity identity;
-    esp_err_t error = certs::ensure(ipv4, identity);
-    if (error == ESP_OK) {
-        error = startHttps(identity);
+    esp_err_t error = ESP_OK;
+    {
+        latchkey_util::TlsIdentity identity;
+        error = certs::ensure(ipv4, identity);
+        if (error == ESP_OK) {
+            error = startHttps(identity);
+        }
+        mbedtls_platform_zeroize(identity.key.data(), identity.key.size());
     }
-    mbedtls_platform_zeroize(identity.key.data(), identity.key.size());
     if (error == ESP_OK) {
         error = startRedirect();
     }
