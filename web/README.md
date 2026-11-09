@@ -26,7 +26,9 @@ python3 tools/mock_api.py --port 8765
 
 Open http://127.0.0.1:8765/ and sign in with password `owner-pass` and code `123456`. The mock rebuilds the page on every load, so edits in `web/` show on reload. It keeps everything in memory: two demo locks, Front door (every feature) and Shed (passcodes and auto-lock only), plus a factory-fresh lock to pair. Buttons on the board are pressed for you after 2 s.
 
-`tools/mock_api.py` is the reference for the parameters and results of every method in the spec's API table, and for the events the UI listens to: `lock.state`, `lock.event`, `enroll.progress`, `confirm.required`, `confirm.result`, `scan.result`, `audit.appended`, `harden.step` and `job.done`. The lock methods and the button-gated ones answer `{"job": id}`, as the board does, and their outcome arrives later as `job.done` on the sockets of the session that asked; the UI accepts that shape from any method.
+`tools/mock_api.py` models the public parameters, results and events: `lock.state`, `lock.event`, `enroll.progress`, `confirm.required`, `confirm.result`, `scan.result`, `audit.appended` and `job.done`. Lock methods and button-gated methods answer `{"job": id}`, as the board does, and their outcome arrives later as `job.done` on the requesting session's sockets. Hardening preview uses a job without a button prompt or mutation; execution reports partial completion because reset-button writes remain unverified.
+
+Mock backups are opaque, fixture-only tokens with an in-memory snapshot, not encrypted recovery files. They restore only within the same mock lifetime and cannot be imported on a board. The browser treats their bytes as opaque and exercises scope, passphrase validation, conflicts and failure reporting. Native tests cover the real backup format and crypto; browser tests do not prove hardware recovery.
 
 ## Test
 

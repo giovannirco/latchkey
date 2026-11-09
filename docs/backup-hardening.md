@@ -48,6 +48,7 @@ The existing `lock.adminPasscode.set` success shape is unchanged. When a pending
 - Import tests exercise preflight, persisted-but-unreadable conflicts, capacity, failure at every write boundary, restart recovery and cleanup failure through a deterministic in-memory storage backend. Transport tests verify early authentication, bounded allocations and request ownership through a queued job.
 - Hardening tests cover preview without catch-up writes, managed/admin preservation, provenance, partial failure, backup prerequisites and zero switch writes. Admin-code tests cover lost acknowledgements, reboot, pending candidates and failed reconciliation/persistence.
 - Browser tests cover preview/confirmation, partial completion, export/import errors, longer job deadlines and honest state after failures.
+- Browser backup forms count UTF-8 bytes, preserve spaces and reject NUL before sending. Both backup jobs have a 240-second deadline, including confirmation and derivation, without claiming measured device timing. Malformed results cannot become an empty download or a success notice; failed hardening requires another preview before execution.
 - Both target builds, native tests, browser tests and source checks must pass. No HIL or device command runs in this pass.
 
 The transport implementation accepts 16 KiB authenticated HTTP bodies and USB lines; unauthenticated HTTP remains limited to 8 KiB. Rendered replies have a separate 32 KiB limit, allowing existing lists above the request limit. Credential/passcode list preflight reserves 256 bytes for the response envelope and returns `too_large` before JSON construction if its content bound exceeds 32,512 bytes or the existing heap checks fail. This is a deliberate bounded-output policy; pagination is unchanged.
@@ -63,6 +64,8 @@ These measurements count cJSON nodes and strings with aligned wiping headers, re
 Native builds fetch the exact cJSON component shared by both target lockfiles using the existing pinned `idf-component-manager==3.1.2` resolver. The build bootstrap verifies the locked content hash on download and cache reuse, needs no target build or full ESP-IDF installation, and performs no download from a running test binary. Run its tests with `uv run --no-project --with idf-component-manager==3.1.2 python -m unittest discover -s tools -p test_prepare_native.py`; `uvx platformio==6.2.0 test -e native` includes the production parser, dispatcher, HTTP, jobs and WebSocket host tests.
 
 ## Remaining acceptance
+
+`tools/mock_api.py` uses opaque fixture-only backup tokens and in-memory snapshots, not a second crypto implementation. Its backups work only during that mock lifetime and are incompatible with boards. It models public job results, confirmation, preview and partial failures; native tests exercise actual serialization, cryptography and persistence.
 
 Runtime heap during derivation/import, physical-button behavior and a two-board restore remain unverified until separate hardware work is authorized. Full reset-button hardening additionally needs the switch-layout proof in issue #20. OTA and its hardware checks are deferred beyond v1.0.0.
 
