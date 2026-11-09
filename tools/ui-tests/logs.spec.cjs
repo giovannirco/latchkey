@@ -56,6 +56,37 @@ test('turning the refresh off stops asking the board', async ({ page, request })
   await expect(view).toContainText('nobody asked for this line');
 });
 
+for (const phase of ['initial read', 'scheduled refresh', 'paged read']) {
+  test(`leaving System during its ${phase} stops polling`, async ({ page }) => {
+    const scheduled = phase === 'scheduled refresh';
+    await login(page, scheduled ? '#/system' : '#/');
+    if (scheduled) await expect(logs(page)).toContainText('SNTP synced');
+    let held;
+    let response;
+    let requests = 0;
+    await page.route('**/api/rpc', async (route) => {
+      if (route.request().postDataJSON().method !== 'system.logs') return route.continue();
+      requests += 1;
+      if (requests > 1) return route.continue();
+      held = route;
+      response = await route.fetch();
+    });
+    if (!scheduled) await page.getByRole('link', { name: 'System', exact: true }).click();
+    await expect.poll(() => Boolean(held && response)).toBe(true);
+    await page.getByRole('link', { name: 'Locks', exact: true }).click();
+    await expect(page.locator('#main h1')).toHaveText('Locks');
+    const finished = page.waitForResponse(
+      (reply) => reply.request().postDataJSON()?.id === held.request().postDataJSON().id,
+    );
+    const reply = await response.json();
+    if (phase === 'paged read') reply.result.more = true;
+    await held.fulfill({ response, json: reply });
+    await (await finished).finished();
+    await page.waitForTimeout(4000);
+    expect(requests).toBe(1);
+  });
+}
+
 test('Copy puts the shown lines on the clipboard as text', async ({ page, context }) => {
   await context.grantPermissions(['clipboard-read', 'clipboard-write']);
   await login(page, '#/system');

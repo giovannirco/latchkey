@@ -2975,6 +2975,7 @@ function logsSection() {
   let busy = false;
   let again = false;
   let generation = 0;
+  let stopped = false;
 
   const row = (line) =>
     h(
@@ -2991,8 +2992,10 @@ function logsSection() {
     let missed = 0;
     let cursor = since;
     for (;;) {
+      if (stopped) return null;
       const params = cursor === null ? { level: level.value } : { level: level.value, since: cursor };
       const page = await rpc('system.logs', params);
+      if (stopped) return null;
       if (cursor !== null && page.next < cursor) return null;
       fresh.push(...page.lines);
       missed += page.missed || 0;
@@ -3002,6 +3005,7 @@ function logsSection() {
   }
 
   async function refresh() {
+    if (stopped) return;
     if (busy) {
       again = true;
       return;
@@ -3010,6 +3014,7 @@ function logsSection() {
     const mine = generation;
     try {
       let result = await pull(next);
+      if (stopped) return;
       if (result === null) {
         lines = [];
         result = await pull(null);
@@ -3024,10 +3029,11 @@ function logsSection() {
         note.textContent = `${result.missed} lines were overwritten on the board before this page could show them.`;
       }
     } catch (failure) {
-      if (failure.code !== 'unauthorized') status.textContent = `Cannot refresh the lines: ${errorText(failure)}`;
+      if (!stopped && failure.code !== 'unauthorized')
+        status.textContent = `Cannot refresh the lines: ${errorText(failure)}`;
     } finally {
       busy = false;
-      if (again) {
+      if (again && !stopped) {
         again = false;
         refresh();
       }
@@ -3036,7 +3042,7 @@ function logsSection() {
 
   function schedule() {
     clearTimeout(timer);
-    if (!auto.checked) return;
+    if (stopped || !auto.checked) return;
     timer = setTimeout(async () => {
       if (!document.hidden) await refresh();
       schedule();
@@ -3064,6 +3070,8 @@ function logsSection() {
     }
   });
   cleanups.push(() => {
+    stopped = true;
+    again = false;
     clearTimeout(timer);
     generation += 1;
   });
