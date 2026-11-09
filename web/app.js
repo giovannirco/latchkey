@@ -2009,7 +2009,7 @@ function passcodeSection(lock, has) {
     h(
       'p',
       { class: 'hint' },
-      'The lock opens when a code appears anywhere among the digits typed, so others can hide it in a longer string. Use 7 to 9 digits, and avoid runs like 123456 or one repeated digit.',
+      'A lock may accept a valid code followed by extra digits. Digits before the code have not been verified. Use 7 to 9 digits, and avoid runs like 123456 or one repeated digit.',
     ),
     part.body,
   );
