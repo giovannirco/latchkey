@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-const { test, expect, login, boardButton, PASSWORD, TOTP } = require('./support.cjs');
+const { test, expect, login, lockCard, toast, boardButton, PASSWORD, TOTP } = require('./support.cjs');
 
 for (const signInAgain of [false, true]) {
   test(`a completed job from a signed-out session cannot reveal a secret${signInAgain ? ' after signing in again' : ''}`, async ({ page }) => {
@@ -40,8 +40,30 @@ for (const signInAgain of [false, true]) {
     const reply = page.waitForResponse((response) => response.url().endsWith('/api/rpc') && response.request().postDataJSON().method === 'auth.rotateTotp');
     await held.route.fulfill({ response: held.response });
     await reply;
-    await page.waitForTimeout(100);
+    await expect(toast(page, /The session that started this action ended/)).toBeVisible();
     await expect(page.getByRole('dialog', { name: 'New authenticator secret' })).toHaveCount(0);
     await expect(page.getByRole('heading', { name: signInAgain ? 'Security' : 'Sign in', exact: true })).toBeVisible();
   });
 }
+
+test('a late unauthorized reply cannot end a newer session', async ({ page }) => {
+  await login(page);
+  let held;
+  await page.route('**/api/rpc', (route) => {
+    if (route.request().postDataJSON().method !== 'lock.unlock') return route.continue();
+    held = route;
+  });
+  await lockCard(page, 'Front door').getByRole('button', { name: 'Unlock' }).click();
+  await expect.poll(() => Boolean(held)).toBe(true);
+  await page.getByRole('button', { name: 'Sign out', exact: true }).click();
+  await page.getByLabel('Password').fill(PASSWORD);
+  await page.getByLabel('Authenticator code').fill(TOTP);
+  await page.getByRole('button', { name: 'Sign in', exact: true }).click();
+  await expect(page.getByRole('heading', { name: 'Locks', exact: true })).toBeVisible();
+  await held.fulfill({
+    json: { id: held.request().postDataJSON().id, error: { code: 'unauthorized', message: 'session expired' } },
+  });
+  await expect(toast(page, /The session that started this action ended/)).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Locks', exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Sign out', exact: true })).toBeVisible();
+});
