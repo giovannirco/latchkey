@@ -5,6 +5,10 @@ Notable changes to Latchkey, in the format of [Keep a Changelog](https://keepach
 
 ## [Unreleased]
 
+### Fixed
+
+- Web requests keep their timeout until the response body finishes, so a stalled reply cannot leave an action waiting indefinitely.
+
 ## [0.4.0] - 2026-11-09
 
 ### Added

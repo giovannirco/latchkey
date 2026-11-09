@@ -359,6 +359,7 @@ async function call(method, params = {}) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), budget);
   let response;
+  let body;
   try {
     response = await fetch('/api/rpc', {
       method: 'POST',
@@ -368,16 +369,17 @@ async function call(method, params = {}) {
       body: JSON.stringify({ id: ++rpcSeq, method, params }),
       signal: controller.signal,
     });
+    try {
+      body = await response.json();
+    } catch (failure) {
+      if (controller.signal.aborted) throw failure;
+      throw new ApiError('http', `HTTP ${response.status}`);
+    }
   } catch (failure) {
-    throw new ApiError(failure.name === 'AbortError' ? 'no_reply' : 'network', failure.message);
+    if (failure instanceof ApiError) throw failure;
+    throw new ApiError(controller.signal.aborted ? 'no_reply' : 'network', failure.message);
   } finally {
     clearTimeout(timer);
-  }
-  let body = null;
-  try {
-    body = await response.json();
-  } catch {
-    throw new ApiError('http', `HTTP ${response.status}`);
   }
   if (body && body.error) throw apiError(body.error);
   if (!response.ok) throw new ApiError('http', `HTTP ${response.status}`);
