@@ -104,11 +104,34 @@ static void test_a_lock_clock_the_board_never_set_is_read_with_the_offset_given(
     TEST_ASSERT_EQUAL(UnlockVerdict::Latchkey, judged.findings[0].verdict);
 }
 
+static void test_an_old_record_after_a_clock_change_is_not_alerted_again() {
+    LogWatch watch = watching(11);
+    watch.state().lastUtc = static_cast<uint32_t>(kTwoPm + 5);
+    latchkey_util::clockSet(watch.state(), kOffset - 3600, kTwoPm + 10);
+    const PageJudgement judged = read(watch, page(11, {unlockAt(10, 5, 4242)}));
+    TEST_ASSERT_EQUAL_UINT(0, judged.fresh.size());
+    TEST_ASSERT_EQUAL_UINT(0, judged.findings.size());
+    TEST_ASSERT_EQUAL_UINT16(11, watch.state().cursor);
+}
+
+static void test_a_foreign_unlock_cannot_consume_the_recorded_unlock_on_an_earlier_page() {
+    LogWatch watch = watching(10);
+    watch.noteUnlock(kTwoPm, kTwoPm + 2, 4242);
+    const PageJudgement foreign = read(watch, page(11, {unlockAt(10, 1, 1234)}));
+    TEST_ASSERT_EQUAL(UnlockVerdict::Alert, foreign.findings[0].verdict);
+    TEST_ASSERT_EQUAL_UINT(1, watch.unlocks());
+    const PageJudgement own = read(watch, page(12, {unlockAt(11, 2, 4242)}));
+    TEST_ASSERT_EQUAL(UnlockVerdict::Latchkey, own.findings[0].verdict);
+    TEST_ASSERT_EQUAL_UINT(0, watch.unlocks());
+}
+
 int main(int, char**) {
     UNITY_BEGIN();
     RUN_TEST(test_a_judged_page_moves_the_cursor_and_uses_up_the_unlock_together);
     RUN_TEST(test_an_unexplained_app_unlock_in_a_page_is_an_alert);
     RUN_TEST(test_the_end_of_the_log_judges_nothing_and_keeps_the_unlocks);
     RUN_TEST(test_a_lock_clock_the_board_never_set_is_read_with_the_offset_given);
+    RUN_TEST(test_an_old_record_after_a_clock_change_is_not_alerted_again);
+    RUN_TEST(test_a_foreign_unlock_cannot_consume_the_recorded_unlock_on_an_earlier_page);
     return UNITY_END();
 }

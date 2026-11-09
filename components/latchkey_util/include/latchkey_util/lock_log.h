@@ -22,6 +22,9 @@ struct LogStep {
 
 std::string logEntriesJson(const std::vector<ttlock::LogEntry>& entries, int32_t lockUtcOffsetSeconds);
 
+std::string logEntriesJson(const std::vector<ttlock::LogEntry>& entries, const WatchState& state,
+                           int32_t unknownOffset);
+
 LogStep stepLog(const WatchState& state, const ttlock::LogPage& page, int32_t lockUtcOffsetSeconds);
 
 class LogEndSearch {

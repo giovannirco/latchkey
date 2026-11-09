@@ -62,8 +62,8 @@ ClockSync clockSyncNeeded(const WatchState& state, int32_t currentOffset, int64_
 }
 
 void clockSet(WatchState& state, int32_t offset, int64_t utc) {
-    state.previousOffset = state.clockKnown ? state.clockOffset : offset;
     if (!state.clockKnown || state.clockOffset != offset) {
+        state.previousOffset = state.clockKnown ? state.clockOffset : offset;
         state.offsetSince = state.cursor;
     }
     state.clockKnown = true;

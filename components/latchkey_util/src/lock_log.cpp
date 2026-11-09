@@ -45,12 +45,17 @@ bool utcOf(const ttlock::LogEntry& entry, int32_t lockUtcOffsetSeconds, int64_t&
 }
 
 std::string logEntriesJson(const std::vector<ttlock::LogEntry>& entries, int32_t lockUtcOffsetSeconds) {
+    return logEntriesJson(entries, WatchState{}, lockUtcOffsetSeconds);
+}
+
+std::string logEntriesJson(const std::vector<ttlock::LogEntry>& entries, const WatchState& state,
+                           int32_t unknownOffset) {
     std::string out = "[";
     for (size_t i = 0; i < entries.size(); ++i) {
         if (i > 0) {
             out += ',';
         }
-        appendEntry(out, entries[i], lockUtcOffsetSeconds);
+        appendEntry(out, entries[i], recordOffset(state, entries[i].recordNumber, unknownOffset));
     }
     out += ']';
     return out;
@@ -64,7 +69,7 @@ LogStep stepLog(const WatchState& state, const ttlock::LogPage& page, int32_t lo
     for (size_t i = 0; i < page.entries.size(); ++i) {
         const ttlock::LogEntry& entry = page.entries[i];
         int64_t utc = 0;
-        const bool datable = utcOf(entry, lockUtcOffsetSeconds, utc);
+        const bool datable = utcOf(entry, recordOffset(state, entry.recordNumber, lockUtcOffsetSeconds), utc);
         const bool restarted = datable && utc > static_cast<int64_t>(state.lastUtc);
         if (entry.recordNumber < state.cursor && !restarted) {
             continue;

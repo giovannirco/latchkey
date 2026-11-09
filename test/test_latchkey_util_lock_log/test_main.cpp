@@ -235,10 +235,24 @@ static void test_the_end_search_keeps_the_clock_part_of_the_state() {
     TEST_ASSERT_EQUAL_UINT16(40, found.cursor);
 }
 
+static void test_history_keeps_each_records_offset_across_a_clock_change() {
+    WatchState state = watching(12, kNoon + 60);
+    latchkey_util::clockSet(state, kOffset, kNoon);
+    state.cursor = 13;
+    latchkey_util::clockSet(state, kOffset - 3600, kNoon + 30);
+    const std::vector<LogEntry> entries{
+        recorded(12, 1, kNoon + 5),
+        entry(13, 1, localTime(kNoon + 35, kOffset - 3600), 79)};
+    TEST_ASSERT_EQUAL_STRING(R"([{"seq":12,"time":1762516805,"type":1,"battery":80},)"
+                             R"({"seq":13,"time":1762516835,"type":1,"battery":79}])",
+                             latchkey_util::logEntriesJson(entries, state, 0).c_str());
+}
+
 int main(int, char**) {
     UNITY_BEGIN();
     RUN_TEST(test_log_entries_render_without_their_credentials);
     RUN_TEST(test_times_are_utc_through_the_offset_the_lock_clock_was_set_with);
+    RUN_TEST(test_history_keeps_each_records_offset_across_a_clock_change);
     RUN_TEST(test_an_entry_time_that_cannot_exist_renders_as_null);
     RUN_TEST(test_an_empty_page_renders_as_an_empty_list);
     RUN_TEST(test_a_record_at_the_cursor_is_new_and_moves_the_cursor_on);

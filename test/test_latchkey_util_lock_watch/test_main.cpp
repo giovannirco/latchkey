@@ -121,6 +121,15 @@ static void test_setting_the_clock_keeps_the_offset_of_the_records_before() {
     TEST_ASSERT_EQUAL_INT32(19800, latchkey_util::recordOffset(WatchState{}, 5, 19800));
 }
 
+static void test_a_drift_correction_preserves_the_previous_offset_boundary() {
+    WatchState state = watched();
+    state.cursor += 10;
+    latchkey_util::clockSet(state, kBrasilia, kNow + kDay);
+    TEST_ASSERT_EQUAL_INT32(-2 * 3600, state.previousOffset);
+    TEST_ASSERT_EQUAL_UINT16(0x1200, state.offsetSince);
+    TEST_ASSERT_EQUAL_UINT32(kNow + kDay, state.clockSetUtc);
+}
+
 int main(int, char**) {
     UNITY_BEGIN();
     RUN_TEST(test_a_watch_state_encodes_byte_for_byte);
@@ -128,6 +137,7 @@ int main(int, char**) {
     RUN_TEST(test_a_watch_state_stored_by_the_first_layout_still_reads);
     RUN_TEST(test_a_damaged_watch_state_is_refused);
     RUN_TEST(test_setting_the_clock_keeps_the_offset_of_the_records_before);
+    RUN_TEST(test_a_drift_correction_preserves_the_previous_offset_boundary);
     RUN_TEST(test_a_lock_clock_the_board_never_set_is_set_at_once);
     RUN_TEST(test_a_new_offset_sets_the_lock_clock_at_once);
     RUN_TEST(test_drift_is_corrected_once_a_day_when_a_link_is_open_anyway);
