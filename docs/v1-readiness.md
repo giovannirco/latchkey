@@ -17,7 +17,7 @@ As of 2026-11-09 UTC, v0.4.0 is the latest published release. v1.0.0 is not read
 | Update, rollback and key preservation on hardware | Deferred beyond v1.0.0 with OTA. [#24](https://github.com/giovannirco/latchkey/issues/24) remains open and needs the owner's button press. |
 | Review follow-ups | [#21](https://github.com/giovannirco/latchkey/issues/21) remains open; firmware findings are not resolved by browser changes. |
 | Passage reliability | v0.4.0 includes the longer acknowledgement wait. The separate post-acknowledgement readback disconnect in [#31](https://github.com/giovannirco/latchkey/issues/31) remains untraced. No new hardware proof in this pass. |
-| Final review and acceptance | [#25](https://github.com/giovannirco/latchkey/issues/25) remains open. A browser review does not replace whole-branch review, board acceptance or a two-board restore. |
+| Final review and acceptance | [#25](https://github.com/giovannirco/latchkey/issues/25) remains open for the required implementation, offline checks and whole-branch review. The owner deferred hardware acceptance beyond v1.0.0; two-board restore and switch behavior must remain explicitly unverified. |
 
 ## Remaining feature coverage
 
@@ -54,4 +54,4 @@ git diff --check
 
 Optional screenshot checks require `LK_SHOTS_DIR`; otherwise those cases skip. Concurrent Playwright runs need different `LK_UI_PORT` values and separate `--output` directories to avoid shared mock state and artifact deletion.
 
-Before tagging v1.0.0, complete or explicitly revise the unresolved requirements in #25, verify CI on the final main commit, and record the hardware acceptance evidence. Keep the version at 0.4.0 until that release decision; this pass does not publish or flash a release.
+Before tagging v1.0.0, complete the required implementation and whole-branch review in #25, verify CI on the final main commit, and record the offline evidence and deferred hardware limitations. Keep the version at 0.4.0 until the release decision; this pass does not publish or flash a release.
