@@ -176,12 +176,12 @@ Status Session::awaitData(uint8_t command, uint32_t timeoutMs, Bytes& data) {
     return Status::Ok;
 }
 
-Status Session::request(uint8_t command, const Bytes& payload, Bytes& data) {
+Status Session::request(uint8_t command, const Bytes& payload, Bytes& data, uint32_t timeoutMs) {
     const Status sent = sendCommand(command, payload);
     if (sent != Status::Ok) {
         return sent;
     }
-    return awaitData(command, kCommandTimeoutMs, data);
+    return awaitData(command, timeoutMs, data);
 }
 
 Status Session::optionalRead(uint8_t command, const Bytes& payload) {

@@ -18,6 +18,7 @@ Notable changes to Latchkey, in the format of [Keep a Changelog](https://keepach
 - Leaving System during a log read stops polling, including an unfinished page of results.
 - Lower task-stack allocation leaves more heap available for concurrent Bluetooth, MQTT, syslog and HTTPS.
 - HTTPS releases temporary startup credentials and completed-handshake allocations, and sends large responses in smaller TLS records.
+- Passage-window additions wait up to ten seconds for the lock's acknowledgement; authentication and other commands keep their five-second waits. Slow acknowledgements no longer trigger an early timeout, and writes are never resent.
 
 ## [0.3.0] - 2026-11-09
 
