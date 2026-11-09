@@ -26,7 +26,7 @@ Works today:
 - Home Assistant over MQTT, off until configured: each lock appears as a device with a lock entity, battery, last event, Bluetooth link and an unlock alert, through MQTT discovery, and LOCK and UNLOCK from Home Assistant run through the same queue as the web.
 - Logs: the board keeps its recent log lines in RAM and shows them on the System page, and can ship them to a syslog collector (RFC 5424 over UDP or TCP), off until configured.
 
-In progress: recent log lines on the board and syslog shipping; board firmware updates from the web page, with rollback. Next: lock hardening and the encrypted key backup. The web UI already shows the Export and Harden steps, but the board answers them only once they are built.
+In progress: board firmware updates from the web page, with rollback. Next: lock hardening and the encrypted key backup. The web UI already shows the Export and Harden steps, but the board answers them only once they are built.
 
 ## Security model
 
