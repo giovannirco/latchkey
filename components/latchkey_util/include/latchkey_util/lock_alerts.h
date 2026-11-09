@@ -16,6 +16,7 @@ inline constexpr size_t kLockAlertsBytes = 6 + 13 * kMaxLockAlerts;
 enum class LockAlertKind : uint8_t {
     UnexpectedUnlock = 1,
     WatchStateUnreadable = 2,
+    AlertsUnreadable = 3,
 };
 
 struct LockAlert {
@@ -34,6 +35,7 @@ public:
     bool acknowledge(uint32_t through);
     std::array<uint8_t, kLockAlertsBytes> encode() const;
     static bool decode(const uint8_t* data, size_t size, LockAlerts& out);
+    static LockAlerts lost();
 
 private:
     std::array<LockAlert, kMaxLockAlerts> entries_{};
