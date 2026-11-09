@@ -27,6 +27,7 @@ std::string_view watchedSecret;
 bool fixtureClockSynced = false;
 int64_t fixtureUtc = 1762524000;
 size_t auditWrites = 0;
+size_t alertEvents = 0;
 std::string lastAuditResult;
 std::function<void()> beforePress;
 bool openSession = true;
@@ -142,7 +143,10 @@ bool waitForPress(uint32_t, const std::function<bool()>& keepWaiting) {
 }
 }
 namespace events {
-void publish(const char*, cJSON* data) { rpc::Json owned(data); }
+void publish(const char* name, cJSON* data) {
+    rpc::Json owned(data);
+    if (std::strcmp(name, "lock.alert") == 0) ++alertEvents;
+}
 void addSink(Sink sink) { eventSink = std::move(sink); }
 }
 #ifndef LATCHKEY_NATIVE_REAL_JOBS
@@ -169,6 +173,7 @@ void resetRpcFixture() {
     fixtureClockSynced = false;
     fixtureUtc = 1762524000;
     auditWrites = 0;
+    alertEvents = 0;
     lastAuditResult.clear();
     beforePress = {};
     watchedSecret = {};

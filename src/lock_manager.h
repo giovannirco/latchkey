@@ -87,7 +87,8 @@ rpc::Reply unlock(const std::string& mac);
 
 rpc::Reply readLog(const std::string& mac, std::optional<uint16_t> since);
 
-esp_err_t rememberAlert(const std::string& mac, const latchkey_util::LockAlert& alert, bool& added);
+esp_err_t rememberAlert(const std::string& mac, const latchkey_util::LockAlert& alert, bool& added,
+                        bool stopOnFailure = false);
 
 rpc::Reply alerts(const std::string& mac);
 

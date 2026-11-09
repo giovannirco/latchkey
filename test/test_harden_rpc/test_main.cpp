@@ -94,6 +94,15 @@ struct Rig {
         lock.expect(cmd::kGetOperateLog, key, {fake::success(key, cmd::kGetOperateLog, {0, 0})});
         expect(cmd::kTimeCalibrate, {}, reply);
     }
+    void unlockLog() {
+        ttlock::Bytes page{0, 1, 0, 3};
+        for (uint8_t minute : {0x41, 0x40}) {
+            const ttlock::Bytes record{1, 0x25, 0x11, 0x07, 0x12, minute, 0, 90};
+            page.push_back(record.size());
+            page.insert(page.end(), record.begin(), record.end());
+        }
+        lock.expect(cmd::kGetOperateLog, key, {fake::success(key, cmd::kGetOperateLog, page)});
+    }
 };
 
 static const char* stringField(const cJSON* value, const char* name) {
@@ -464,6 +473,55 @@ static void test_log_read_failure_does_not_retry_a_previous_storage_write() {
     TEST_ASSERT_EQUAL_UINT(0, s_writes);
     TEST_ASSERT_TRUE(rig.lock.scriptDone());
 }
+static void test_preclock_alert_failure_stops_mutations_and_monitoring_delivers_deferred_alerts() {
+    for (const size_t failed : {1U, 2U}) {
+        resetManagerFixture();
+        Rig rig;
+        auto& held = *lock_manager::findLocked(mac);
+        latchkey_util::clockSet(held.live.watch.state(), 0, fixtureUtc);
+        rig.reads();
+        rig.unlockLog();
+        s_failWrite = failed;
+        const auto reply = run(false);
+        TEST_ASSERT_EQUAL_STRING("hardening_failed", reply.error.c_str());
+        TEST_ASSERT_EQUAL_STRING("failed", stringField(step(reply, 0), "status"));
+        TEST_ASSERT_EQUAL_UINT(failed, s_writes);
+        TEST_ASSERT_EQUAL_UINT(failed, auditWrites);
+        TEST_ASSERT_EQUAL_UINT(failed - 1, alertEvents);
+        TEST_ASSERT_EQUAL_UINT(failed - 1, held.live.alerts.entries().size());
+        TEST_ASSERT_EQUAL_UINT(0, held.live.watch.state().cursor);
+        TEST_ASSERT_EQUAL_STRING("hardening_failed", lastAuditResult.c_str());
+        TEST_ASSERT_TRUE(rig.lock.scriptDone());
+        TEST_ASSERT_FALSE(lock_manager::watchOnLink());
+        s_failWrite = 0;
+        rig.unlockLog();
+        rig.lock.expect(cmd::kGetOperateLog, rig.key, {fake::success(rig.key, cmd::kGetOperateLog, {0, 0})});
+        TEST_ASSERT_EQUAL_INT(ttlock::Status::Ok, lock_manager::openLink(held.record));
+        TEST_ASSERT_EQUAL_INT(ttlock::Status::Ok, lock_manager::watchLock(*lock_manager::s_link.session, mac));
+        TEST_ASSERT_EQUAL_UINT(2, held.live.alerts.entries().size());
+        TEST_ASSERT_EQUAL_UINT(2, alertEvents);
+        TEST_ASSERT_EQUAL_UINT(3, auditWrites);
+        TEST_ASSERT_EQUAL_UINT(3, held.live.watch.state().cursor);
+        TEST_ASSERT_FALSE(held.live.alertWriteFailed);
+        TEST_ASSERT_TRUE(rig.lock.scriptDone());
+        TEST_ASSERT_EQUAL_UINT(0, rig.lock.unexpected());
+    }
+}
+static void test_ordinary_monitoring_publishes_alerts_when_persistence_fails() {
+    Rig rig;
+    auto& held = *lock_manager::findLocked(mac);
+    rig.unlockLog();
+    TEST_ASSERT_EQUAL_INT(ttlock::Status::Ok, lock_manager::openLink(held.record));
+    s_failWrite = 1;
+    TEST_ASSERT_EQUAL_INT(ttlock::Status::Busy, lock_manager::watchLock(*lock_manager::s_link.session, mac));
+    TEST_ASSERT_EQUAL_UINT(2, s_writes);
+    TEST_ASSERT_EQUAL_UINT(2, held.live.alerts.entries().size());
+    TEST_ASSERT_EQUAL_UINT(2, alertEvents);
+    TEST_ASSERT_EQUAL_UINT(2, auditWrites);
+    TEST_ASSERT_EQUAL_UINT(0, held.live.watch.state().cursor);
+    TEST_ASSERT_TRUE(rig.lock.scriptDone());
+    TEST_ASSERT_EQUAL_UINT(0, rig.lock.unexpected());
+}
 
 int main() {
     rpc::init();
@@ -489,5 +547,7 @@ int main() {
     RUN_TEST(test_preview_reports_unsynced_clock_without_writes);
     RUN_TEST(test_every_result_allocation_failure_is_explicit_and_preserves_confirmed_mutations);
     RUN_TEST(test_log_read_failure_does_not_retry_a_previous_storage_write);
+    RUN_TEST(test_preclock_alert_failure_stops_mutations_and_monitoring_delivers_deferred_alerts);
+    RUN_TEST(test_ordinary_monitoring_publishes_alerts_when_persistence_fails);
     return UNITY_END();
 }

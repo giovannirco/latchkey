@@ -886,7 +886,7 @@ bool noteClockSet(const std::string& mac, int32_t offset, int64_t utc) {
     return !lock->live.watchWriteFailed && !lock->live.alertWriteFailed;
 }
 
-Status readBeforeClock(ttlock::Session& session, const std::string& mac, bool persistOnFailure = true);
+Status readBeforeClock(ttlock::Session& session, const std::string& mac, bool stopOnFailure = false);
 
 Status setLockClock(ttlock::Session& session, const std::string& mac) {
     if (!wallclock::synced()) {
@@ -1072,24 +1072,24 @@ int32_t logOffset(const latchkey_util::WatchState& state) {
 }
 
 Status readNewEntries(ttlock::Session& session, const std::string& mac, WatchView& view, lock_log::Entries& fresh,
-                      bool& more) {
+                      bool& more, bool stopOnFailure = false) {
     more = false;
     const int32_t offset = logOffset(view.watch.state());
     if (!view.watch.state().baselined) {
         return lock_log::findEnd(session, offset, view.watch.state());
     }
-    return lock_log::catchUp(session, mac, offset, view.watch, fresh, more, utcNow());
+    return lock_log::catchUp(session, mac, offset, view.watch, fresh, more, utcNow(), stopOnFailure);
 }
 
-Status readBeforeClock(ttlock::Session& session, const std::string& mac, bool persistOnFailure) {
+Status readBeforeClock(ttlock::Session& session, const std::string& mac, bool stopOnFailure) {
     WatchView view;
     if (!watchView(mac, view)) {
         return Status::NotPaired;
     }
     lock_log::Entries fresh;
     bool more = false;
-    const Status status = readNewEntries(session, mac, view, fresh, more);
-    if (status != Status::Ok && !persistOnFailure) return status;
+    const Status status = readNewEntries(session, mac, view, fresh, more, stopOnFailure);
+    if (status != Status::Ok && stopOnFailure) return status;
     keepWatch(mac, view, status == Status::Ok, more);
     return status == Status::Ok && more ? Status::Busy : status;
 }
@@ -2010,7 +2010,7 @@ rpc::Reply runOnLockDirect(const std::string& mac, const char* action, LockWork 
 
 rpc::Reply synchronizeHardeningTime(ttlock::Session& session, const std::string& mac) {
     if (!wallclock::synced()) return failure(Status::TimeUnsynced, 0);
-    const auto read = readBeforeClock(session, mac, false);
+    const auto read = readBeforeClock(session, mac, true);
     if (read != Status::Ok) return failure(read, session.lockErrorCode());
     {
         std::lock_guard<std::mutex> guard(s_mutex);
@@ -2211,7 +2211,8 @@ rpc::Reply readLog(const std::string& mac, std::optional<uint16_t> since) {
     return submit(job);
 }
 
-esp_err_t rememberAlert(const std::string& mac, const latchkey_util::LockAlert& alert, bool& added) {
+esp_err_t rememberAlert(const std::string& mac, const latchkey_util::LockAlert& alert, bool& added,
+                        bool stopOnFailure) {
     added = false;
     std::lock_guard<std::mutex> guard(s_mutex);
     Lock* lock = findLocked(mac);
@@ -2226,10 +2227,11 @@ esp_err_t rememberAlert(const std::string& mac, const latchkey_util::LockAlert& 
     if (!fresh && !lock->live.alertWriteFailed) {
         return ESP_OK;
     }
-    lock->live.alerts = changed;
-    added = fresh;
     const esp_err_t error = store::alerts::save(mac.c_str(), changed);
     lock->live.alertWriteFailed = error != ESP_OK;
+    if (error != ESP_OK && stopOnFailure) return error;
+    lock->live.alerts = changed;
+    added = fresh;
     return error;
 }
 

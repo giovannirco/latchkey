@@ -47,7 +47,7 @@ int64_t utcOf(const LogEntry& entry, int32_t offset, int64_t fallback) {
 }
 
 bool raise(const std::string& mac, const LogEntry& entry, latchkey_util::UnlockMethod method, int32_t offset,
-           int64_t nowUtc) {
+           int64_t nowUtc, bool stopOnFailure) {
     const int64_t when = utcOf(entry, offset, nowUtc);
     latchkey_util::LockAlert alert;
     alert.time = static_cast<uint32_t>(when > 0 ? when : 0);
@@ -55,7 +55,7 @@ bool raise(const std::string& mac, const LogEntry& entry, latchkey_util::UnlockM
     alert.type = entry.type;
     alert.method = method;
     bool added = false;
-    const esp_err_t stored = lock_manager::rememberAlert(mac, alert, added);
+    const esp_err_t stored = lock_manager::rememberAlert(mac, alert, added, stopOnFailure);
     if (stored != ESP_OK) {
         ESP_LOGE(TAG, "cannot store the unlock alert: %s", esp_err_to_name(stored));
     }
@@ -116,10 +116,10 @@ Status findEnd(ttlock::Session& session, int32_t offset, latchkey_util::WatchSta
 }
 
 bool report(const std::string& mac, const LogPage& page, const latchkey_util::PageJudgement& judged,
-            const latchkey_util::WatchState& state, int32_t offset, int64_t nowUtc);
+            const latchkey_util::WatchState& state, int32_t offset, int64_t nowUtc, bool stopOnFailure);
 
 Status catchUp(ttlock::Session& session, const std::string& mac, int32_t offset, latchkey_util::LogWatch& watch,
-               Entries& fresh, bool& more, int64_t nowUtc) {
+               Entries& fresh, bool& more, int64_t nowUtc, bool stopOnFailure) {
     more = false;
     for (size_t pages = 0; pages < kPagesPerRead; ++pages) {
         LogPage page;
@@ -133,7 +133,7 @@ Status catchUp(ttlock::Session& session, const std::string& mac, int32_t offset,
         if (judged.fresh.empty()) {
             return Status::Ok;
         }
-        if (!report(mac, page, judged, staged.state(), offset, nowUtc)) {
+        if (!report(mac, page, judged, staged.state(), offset, nowUtc, stopOnFailure)) {
             return Status::Busy;
         }
         watch = std::move(staged);
@@ -169,7 +169,7 @@ Status readSlots(ttlock::Session& session, uint16_t from, uint16_t to, Entries& 
 }
 
 bool report(const std::string& mac, const LogPage& page, const latchkey_util::PageJudgement& judged,
-            const latchkey_util::WatchState& state, int32_t offset, int64_t nowUtc) {
+            const latchkey_util::WatchState& state, int32_t offset, int64_t nowUtc, bool stopOnFailure) {
     const std::vector<UnlockFinding>& findings = judged.findings;
     bool saved = true;
     for (size_t i = 0; i < findings.size(); ++i) {
@@ -179,7 +179,8 @@ bool report(const std::string& mac, const LogPage& page, const latchkey_util::Pa
         switch (findings[i].verdict) {
             case UnlockVerdict::Alert:
                 if (!raise(mac, entry, findings[i].method,
-                           latchkey_util::recordOffset(state, entry.recordNumber, offset), nowUtc)) {
+                           latchkey_util::recordOffset(state, entry.recordNumber, offset), nowUtc, stopOnFailure)) {
+                    if (stopOnFailure) return false;
                     saved = false;
                 }
                 break;
