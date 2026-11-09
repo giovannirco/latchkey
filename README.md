@@ -5,7 +5,7 @@
 
 Latchkey is firmware for ESP32 boards that takes a TTLock Bluetooth LE smart lock off the TTLock cloud and puts it under one owner's control: the board pairs with the lock by itself, manages what the TTLock app can manage on that lock, and serves an owner-only web UI, with no phone app, TTLock account or computer Bluetooth involved.
 
-Latchkey is in early development; the current release is v0.4.0. Pairing from the board, locking and unlocking, passcodes, fingerprints, IC cards, the keypad's super admin passcode, lock settings and the operation log have been checked on a real lock. Unlock alerts persist until acknowledged, Home Assistant can drive the lock over MQTT, and the System page shows recent logs with optional syslog shipping. Unreleased backup and partial hardening have offline tests; recovery on hardware remains unverified. The [v1.0.0 checklist](docs/v1-readiness.md) tracks the remaining work and deferred features.
+Latchkey is in early development; the current release is v0.5.0. Pairing from the board, locking and unlocking, passcodes, fingerprints, IC cards, the keypad's super admin passcode, lock settings and the operation log have been checked on a real lock. Unlock alerts persist until acknowledged, Home Assistant can drive the lock over MQTT, and the System page shows recent logs with optional syslog shipping. Encrypted key backup and partial hardening (the reset-button step stays skipped) are in v0.5.0; export and the hardening preview were checked on a real lock, recovery on hardware remains unverified. The [v1.0.0 checklist](docs/v1-readiness.md) tracks the remaining work and deferred features.
 
 ## Why
 
@@ -26,7 +26,7 @@ Works today:
 - Home Assistant over MQTT, off until configured: each lock appears as a device with a lock entity, battery, last event, Bluetooth link and an unlock alert, through MQTT discovery, and LOCK and UNLOCK from Home Assistant run through the same queue as the web.
 - Logs: the board keeps its recent log lines in RAM and shows them on the System page, and can ship them to a syslog collector (RFC 5424 over UDP or TCP), off until configured.
 
-Unreleased: encrypted key export/import, pending admin-code recovery and previewed partial hardening, with native and browser tests. Two-board recovery, runtime heap and physical-button behavior for these flows remain unverified. Remote-unlock API/UI controls remain required for v1.0.0; weekly passcode writes, rotating OTP management, OTA and hardware acceptance are deferred. See the [backup/hardening contract](docs/backup-hardening.md).
+In v0.5.0: encrypted key export/import, pending admin-code recovery and previewed partial hardening, with native and browser tests. Import on a board, two-board recovery, the classic ESP32's heap and the web button flow for these remain unverified. Remote-unlock API/UI controls remain required for v1.0.0; weekly passcode writes, rotating OTP management, OTA and hardware acceptance are deferred. See the [backup/hardening contract](docs/backup-hardening.md).
 
 ## Security model
 

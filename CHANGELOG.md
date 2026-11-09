@@ -5,12 +5,14 @@ Notable changes to Latchkey, in the format of [Keep a Changelog](https://keepach
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-11-09
+
 ### Added
 
 - Encrypted key export/import for one lock or all locks, using a versioned AES-256-GCM envelope with PBKDF2-HMAC-SHA256. Backups preserve labels, seeds and pending admin recovery, refuse existing identities and capacity overflow, and journal new identities for rollback after failure or restart. Plaintext is limited to 8 KiB; passphrases preserve spaces and require 12 to 128 UTF-8 bytes without NUL.
 - Read-only hardening preview followed by explicit, button-confirmed execution. Per-step reports preserve completed work after a failure and explain admin-code provenance. Reset-button writes remain skipped as unverified, so execution reports partial completion and keeps `hardened:false`.
 - Pending admin-code recovery retains the confirmed and candidate copies across lost acknowledgements and reboot. Later owner changes reconcile first and return `admin_reconciled` or `admin_unresolved` without another write. Forget and board reset refuse erasure of reset-button-off locks or unreadable recovery records.
-- Native and browser regression coverage for backup, hardening and recovery. This is offline evidence only: device heap, physical confirmation and two-board restore remain unverified. OTA and hardware acceptance are deferred beyond v1.0.0.
+- Native and browser regression coverage for backup, hardening and recovery. On an ESP32-S3 holding a real lock, a USB export (an LKB2 backup in about 17 s, no drop in minimum free heap) and a hardening preview (admin code preserved, reset button skipped) were checked; import on a board, the web button flow, the classic ESP32's heap during a backup and a two-board restore remain unverified. OTA and hardware acceptance are deferred beyond v1.0.0.
 
 ### Changed
 
