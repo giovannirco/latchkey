@@ -1,7 +1,7 @@
 <!-- SPDX-License-Identifier: GPL-3.0-or-later -->
 # v1.0.0 readiness
 
-As of 2026-11-09 UTC, v0.4.0 is the latest published release. v1.0.0 is not ready to tag. The owner authorized backup/hardening application code and offline tests, and confirmed that weekly passcode creation/editing and remote-unlock controls remain required for v1.0.0. OTA and its hardware checks are deferred beyond v1.0.0. Flashing, real-device operations and unverified switch writes remain excluded from this development pass.
+As of 2026-11-09 UTC, v0.4.0 is the latest published release. v1.0.0 is not ready to tag. The owner authorized backup/hardening application code and offline tests; remote-unlock controls also remain required. Weekly passcode creation/editing, rotating OTP codes, OTA and its hardware checks are deferred beyond v1.0.0. Flashing, real-device operations and unverified switch writes remain excluded from this development pass.
 
 ## Release requirements
 
@@ -10,7 +10,7 @@ As of 2026-11-09 UTC, v0.4.0 is the latest published release. v1.0.0 is not read
 | Lock settings, operation log and alerts | Released in v0.3.0; [#17](https://github.com/giovannirco/latchkey/issues/17) closed. |
 | Logging, syslog and Wi-Fi form | Released in [v0.4.0](https://github.com/giovannirco/latchkey/releases/tag/v0.4.0); [#18](https://github.com/giovannirco/latchkey/issues/18) closed. |
 | Encrypted backup, hardening and two-board restore | [#19](https://github.com/giovannirco/latchkey/issues/19) is being implemented with offline tests under the [backup/hardening contract](backup-hardening.md). Browser mock success is not evidence of recovery on hardware. Two-board restore remains unverified and outside this pass. |
-| Weekly passcode creation and editing | Required for v1.0.0. Listing and deletion exist; creation/editing need a source-backed command layout, protocol tests, board API and UI. |
+| Weekly passcode creation and editing | Deferred beyond v1.0.0 by the owner. Listing and deletion exist. Native weekly writes lack sufficient protocol evidence; ESP32-managed scheduling is a later option in [#22](https://github.com/giovannirco/latchkey/issues/22). |
 | Remote-unlock control | Required for v1.0.0. The protocol command exists; the board API, UI and offline integration tests are missing. |
 | Switch write layout | [#20](https://github.com/giovannirco/latchkey/issues/20) remains unverified. Writes stay refused; proving the layout requires the owner at the lock and separate device work. |
 | Board web updates and rollback | Deferred beyond v1.0.0 by the owner. [#23](https://github.com/giovannirco/latchkey/issues/23) remains on the unmerged `feat/ota` branch; the upload heap budget and review remain open. |
@@ -28,7 +28,7 @@ The original goal of covering the lock's supported app features is broader than 
 - Weekly/cyclic passcodes can be listed and deleted, but cannot be created or edited. The weekly-window command layout is missing; fingerprint and card schedules already work.
 - The remote-unlock/gateway switch exists in the protocol core but is not exposed through the board API or UI. Reported hotel and accessory bits also do not imply implemented controls. See [protocol coverage](protocol.md).
 
-Offline guest-code generation, metrics, MQTT TLS, button discovery and wireless keypad/key-fob support remain unscheduled in [#22](https://github.com/giovannirco/latchkey/issues/22). That list is not an approved v1.0.0 commitment. Weekly passcode creation/editing also appears there, but the owner explicitly retained it and remote-unlock controls as v1.0.0 requirements on 2026-11-09 UTC.
+Offline guest-code generation, metrics, MQTT TLS, button discovery and wireless keypad/key-fob support remain unscheduled in [#22](https://github.com/giovannirco/latchkey/issues/22). The owner subsequently deferred weekly passcode creation/editing on 2026-11-09 UTC after reviewing the protocol evidence gap; ESP32-managed scheduling may be explored later. Remote-unlock controls remain required for v1.0.0. ESP32-managed rotating OTP codes and per-user unlock attribution are a separate post-v1 feature in [#37](https://github.com/giovannirco/latchkey/issues/37).
 
 ## Browser corrections
 
