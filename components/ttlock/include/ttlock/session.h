@@ -135,7 +135,7 @@ private:
     Status nextFrame(uint32_t timeoutMs, size_t& budget, DecodedFrame& frame);
     Status awaitPlain(uint8_t command, uint32_t timeoutMs, bool acceptEmpty, Bytes& plain);
     Status awaitData(uint8_t command, uint32_t timeoutMs, Bytes& data);
-    Status request(uint8_t command, const Bytes& payload, Bytes& data);
+    Status request(uint8_t command, const Bytes& payload, Bytes& data, uint32_t timeoutMs = kCommandTimeoutMs);
     Status optionalRead(uint8_t command, const Bytes& payload);
     void deliver(const Reply& reply);
 

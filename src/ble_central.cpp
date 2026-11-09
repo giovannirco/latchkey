@@ -170,6 +170,8 @@ int onLinkEvent(struct ble_gap_event* event, void* attempt) {
             xSemaphoreGive(s_connectDone);
             return 0;
         case BLE_GAP_EVENT_DISCONNECT:
+            ESP_LOGD(TAG, "disconnect: connection %u, reason 0x%x", event->disconnect.conn.conn_handle,
+                     static_cast<unsigned>(event->disconnect.reason));
             if (event->disconnect.conn.conn_handle == s_connection) {
                 dropLink(event->disconnect.reason);
             }
