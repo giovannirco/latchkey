@@ -105,29 +105,6 @@ bool copyText(char (&out)[N], std::string_view text) {
     return true;
 }
 
-bool makeRecord(const latchkey_util::BackupLock& lock, store::locks::Record& record) {
-    std::memset(static_cast<void*>(&record), 0, sizeof(record));
-    record.version = store::locks::kRecordVersion;
-    if (lock.aesKey.size() != sizeof(record.aesKey) || !copyText(record.mac, lock.mac) ||
-        !copyText(record.name, lock.name) || !copyText(record.adminPasscode, lock.adminPasscode) ||
-        !copyText(record.model, lock.model) || !copyText(record.hardware, lock.hardware) ||
-        !copyText(record.firmware, lock.firmware) || !copyText(record.manufactureDate, lock.manufactureDate)) return false;
-    record.flags = lock.flags;
-    record.addressType = lock.addressType;
-    std::copy(lock.address.begin(), lock.address.end(), record.address);
-    record.protocolType = lock.protocol.protocolType;
-    record.protocolVersion = lock.protocol.protocolVersion;
-    record.scene = lock.protocol.scene;
-    record.groupId = lock.protocol.groupId;
-    record.orgId = lock.protocol.orgId;
-    std::copy(lock.aesKey.begin(), lock.aesKey.end(), record.aesKey);
-    record.adminPs = lock.adminPs;
-    record.unlockKey = lock.unlockKey;
-    record.lockFlagPos = lock.lockFlagPos;
-    record.features = lock.features;
-    return true;
-}
-
 template <size_t N>
 bool terminated(const char (&field)[N]) { return std::memchr(field, '\0', N) != nullptr; }
 
@@ -221,6 +198,29 @@ esp_err_t snapshotBlob(std::string_view mac, RestorePart part, latchkey_util::Se
     return ESP_OK;
 }
 
+}
+
+bool makeRecord(const latchkey_util::BackupLock& lock, store::locks::Record& record) {
+    std::memset(static_cast<void*>(&record), 0, sizeof(record));
+    record.version = store::locks::kRecordVersion;
+    if (lock.aesKey.size() != sizeof(record.aesKey) || !copyText(record.mac, lock.mac) ||
+        !copyText(record.name, lock.name) || !copyText(record.adminPasscode, lock.adminPasscode) ||
+        !copyText(record.model, lock.model) || !copyText(record.hardware, lock.hardware) ||
+        !copyText(record.firmware, lock.firmware) || !copyText(record.manufactureDate, lock.manufactureDate)) return false;
+    record.flags = lock.flags;
+    record.addressType = lock.addressType;
+    std::copy(lock.address.begin(), lock.address.end(), record.address);
+    record.protocolType = lock.protocol.protocolType;
+    record.protocolVersion = lock.protocol.protocolVersion;
+    record.scene = lock.protocol.scene;
+    record.groupId = lock.protocol.groupId;
+    record.orgId = lock.protocol.orgId;
+    std::copy(lock.aesKey.begin(), lock.aesKey.end(), record.aesKey);
+    record.adminPs = lock.adminPs;
+    record.unlockKey = lock.unlockKey;
+    record.lockFlagPos = lock.lockFlagPos;
+    record.features = lock.features;
+    return true;
 }
 
 esp_err_t snapshot(std::string_view mac, latchkey_util::SensitiveBuffer& plaintext,

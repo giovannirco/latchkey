@@ -20,6 +20,7 @@ public:
 };
 
 esp_err_t recover();
+bool makeRecord(const latchkey_util::BackupLock& lock, store::locks::Record& record);
 esp_err_t snapshot(std::string_view mac, latchkey_util::SensitiveBuffer& plaintext,
                    latchkey_util::RestoreJournal& identities);
 esp_err_t loadRecord(std::string_view mac, store::locks::Record& out);

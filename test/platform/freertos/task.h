@@ -5,6 +5,8 @@
 
 using TaskHandle_t = void*;
 BaseType_t xTaskCreate(void (*)(void*), const char*, uint32_t, void*, UBaseType_t, TaskHandle_t*);
+BaseType_t xTaskCreatePinnedToCore(void (*)(void*), const char*, uint32_t, void*, UBaseType_t, TaskHandle_t*, BaseType_t);
+void vTaskDelay(TickType_t ticks);
 TaskHandle_t xTaskGetCurrentTaskHandle();
 uint32_t uxTaskGetStackHighWaterMark(TaskHandle_t);
 void vTaskDelete(TaskHandle_t);

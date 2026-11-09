@@ -59,7 +59,11 @@ inline void expectWiped(const uint8_t* data, size_t size) {
 
 inline void* allocate(size_t size) noexcept {
     if (++attempts == failAt) return nullptr;
+#ifdef LATCHKEY_TRACK_SCALAR_ALLOCATIONS
+    void* data = std::malloc(size);
+#else
     void* data = ::operator new(size, std::nothrow);
+#endif
     if (data == nullptr) return nullptr;
     for (auto& allocation : allocations) {
         if (allocation.data == nullptr) {
@@ -87,10 +91,21 @@ inline void release(void* data) noexcept {
         if (onChange) onChange();
         break;
     }
+#ifdef LATCHKEY_TRACK_SCALAR_ALLOCATIONS
+    std::free(data);
+#else
     ::operator delete(data);
+#endif
 }
 
 }
+
+#ifdef LATCHKEY_TRACK_SCALAR_ALLOCATIONS
+void* operator new(size_t size, const std::nothrow_t&) noexcept { return allocation_failure::allocate(size); }
+void operator delete(void* data) noexcept { allocation_failure::release(data); }
+void operator delete(void* data, size_t) noexcept { allocation_failure::release(data); }
+void operator delete(void* data, const std::nothrow_t&) noexcept { allocation_failure::release(data); }
+#endif
 
 void* operator new[](size_t size) { return ::operator new(size); }
 

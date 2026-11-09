@@ -3,6 +3,7 @@
 
 #include <unity.h>
 #include <cstring>
+#include <functional>
 #include <map>
 #include <string>
 #include <vector>
@@ -27,6 +28,7 @@ static size_t s_preflightReads;
 static bool s_failAfter;
 static size_t s_available;
 static uint32_t s_reserveSequence;
+static std::function<void()> s_afterMutation;
 static constexpr std::string_view kMac = "00:00:5E:00:53:01";
 static constexpr const char* kKey = "00005E005301";
 static constexpr const char* kOtherKey = "00005E005309";
@@ -38,6 +40,7 @@ void resetNvsFixture() {
     s_failAfter = false;
     s_available = 4096;
     s_reserveSequence = 0;
+    s_afterMutation = {};
 }
 
 void clearNvsFixture() { TEST_ASSERT_TRUE(s_handles.empty()); }
@@ -50,6 +53,7 @@ static esp_err_t mutate(Mutation mutation) {
     ++s_writes;
     if (s_writes == s_failWrite && !s_failAfter) return ESP_FAIL;
     mutation();
+    if (s_afterMutation) s_afterMutation();
     return s_writes == s_failWrite ? ESP_FAIL : ESP_OK;
 }
 

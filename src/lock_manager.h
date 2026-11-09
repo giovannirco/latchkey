@@ -8,6 +8,7 @@
 #include <string>
 
 #include "esp_err.h"
+#include "latchkey_util/key_restore.h"
 #include "rpc.h"
 #include "store.h"
 #include "ttlock/session.h"
@@ -17,6 +18,15 @@ namespace lock_manager {
 
 using LockWork =
     std::function<ttlock::Status(ttlock::Session& session, const store::locks::Record& record, rpc::Reply& reply)>;
+
+class StoragePublication : public latchkey_util::RestorePublication {
+public:
+    virtual void metadataChanged(std::string_view mac, const latchkey_util::LockMetadata* metadata) noexcept = 0;
+};
+
+using StorageWork = std::function<rpc::Reply(latchkey_util::RestoreStorage&, StoragePublication&)>;
+
+rpc::Reply runStorage(const char* action, StorageWork work);
 
 void start();
 
