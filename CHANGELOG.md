@@ -5,6 +5,8 @@ Notable changes to Latchkey, in the format of [Keep a Changelog](https://keepach
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-11-09
+
 ### Added
 
 - Recent log lines on the board: every line the USB console prints with `#` (ESP-IDF's and Latchkey's, with lines the Wi-Fi driver writes in pieces joined) goes into a RAM ring with its level, tag and boot time, 6 KiB on the classic ESP32 (in RTC memory, so it costs no heap) and 16 KiB on the ESP32-S3. `system.logs {since?, level?, limit?}` pages through it; a line shaped like a secret is kept only as a notice and counted in `system.info.logs.withheld`.
