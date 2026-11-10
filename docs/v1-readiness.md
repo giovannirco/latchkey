@@ -18,13 +18,15 @@ This is the checklist for v1.0.0. The latest release is [v0.5.0](https://github.
 | Item | Status |
 |---|---|
 | Remote-unlock (gateway) control | Not built. The protocol core has `CONTROL_REMOTE_UNLOCK`; the board API, the web UI and their tests are missing. |
-| Backup, recovery and hardening on hardware ([#19](https://github.com/giovannirco/latchkey/issues/19)) | Built in v0.5.0 with native and browser tests. On an ESP32-S3 holding the real lock, a USB export and a hardening preview were checked. Unverified: import on a board, a two-board restore, a real hardening run, the web button flow for these, and the classic ESP32's heap during a backup. Mock results in the browser tests are not evidence of recovery on hardware. |
 | Final review ([#25](https://github.com/giovannirco/latchkey/issues/25)) | Open: whole-branch review of the required work, CI on the final `main` commit. |
 
 ## Unverified on hardware
 
+Hardware acceptance is deferred beyond v1.0.0; these stay listed as unverified in the release notes.
+
 | Item | Status |
 |---|---|
+| Backup, recovery and hardening ([#19](https://github.com/giovannirco/latchkey/issues/19)) | Built in v0.5.0 with native and browser tests. On an ESP32-S3 holding the real lock, a USB export and a hardening preview were checked. Unverified: import on a board, a two-board restore, a real hardening run, the web button flow for these, and the classic ESP32's heap during a backup. Mock results in the browser tests are not evidence of recovery on hardware. |
 | Switch writes ([#20](https://github.com/giovannirco/latchkey/issues/20)) | Reset button, privacy lock and tamper alert writes refuse before any Bluetooth frame until their layout is proven on a real lock. Full hardening (turning the reset button off) depends on this. |
 | Passage readback ([#31](https://github.com/giovannirco/latchkey/issues/31)) | A passage write was acknowledged once and its readback connection then dropped; untraced. |
 | Classic ESP32 heap ([#21](https://github.com/giovannirco/latchkey/issues/21)) | One stress run recorded a 27,576-byte minimum heap; later runs passed the 30 KB check. Other review follow-ups are in the same issue. |
@@ -50,6 +52,7 @@ sh tools/ui-tests/run.sh
 python3 -m unittest discover -s tools/ci -p 'test_*.py'
 python3 -m unittest discover -s tools/release -p 'test_*.py'
 python3 tools/ci/check_sources.py
+node --check web/app.js
 git diff --check
 ```
 
