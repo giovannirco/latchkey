@@ -220,13 +220,13 @@ if (/^[0-9]+\.[0-9]+\.[0-9]+$/.test(version)) {
   <header>
     <h1>Latchkey</h1>
     <p class="lead">Firmware for ESP32 boards that pairs, manages and hardens a TTLock Bluetooth LE smart lock with no cloud and no phone, behind an owner-only web UI.</p>
-    <p class="muted">Early development: pairing, lock control, access credentials, lock settings, operation logs, HTTPS with TOTP login, button confirmation and Home Assistant over MQTT work today. Firmware updates from the web page, hardening and encrypted key backup are being built. See the <a href="https://github.com/giovannirco/latchkey">source and status on GitHub</a>.</p>
+    <p class="muted">Early development: pairing, lock control, access credentials, lock settings, operation logs and unlock alerts, HTTPS with TOTP login, button confirmation, Home Assistant over MQTT, log lines with syslog shipping, encrypted key backup and partial hardening (the reset-button step stays skipped) are released. Firmware updates from the web page are not. See the <a href="https://github.com/giovannirco/latchkey">source on GitHub</a> and the <a href="https://github.com/giovannirco/latchkey/blob/main/docs/v1-readiness.md">v1.0.0 checklist</a>.</p>
   </header>
 
   <section class="danger" aria-labelledby="erase-title">
     <h2 id="erase-title">Flashing erases the board</h2>
     <p>The factory image rewrites the flash from address 0: bootloader, partition table and every setting stored on the board, including the owner claim, the Wi-Fi settings, the audit log and the keys of any lock paired with it. Whatever was on the board before is gone, whether or not you also choose to erase it in the installer.</p>
-    <p>If this board manages a lock, that lock can no longer be managed from it. A lock whose reset button is still enabled can be returned to factory state with that button and paired again; after hardening has disabled the button, only an encrypted key backup restored on a board gets the lock back.</p>
+    <p>If this board manages a lock, that lock can no longer be managed from it. A lock whose reset button is still enabled can be returned to factory state with that button and paired again; a lock whose reset button is off can only be recovered from an encrypted key backup restored on a board. Export the keys before you reflash, and never flash this image on a board that holds a lock.</p>
   </section>
 
   <section aria-labelledby="board-title">
@@ -257,7 +257,7 @@ if (/^[0-9]+\.[0-9]+\.[0-9]+$/.test(version)) {
           <span slot="not-allowed" class="notice">The installer only works on an HTTPS page.</span>
         </esp-web-install-button>
       </p>
-      <p>Files for this board: <a id="download-factory" href="#"></a> (flash at 0x0), <a id="download-ota" href="#"></a> (update over the air), <a id="download-sums" href="#">SHA256SUMS</a>, <a id="download-release" href="#">release notes</a>.</p>
+      <p>Files for this board: <a id="download-factory" href="#"></a> (flash at 0x0), <a id="download-ota" href="#"></a> (app image only; the board cannot install it from the web page yet), <a id="download-sums" href="#">SHA256SUMS</a>, <a id="download-release" href="#">release notes</a>.</p>
       <p>Prefer the command line? Download the factory image and SHA256SUMS, check one against the other (<code>shasum -a 256</code> instead of <code>sha256sum</code> on macOS), then write the image at 0x0 with esptool 5 (<code>--chip esp32s3</code> for the S3 image):</p>
 <pre><code>sha256sum --check --ignore-missing SHA256SUMS
 esptool --chip esp32 --port &lt;port&gt; write-flash 0x0 latchkey-&lt;version&gt;-esp32-factory.bin</code></pre>
