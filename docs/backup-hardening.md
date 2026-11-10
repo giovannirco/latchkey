@@ -1,7 +1,7 @@
 <!-- SPDX-License-Identifier: GPL-3.0-or-later -->
 # Encrypted backup and hardening
 
-The owner authorized backup/hardening application code and offline tests on 2026-11-09 UTC. OTA, flashing, real-device operations and unverified switch writes remain excluded. This work does not prove recovery on hardware.
+The contract for encrypted key backup, admin-code recovery and partial hardening, released in v0.5.0. What remains unverified on hardware is tracked in [docs/v1-readiness.md](v1-readiness.md).
 
 ## Backup contract
 
@@ -49,7 +49,7 @@ The existing `lock.adminPasscode.set` success shape is unchanged. When a pending
 - Hardening tests cover preview without catch-up writes, managed/admin preservation, provenance, partial failure, backup prerequisites and zero switch writes. Admin-code tests cover lost acknowledgements, reboot, pending candidates and failed reconciliation/persistence.
 - Browser tests cover preview/confirmation, partial completion, export/import errors, longer job deadlines and honest state after failures.
 - Browser backup forms count UTF-8 bytes, preserve spaces and reject NUL before sending. Both backup jobs have a 240-second deadline, including confirmation and derivation, without claiming measured device timing. Malformed results cannot become an empty download or a success notice; failed hardening requires another preview before execution.
-- Both target builds, native tests, browser tests and source checks must pass. No HIL or device command runs in this pass.
+- Both target builds, native tests, browser tests and source checks run in CI. There is no hardware-in-the-loop suite for backup or hardening yet.
 
 The transport implementation accepts 16 KiB authenticated HTTP bodies and USB lines; unauthenticated HTTP remains limited to 8 KiB. Rendered replies have a separate 32 KiB limit, allowing existing lists above the request limit. Credential/passcode list preflight reserves 256 bytes for the response envelope and returns `too_large` before JSON construction if its content bound exceeds 32,512 bytes or the existing heap checks fail. This is a deliberate bounded-output policy; pagination is unchanged.
 
@@ -67,6 +67,6 @@ Native builds fetch the exact cJSON component shared by both target lockfiles us
 
 `tools/mock_api.py` uses opaque fixture-only backup tokens and in-memory snapshots, not a second crypto implementation. Its backups work only during that mock lifetime and are incompatible with boards. It models public job results, confirmation, preview and partial failures; native tests exercise actual serialization, cryptography and persistence.
 
-Runtime heap during derivation/import, physical-button behavior and a two-board restore remain unverified until separate hardware work is authorized. Full reset-button hardening additionally needs the switch-layout proof in issue #20. OTA and its hardware checks are deferred beyond v1.0.0.
+On an ESP32-S3 holding a real lock, a USB export (an LKB2 backup in about 17 s, with no drop in minimum free heap) and a hardening preview (admin code preserved, reset button skipped) were checked. Import on a board, a two-board restore, a real hardening run, the web button flow and the classic ESP32's heap during derivation or import remain unverified. Full reset-button hardening also needs the switch-layout proof in [#20](https://github.com/giovannirco/latchkey/issues/20). [docs/v1-readiness.md](v1-readiness.md) tracks these.
 
 The buffer-overlap contract follows the [PSA API conventions](https://arm-software.github.io/psa-api/crypto/1.2/overview/conventions.html#overlap-between-parameters).
