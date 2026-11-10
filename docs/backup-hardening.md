@@ -1,7 +1,7 @@
 <!-- SPDX-License-Identifier: GPL-3.0-or-later -->
 # Encrypted backup and hardening
 
-The owner authorized backup/hardening application code and offline tests on 2026-11-09 UTC. OTA, flashing, real-device operations and unverified switch writes remain excluded. This work does not prove recovery on hardware.
+The contract for encrypted key backup, admin-code recovery and partial hardening, released in v0.5.0. What remains unverified on hardware is tracked in [docs/v1-readiness.md](v1-readiness.md).
 
 ## Backup contract
 
@@ -11,7 +11,7 @@ Use a versioned `LKB2` binary envelope: magic, version, KDF identifier, PBKDF2-H
 
 Encode fields explicitly, not as raw C++ structs. Preserve each lock's identity, protocol and keys, confirmed admin-passcode copy/provenance and any pending replacement, labels (including managed flags and weekly schedules), and optional seed table. Exclude board credentials, Wi-Fi/MQTT configuration, audit history and monitoring cursors. Validate counts, lengths, flags, UTF-8 text, MAC uniqueness, protocol data and nested records before any storage mutation. Clear transient plaintext and key material on success and failure.
 
-Bound plaintext to 8 KiB, accepting up to eight locks when they fit. Refuse oversized exports with an instruction to export individual locks; never truncate or silently omit data. A maximum-size single-lock fixture must fit. Bound the authenticated RPC body and serial line to 16 KiB; buffers grow on demand rather than reserving that space permanently. Authenticate before allowing the larger HTTP body; unauthenticated login retains its smaller limit. Transfer parsed job parameters instead of duplicating them, release the raw request before starting the job, and release encoded input before allocating decoded records. Prefer a single owned binary buffer for authenticated decryption; PSA permits overlapping input/output buffers, but plaintext is unusable until authentication succeeds. Check allocation failures and test buffer lifetimes; runtime heap remains unproven. Increase the browser backup timeout to cover button confirmation and derivation.
+Bound plaintext to 8 KiB, accepting up to eight locks when they fit. Refuse oversized exports with an instruction to export individual locks; never truncate or silently omit data. A maximum-size single-lock fixture must fit. Bound the authenticated RPC body and serial line to 16 KiB; buffers grow on demand rather than reserving that space permanently. Authenticate before allowing the larger HTTP body; unauthenticated login retains its smaller limit. Transfer parsed job parameters instead of duplicating them, release the raw request before starting the job, and release encoded input before allocating decoded records. Prefer a single owned binary buffer for authenticated decryption; PSA permits overlapping input/output buffers, but plaintext is unusable until authentication succeeds. Check allocation failures and test buffer lifetimes. The browser's backup timeout, 240 seconds, covers button confirmation and derivation.
 
 Also bound export serialization and queued WebSocket bytes. Release binary/JSON representations as soon as their serialized replacement owns the data, and reject work that cannot meet the allocation budget. Test maximum import/export payloads against an explicit allocation budget; queue limits by message count alone are insufficient for large results.
 
@@ -49,7 +49,7 @@ The existing `lock.adminPasscode.set` success shape is unchanged. When a pending
 - Hardening tests cover preview without catch-up writes, managed/admin preservation, provenance, partial failure, backup prerequisites and zero switch writes. Admin-code tests cover lost acknowledgements, reboot, pending candidates and failed reconciliation/persistence.
 - Browser tests cover preview/confirmation, partial completion, export/import errors, longer job deadlines and honest state after failures.
 - Browser backup forms count UTF-8 bytes, preserve spaces and reject NUL before sending. Both backup jobs have a 240-second deadline, including confirmation and derivation, without claiming measured device timing. Malformed results cannot become an empty download or a success notice; failed hardening requires another preview before execution.
-- Both target builds, native tests, browser tests and source checks must pass. No HIL or device command runs in this pass.
+- Both target builds, native tests, browser tests and source checks run in CI. There is no hardware-in-the-loop suite for backup or hardening yet.
 
 The transport implementation accepts 16 KiB authenticated HTTP bodies and USB lines; unauthenticated HTTP remains limited to 8 KiB. Rendered replies have a separate 32 KiB limit, allowing existing lists above the request limit. Credential/passcode list preflight reserves 256 bytes for the response envelope and returns `too_large` before JSON construction if its content bound exceeds 32,512 bytes or the existing heap checks fail. This is a deliberate bounded-output policy; pagination is unchanged.
 
@@ -63,10 +63,10 @@ These measurements count cJSON nodes and strings with aligned wiping headers, re
 
 Native builds fetch the exact cJSON component shared by both target lockfiles using the existing pinned `idf-component-manager==3.1.2` resolver. The build bootstrap verifies the locked content hash on download and cache reuse, needs no target build or full ESP-IDF installation, and performs no download from a running test binary. Run its tests with `uv run --no-project --with idf-component-manager==3.1.2 python -m unittest discover -s tools -p test_prepare_native.py`; `uvx platformio==6.2.0 test -e native` includes the production parser, dispatcher, HTTP, jobs and WebSocket host tests.
 
-## Remaining acceptance
+## Mock and hardware limits
 
 `tools/mock_api.py` uses opaque fixture-only backup tokens and in-memory snapshots, not a second crypto implementation. Its backups work only during that mock lifetime and are incompatible with boards. It models public job results, confirmation, preview and partial failures; native tests exercise actual serialization, cryptography and persistence.
 
-Runtime heap during derivation/import, physical-button behavior and a two-board restore remain unverified until separate hardware work is authorized. Full reset-button hardening additionally needs the switch-layout proof in issue #20. OTA and its hardware checks are deferred beyond v1.0.0.
+On an ESP32-S3 holding a real lock, a USB export and a hardening preview were checked; the other hardware checks, including full reset-button hardening ([#20](https://github.com/giovannirco/latchkey/issues/20)), are tracked in [docs/v1-readiness.md](v1-readiness.md) and [#26](https://github.com/giovannirco/latchkey/issues/26).
 
 The buffer-overlap contract follows the [PSA API conventions](https://arm-software.github.io/psa-api/crypto/1.2/overview/conventions.html#overlap-between-parameters).

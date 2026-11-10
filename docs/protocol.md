@@ -64,12 +64,12 @@ CRC-8 Dallas/Maxim: reflected polynomial `0x8C`, initial value 0, no final XOR, 
 4. `TIME_CALIBRATE` (`0x43`) with the board's local time; a timeout or a lock error does not stop the pairing.
 5. `SEARCHE_DEVICE_FEATURE` (`0x01`): the feature bits.
 6. Settings reads, each one only when the lock reports the feature, a lock error tolerated: `SWITCH` (`0x68`) for the reset button, tamper alert or privacy lock, `AUDIO_MANAGE` (`0x62`), `SHOW_PASSWORD` (`0x59`), `AUTO_LOCK_MANAGE` (`0x36`) and `GET_ADMIN_CODE` (`0x65`).
-7. `SET_ADMIN_KEYBOARD_PWD` (`0x53`) with a random 7-digit admin passcode, stored before it is sent.
+7. `SET_ADMIN_KEYBOARD_PWD` (`0x53`) with the admin passcode the owner chose (4 to 9 digits) or, without one, 7 random digits, stored before it is sent.
 8. `INIT_PASSWORDS` (`0x31`): ten random code and secret seeds and the year, the base of the lock's offline passcodes.
 9. `CONTROL_REMOTE_UNLOCK` (`0x37`) query, when the lock reports `config_gateway_unlock`.
 10. `GET_ALARM_ERRCORD_OR_OPERATION_FINISHED` (`0x57`), which ends the pairing.
 
-kind3r's `initLock` has the switch read, the lamp read and `INIT_PASSWORDS` commented out, and keeps the admin passcode a lock reports through `GET_ADMIN_CODE`; Latchkey sends the switch read and `INIT_PASSWORDS`, skips the lamp and always sets a new random admin passcode.
+kind3r's `initLock` has the switch read, the lamp read and `INIT_PASSWORDS` commented out, and keeps the admin passcode a lock reports through `GET_ADMIN_CODE`; Latchkey sends the switch read and `INIT_PASSWORDS`, skips the lamp and always sets a new admin passcode, the owner's or a random one.
 
 ## Admin login, lock and unlock
 
@@ -115,7 +115,7 @@ Feature bits come from `SEARCHE_DEVICE_FEATURE`: after one leading byte, one or 
 
 Passcodes have 4 to 9 digits and are permanent, limited to a number of uses, or valid for a period. Cyclic passcodes can be listed and deleted but not added or changed. The lock also reports bits that have no command here because no reference implementation exists to port: `freeze_lock` (11), `lamp` (25), `dead_lock` (32), `unlock_direction` (36) and `cyclic_password` (12) among them. Latchkey offers no control for those.
 
-`SWITCH` writes send `02`, the item as a big-endian 32-bit word, then the same word to enable or zero to disable; reads send `01` and get the state word after two bytes. The read follows kind3r's `GetSwitchStateCommand`; the write layout was learned by reading bazuchan's esphome-ttlock (that project has no license, and no code was taken from it). Until the table below confirms writes on a real lock, the firmware refuses all three switch writes with `unverified`, and the UI shows them read-only. Reads of all three items are verified on the lock below; writes are not. bazuchan sends `1` or `0` as the value word where Latchkey sends the item's own bit, and a lock that took the value word as the whole switch state would clear the other items, the reset button among them, so no SWITCH write has been sent to that lock yet. Refusals happen before any Bluetooth frame or board-button prompt. Turning the reset button off answers `backup_required` first until the encrypted key backup exists.
+`SWITCH` writes send `02`, the item as a big-endian 32-bit word, then the same word to enable or zero to disable; reads send `01` and get the state word after two bytes. The read follows kind3r's `GetSwitchStateCommand`; the write layout was learned by reading bazuchan's esphome-ttlock (that project has no license, and no code was taken from it). Until the table below confirms writes on a real lock, the firmware refuses all three switch writes with `unverified`, and the UI shows them read-only. Reads of all three items are verified on the lock below; writes are not. bazuchan sends `1` or `0` as the value word where Latchkey sends the item's own bit, and a lock that took the value word as the whole switch state would clear the other items, the reset button among them, so no SWITCH write has been sent to that lock yet. Refusals happen before any Bluetooth frame or board-button prompt. Turning the reset button off answers `backup_required` instead of `unverified`, even for a lock whose keys were exported.
 
 ## Operation log
 

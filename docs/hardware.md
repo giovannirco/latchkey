@@ -11,13 +11,13 @@
 | M5Stack AtomS3 | ESP32-S3 | 8 MB | `esp32s3`, built with `LATCHKEY_BUTTON_GPIO=41` | none | GPIO41 | USB Serial/JTAG on the chip's own USB port |
 
 - The button pin is a build setting: `LATCHKEY_BUTTON_GPIO` in the env's `build_flags` in `platformio.ini`. The firmware reads it with the internal pull-up enabled and treats low as pressed. The release image for the classic ESP32 reads GPIO0, so an M5 ATOM needs its own build with GPIO39; GPIO39 is input-only and has no internal pull-up, so a button there relies on the pull-up of the board's own circuit. The ESP32-S3 release image reads GPIO0 too, the StampS3's button, so an AtomS3 needs its own build with `-DLATCHKEY_BUTTON_GPIO=41`.
-- The button confirms destructive actions requested from the web UI: pairing or resetting a lock, a new TOTP secret and a factory reset of the board wait up to 30 s for a press. Requests over USB serial need no press, because USB counts as physical presence.
+- The button confirms destructive actions requested from the web UI: pairing or resetting a lock, showing or changing a lock's super admin passcode, exporting or importing the key backup, running lock hardening, a new TOTP secret and a factory reset of the board wait up to 30 s for a press. Requests over USB serial need no press, because USB counts as physical presence.
 - GPIO0 is a strapping pin on the ESP32 and the ESP32-S3: holding it while the board resets starts the ROM download mode instead of Latchkey. On boards whose button is GPIO0, such as the DevKit and the StampS3, do not hold the button while plugging the board in or resetting it.
 - `system.info` reports the board as `esp32-devkit` or `esp32s3-atom`, the names the two envs build in.
 
 ### Flash layout
 
-Both layouts keep two app slots for over-the-air updates with rollback (`partitions/4mb.csv`, `partitions/8mb.csv`):
+Both layouts keep two app slots, reserved for over-the-air updates with rollback (`partitions/4mb.csv`, `partitions/8mb.csv`):
 
 | Region | Offset | 4 MB board | 8 MB board |
 |---|---|---|---|
@@ -39,7 +39,7 @@ The factory image of a release covers everything from `0x0` to the end of the ap
 - If a classic board does not answer the flasher, enter download mode by hand: hold BOOT (GPIO0), press and release EN (reset), release BOOT, then try again.
 - The ESP32-S3 port is the chip's own USB: it disappears and comes back whenever the chip resets, after flashing, after a reboot and when it enters download mode, and the computer may give it a new name (`/dev/cu.usbmodem*` on macOS, `/dev/ttyACM*` on Linux, a new `COM` number on Windows). Pick the port again after a reset. `tools/latchkey_cli.py` reopens a `/dev/cu.usbmodem*` port by itself when exactly one such device is present.
 - When an S3 does not enter download mode on its own, for example because the running firmware no longer answers on USB, hold the board's download-mode button while plugging it in, as the board vendor documents.
-- Flashing the factory image erases the board, lock keys included. A board already in use is updated with the OTA image (`latchkey-<version>-<env>-ota.bin`) instead, through the web UI (in progress). From a checkout, `uvx platformio==6.2.0 run -e <env> -t upload --upload-port <port>` writes the bootloader, partition table, `otadata` and app at their offsets and leaves `nvs` alone, so the keys survive.
+- Flashing the factory image erases the board, lock keys included: never write it, with esptool or the browser flasher, to a board that holds a lock. Updates from the web page are not in any release ([docs/v1-readiness.md](https://github.com/giovannirco/latchkey/blob/main/docs/v1-readiness.md)), so a board in use is updated from a checkout of the release tag: `uvx platformio==6.2.0 run -e <env> -t upload --upload-port <port>` writes the bootloader, partition table, `otadata` and app at their offsets and leaves `nvs` alone, so the keys survive. Never add `-t nobuild`: without the build step the app is written at the default offset, over `nvs`.
 
 ## Power
 
