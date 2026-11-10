@@ -64,12 +64,12 @@ CRC-8 Dallas/Maxim: reflected polynomial `0x8C`, initial value 0, no final XOR, 
 4. `TIME_CALIBRATE` (`0x43`) with the board's local time; a timeout or a lock error does not stop the pairing.
 5. `SEARCHE_DEVICE_FEATURE` (`0x01`): the feature bits.
 6. Settings reads, each one only when the lock reports the feature, a lock error tolerated: `SWITCH` (`0x68`) for the reset button, tamper alert or privacy lock, `AUDIO_MANAGE` (`0x62`), `SHOW_PASSWORD` (`0x59`), `AUTO_LOCK_MANAGE` (`0x36`) and `GET_ADMIN_CODE` (`0x65`).
-7. `SET_ADMIN_KEYBOARD_PWD` (`0x53`) with a random 7-digit admin passcode, stored before it is sent.
+7. `SET_ADMIN_KEYBOARD_PWD` (`0x53`) with the admin passcode the owner chose (4 to 9 digits) or, without one, 7 random digits, stored before it is sent.
 8. `INIT_PASSWORDS` (`0x31`): ten random code and secret seeds and the year, the base of the lock's offline passcodes.
 9. `CONTROL_REMOTE_UNLOCK` (`0x37`) query, when the lock reports `config_gateway_unlock`.
 10. `GET_ALARM_ERRCORD_OR_OPERATION_FINISHED` (`0x57`), which ends the pairing.
 
-kind3r's `initLock` has the switch read, the lamp read and `INIT_PASSWORDS` commented out, and keeps the admin passcode a lock reports through `GET_ADMIN_CODE`; Latchkey sends the switch read and `INIT_PASSWORDS`, skips the lamp and always sets a new random admin passcode.
+kind3r's `initLock` has the switch read, the lamp read and `INIT_PASSWORDS` commented out, and keeps the admin passcode a lock reports through `GET_ADMIN_CODE`; Latchkey sends the switch read and `INIT_PASSWORDS`, skips the lamp and always sets a new admin passcode, the owner's or a random one.
 
 ## Admin login, lock and unlock
 
