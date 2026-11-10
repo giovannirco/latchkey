@@ -1,7 +1,7 @@
 <!-- SPDX-License-Identifier: GPL-3.0-or-later -->
 # Working on Latchkey
 
-Instructions for coding agents and people working in this repository. Read `README.md` for what Latchkey is, `SECURITY.md` for the security model, `docs/protocol.md` for the TTLock protocol notes and `docs/hardware.md` for boards and flashing.
+Instructions for coding agents and people working in this repository. Read `README.md` for what Latchkey is, `SECURITY.md` for the security model, `docs/protocol.md` for the TTLock protocol notes, `docs/hardware.md` for boards and flashing, `docs/backup-hardening.md` for the backup and hardening contract, and `docs/v1-readiness.md` for what is left before v1.0.0.
 
 ## Layout
 
@@ -35,6 +35,7 @@ uv run --no-project --python 3.14 --with pytest==9.1.1 --with pyserial==3.5 \
 
 ## Flashing safely
 
+- The ESP32-S3 development board is an M5Stack StampS3, with its button on GPIO0 (the `esp32s3` env's default).
 - Flash with `uvx platformio==6.2.0 run -e <env> -t upload --upload-port <port>`. This writes the bootloader, partition table and app at their offsets and keeps the settings partition (NVS), where the lock keys live.
 - Never add `-t nobuild` to an upload: without the build step the app is written at the default offset, over NVS.
 - Never write a merged factory image (the release's `*-factory.bin`, or the browser flasher) to a board that already holds a lock: it starts at address 0 and erases the lock keys. Factory images are for new boards.
