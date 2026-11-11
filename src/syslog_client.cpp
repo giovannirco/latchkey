@@ -31,6 +31,7 @@ constexpr uint32_t kLineBit = 1;
 constexpr uint32_t kSettingsBit = 2;
 constexpr TickType_t kNetworkPoll = pdMS_TO_TICKS(1000);
 constexpr TickType_t kIdleCheck = pdMS_TO_TICKS(30000);
+constexpr int64_t kHealthyMs = 30000;
 constexpr int kConnectTimeoutS = 5;
 constexpr int kTcpSendTimeoutS = 5;
 constexpr int kUdpSendTimeoutS = 1;
@@ -210,20 +211,24 @@ class Sender {
 public:
     Sender() : backoff_(kBackoff) {}
 
-    void run() {
-        while (true) {
-            takeSettings();
-            if (!settings_.enabled) {
-                waitForSettings(portMAX_DELAY);
-            } else if (!connection_.isOpen()) {
-                connect();
-            } else if (!ship()) {
-                fail("cannot send to", sendProblem_);
-            } else if (!changedSince(generation_)) {
-                waitForWake(kIdleCheck);
-                if (connection_.peerClosed()) {
-                    connection_.close();
-                    s_connected = false;
+    void poll() {
+        takeSettings();
+        if (!settings_.enabled) {
+            waitForSettings(portMAX_DELAY);
+        } else if (!connection_.isOpen()) {
+            connect();
+        } else if (!ship()) {
+            fail("cannot send to", sendProblem_);
+        } else if (!changedSince(generation_)) {
+            waitForWake(kIdleCheck);
+            if (connection_.peerClosed()) {
+                fail("connection closed by", ECONNRESET);
+            } else if (shipped_ && nowMs() - connectedAtMs_ >= kHealthyMs) {
+                backoff_.recordSuccess();
+                if (warned_) {
+                    warned_ = false;
+                    ESP_LOGI(TAG, "sending to %s:%u over %s again", settings_.host.c_str(),
+                             static_cast<unsigned>(settings_.port), transportName(settings_));
                 }
             }
         }
@@ -270,6 +275,8 @@ private:
             fail(problem == 0 ? "cannot resolve" : "cannot connect to", problem);
             return;
         }
+        connectedAtMs_ = nowMs();
+        shipped_ = false;
         s_connected = true;
     }
 
@@ -301,12 +308,7 @@ private:
                 return false;
             }
             ++s_sent;
-            backoff_.recordSuccess();
-            if (warned_) {
-                warned_ = false;
-                ESP_LOGI(TAG, "sending to %s:%u over %s again", settings_.host.c_str(),
-                         static_cast<unsigned>(settings_.port), transportName(settings_));
-            }
+            shipped_ = true;
         }
         return true;
     }
@@ -338,6 +340,8 @@ private:
     uint32_t generation_ = 0;
     bool started_ = false;
     bool warned_ = false;
+    bool shipped_ = false;
+    int64_t connectedAtMs_ = 0;
     int sendProblem_ = 0;
     logs::Cursor cursor_;
     std::string message_;
@@ -346,21 +350,24 @@ private:
 
 void run(void*) {
     Sender sender;
-    sender.run();
+    while (true) sender.poll();
 }
 
-esp_err_t activate(const store::cfg::Syslog& settings) {
+esp_err_t activate(const store::cfg::Syslog& settings, bool persist) {
     std::lock_guard<std::mutex> lock(s_mutex);
-    s_settings = settings;
-    ++s_generation;
     if (s_task == nullptr && settings.enabled) {
         if (xTaskCreate(run, "syslog", kTaskStack, nullptr, kTaskPriority, &s_task) != pdPASS) {
             s_task = nullptr;
             return ESP_ERR_NO_MEM;
         }
-    } else if (s_task != nullptr) {
-        xTaskNotify(s_task, kSettingsBit, eSetBits);
     }
+    if (persist) {
+        const esp_err_t stored = store::cfg::saveSyslog(settings);
+        if (stored != ESP_OK) return stored;
+    }
+    s_settings = settings;
+    ++s_generation;
+    if (s_task != nullptr) xTaskNotify(s_task, kSettingsBit, eSetBits);
     s_wakeTarget = settings.enabled ? s_task : nullptr;
     return ESP_OK;
 }
@@ -374,14 +381,13 @@ void start() {
         ESP_LOGE(TAG, "cannot read the remote logging settings (%s): remote logging stays off", esp_err_to_name(loaded));
         return;
     }
-    if (activate(stored) != ESP_OK) {
+    if (activate(stored, false) != ESP_OK) {
         ESP_LOGE(TAG, "cannot start the remote logging task");
     }
 }
 
 esp_err_t apply(const store::cfg::Syslog& settings) {
-    const esp_err_t stored = store::cfg::saveSyslog(settings);
-    return stored == ESP_OK ? activate(settings) : stored;
+    return activate(settings, true);
 }
 
 store::cfg::Syslog settings() {

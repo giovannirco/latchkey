@@ -303,6 +303,7 @@ bool LogJoiner::isBlank(std::string_view line) {
 
 void LogJoiner::add(uintptr_t writer, std::string_view piece) {
     writer_ = writer;
+    overflow_ = overflow_ || piece.size() > kCapacity - length_;
     const size_t take = std::min(piece.size(), kCapacity - length_);
     std::memcpy(buffer_ + length_, piece.data(), take);
     length_ += take;

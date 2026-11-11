@@ -108,37 +108,45 @@ private:
     uint32_t next_ = 1;
 };
 
+inline constexpr std::string_view kIncompleteLogLine = "line withheld: incomplete log line";
+
 class LogJoiner {
 public:
     static constexpr size_t kCapacity = 256;
 
     template <typename Emit>
-    void feed(uintptr_t writer, std::string_view piece, bool ends, Emit emit) {
+    void feed(uintptr_t writer, std::string_view piece, bool ends, Emit emit, bool cut = false) {
         if (length_ > 0 && writer != writer_) {
             if (ends) {
-                emitLine(piece.substr(0, kCapacity), emit);
+                emitLine(piece, emit, cut);
                 return;
             }
-            emitLine(std::string_view(buffer_, length_), emit);
+            emit(kIncompleteLogLine);
             length_ = 0;
+            overflow_ = false;
+            interrupted_ = true;
         }
         if (length_ == 0 && ends) {
-            emitLine(piece.substr(0, kCapacity), emit);
+            emitLine(piece, emit, cut);
             return;
         }
+        overflow_ = overflow_ || cut;
         add(writer, piece);
         if (ends) {
-            emitLine(std::string_view(buffer_, length_), emit);
+            if (overflow_) emit(kIncompleteLogLine);
+            else emitLine(std::string_view(buffer_, length_), emit);
             length_ = 0;
+            overflow_ = false;
         }
     }
 
 private:
     template <typename Emit>
-    static void emitLine(std::string_view line, Emit emit) {
-        if (!isBlank(line)) {
-            emit(line);
-        }
+    void emitLine(std::string_view line, Emit emit, bool cut = false) {
+        if (isBlank(line)) return;
+        const bool incomplete = cut || line.size() > kCapacity ||
+            (interrupted_ && parseLogLine(line).message.data() == line.data());
+        emit(incomplete ? kIncompleteLogLine : line);
     }
 
     static bool isBlank(std::string_view line);
@@ -148,6 +156,8 @@ private:
     char buffer_[kCapacity] = {};
     size_t length_ = 0;
     uintptr_t writer_ = 0;
+    bool overflow_ = false;
+    bool interrupted_ = false;
 };
 
 struct LogTimes {

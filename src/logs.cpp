@@ -49,8 +49,9 @@ std::optional<int64_t> utcMs() {
 void file(uint32_t upMs, std::string_view text) {
     latchkey_util::LogLine line = latchkey_util::parseLogLine(text);
     const bool secret = latchkey_util::holdsSecretPattern(text);
-    if (secret) {
-        line.message = kWithheld;
+    if (secret || text == latchkey_util::kIncompleteLogLine) {
+        line.tag = {};
+        line.message = secret ? kWithheld : latchkey_util::kIncompleteLogLine;
         ++s_withheld;
     }
     s_ring.append(upMs, line);
@@ -71,7 +72,7 @@ void capture(const char* text, size_t length, bool cut) {
         s_joiner.feed(writer, std::string_view(text, length), ends, [&filed, up](std::string_view line) {
             file(up, line);
             filed = true;
-        });
+        }, cut);
     }
     if (filed) {
         syslog_client::wake();
