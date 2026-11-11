@@ -20,6 +20,7 @@ inline bool fixtureConnected = false;
 inline bool bluetoothReady = false;
 inline size_t bluetoothCalls = 0;
 inline std::function<bool(ble::Message&)> receiveAdvert;
+inline std::vector<std::string> monitoringWrites;
 inline ble::ScanMode bluetoothScan = ble::ScanMode::Off;
 
 int64_t esp_timer_get_time() { return managerTime; }
@@ -143,15 +144,39 @@ esp_err_t eraseAll() { return eraseFixtureNamespace("seeds"); }
 }
 
 namespace store::watch {
-esp_err_t load(const char*, latchkey_util::WatchState& out) { out = {}; return ESP_OK; }
-esp_err_t save(const char*, const latchkey_util::WatchState&) { return mutate([] {}); }
+esp_err_t load(const char* mac, latchkey_util::WatchState& out) {
+    const auto& values = s_namespaces["watch"];
+    const auto found = values.find(storedKey(mac));
+    if (found == values.end()) { out = {}; return ESP_OK; }
+    const auto& bytes = found->second.bytes;
+    return latchkey_util::decodeWatchState(bytes.data(), bytes.size(), out) ? ESP_OK : ESP_ERR_INVALID_CRC;
+}
+esp_err_t save(const char* mac, const latchkey_util::WatchState& state) {
+    monitoringWrites.push_back("watch");
+    return mutate([&] {
+        const auto bytes = latchkey_util::encodeWatchState(state);
+        s_namespaces["watch"][storedKey(mac)] = {NVS_TYPE_BLOB, {bytes.begin(), bytes.end()}};
+    });
+}
 esp_err_t erase(const char* mac) { return eraseFixtureIdentity("watch", mac); }
 esp_err_t eraseAll() { return eraseFixtureNamespace("watch"); }
 }
 
 namespace store::alerts {
-esp_err_t load(const char*, latchkey_util::LockAlerts& out) { out = {}; return ESP_OK; }
-esp_err_t save(const char*, const latchkey_util::LockAlerts&) { return mutate([] {}); }
+esp_err_t load(const char* mac, latchkey_util::LockAlerts& out) {
+    const auto& values = s_namespaces["alerts"];
+    const auto found = values.find(storedKey(mac));
+    if (found == values.end()) { out = {}; return ESP_OK; }
+    const auto& bytes = found->second.bytes;
+    return latchkey_util::LockAlerts::decode(bytes.data(), bytes.size(), out) ? ESP_OK : ESP_ERR_INVALID_CRC;
+}
+esp_err_t save(const char* mac, const latchkey_util::LockAlerts& alerts) {
+    monitoringWrites.push_back("alerts");
+    return mutate([&] {
+        const auto bytes = alerts.encode();
+        s_namespaces["alerts"][storedKey(mac)] = {NVS_TYPE_BLOB, {bytes.begin(), bytes.end()}};
+    });
+}
 esp_err_t erase(const char* mac) { return eraseFixtureIdentity("alerts", mac); }
 esp_err_t eraseAll() { return eraseFixtureNamespace("alerts"); }
 }
@@ -173,6 +198,7 @@ void resetManagerFixture() {
     bluetoothCalls = 0;
     bluetoothScan = ble::ScanMode::Off;
     receiveAdvert = {};
+    monitoringWrites.clear();
 }
 
 void clearManagerFixture() {

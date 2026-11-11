@@ -41,14 +41,14 @@ struct PageWipe {
     }
 };
 
-int64_t utcOf(const LogEntry& entry, int32_t offset, int64_t fallback) {
+int64_t utcOf(const LogEntry& entry, int32_t offset) {
     int64_t local = 0;
-    return latchkey_util::localSecondsOf(entry.time, local) ? local - offset : fallback;
+    return latchkey_util::localSecondsOf(entry.time, local) ? local - offset : 0;
 }
 
 bool raise(const std::string& mac, const LogEntry& entry, latchkey_util::UnlockMethod method, int32_t offset,
-           int64_t nowUtc, bool stopOnFailure) {
-    const int64_t when = utcOf(entry, offset, nowUtc);
+           bool stopOnFailure) {
+    const int64_t when = utcOf(entry, offset);
     latchkey_util::LockAlert alert;
     alert.time = static_cast<uint32_t>(when > 0 ? when : 0);
     alert.seq = entry.recordNumber;
@@ -116,7 +116,7 @@ Status findEnd(ttlock::Session& session, int32_t offset, latchkey_util::WatchSta
 }
 
 bool report(const std::string& mac, const LogPage& page, const latchkey_util::PageJudgement& judged,
-            const latchkey_util::WatchState& state, int32_t offset, int64_t nowUtc, bool stopOnFailure);
+            const latchkey_util::WatchState& state, int32_t offset, bool stopOnFailure);
 
 Status catchUp(ttlock::Session& session, const std::string& mac, int32_t offset, latchkey_util::LogWatch& watch,
                Entries& fresh, bool& more, int64_t nowUtc, bool stopOnFailure) {
@@ -133,7 +133,7 @@ Status catchUp(ttlock::Session& session, const std::string& mac, int32_t offset,
         if (judged.fresh.empty()) {
             return Status::Ok;
         }
-        if (!report(mac, page, judged, staged.state(), offset, nowUtc, stopOnFailure)) {
+        if (!report(mac, page, judged, staged.state(), offset, stopOnFailure)) {
             return Status::Busy;
         }
         watch = std::move(staged);
@@ -169,7 +169,7 @@ Status readSlots(ttlock::Session& session, uint16_t from, uint16_t to, Entries& 
 }
 
 bool report(const std::string& mac, const LogPage& page, const latchkey_util::PageJudgement& judged,
-            const latchkey_util::WatchState& state, int32_t offset, int64_t nowUtc, bool stopOnFailure) {
+            const latchkey_util::WatchState& state, int32_t offset, bool stopOnFailure) {
     const std::vector<UnlockFinding>& findings = judged.findings;
     bool saved = true;
     for (size_t i = 0; i < findings.size(); ++i) {
@@ -179,7 +179,7 @@ bool report(const std::string& mac, const LogPage& page, const latchkey_util::Pa
         switch (findings[i].verdict) {
             case UnlockVerdict::Alert:
                 if (!raise(mac, entry, findings[i].method,
-                           latchkey_util::recordOffset(state, entry.recordNumber, offset), nowUtc, stopOnFailure)) {
+                           latchkey_util::recordOffset(state, entry.recordNumber, offset), stopOnFailure)) {
                     if (stopOnFailure) return false;
                     saved = false;
                 }

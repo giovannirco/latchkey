@@ -70,7 +70,7 @@ LogStep stepLog(const WatchState& state, const ttlock::LogPage& page, int32_t lo
         const ttlock::LogEntry& entry = page.entries[i];
         int64_t utc = 0;
         const bool datable = utcOf(entry, recordOffset(state, entry.recordNumber, lockUtcOffsetSeconds), utc);
-        const bool restarted = datable && utc > static_cast<int64_t>(state.lastUtc);
+        const bool restarted = state.lastUtc != 0 && datable && utc > static_cast<int64_t>(state.lastUtc);
         if (entry.recordNumber < state.cursor && !restarted) {
             continue;
         }
@@ -98,6 +98,11 @@ void LogEndSearch::read(const ttlock::LogPage& page, int32_t lockUtcOffsetSecond
     ++reads_;
     const ttlock::LogEntry* found = nullptr;
     for (const ttlock::LogEntry& entry : page.entries) {
+        int64_t utc = 0;
+        if (entry.recordNumber >= asked && utcOf(entry, lockUtcOffsetSeconds, utc) &&
+            utc > static_cast<int64_t>(lastUtc_)) {
+            lastUtc_ = static_cast<uint32_t>(utc);
+        }
         if (entry.recordNumber >= asked && (found == nullptr || entry.recordNumber > found->recordNumber)) {
             found = &entry;
         }
@@ -107,8 +112,6 @@ void LogEndSearch::read(const ttlock::LogPage& page, int32_t lockUtcOffsetSecond
         return;
     }
     cursor_ = page.sequence > found->recordNumber ? page.sequence : static_cast<uint16_t>(found->recordNumber + 1);
-    int64_t utc = 0;
-    lastUtc_ = utcOf(*found, lockUtcOffsetSeconds, utc) && utc > 0 ? static_cast<uint32_t>(utc) : 0;
     low_ = asked + 1;
 }
 

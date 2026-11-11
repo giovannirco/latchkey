@@ -235,6 +235,42 @@ static void test_the_end_search_keeps_the_clock_part_of_the_state() {
     TEST_ASSERT_EQUAL_UINT16(40, found.cursor);
 }
 
+static void test_an_undated_tail_preserves_the_known_baseline_and_does_not_replay_old_records() {
+    FakeLog log{166, {}, PastTheEnd::FirstRecord};
+    LogEndSearch search;
+    while (!search.done()) {
+        auto returned = log.read(search.slot());
+        for (auto& item : returned.entries) {
+            if (item.recordNumber == 165) item.time = LockTime{2025, 0, 0, 0, 0, 0};
+        }
+        search.read(returned, kOffset);
+    }
+    const WatchState found = search.baseline({});
+    TEST_ASSERT_EQUAL_UINT16(166, found.cursor);
+    TEST_ASSERT_GREATER_OR_EQUAL_UINT32(kNoon, found.lastUtc);
+    const LogStep repeated = latchkey_util::stepLog(found, page(1, {recorded(0, 1, kNoon)}), kOffset);
+    TEST_ASSERT_TRUE(repeated.fresh.empty());
+    TEST_ASSERT_TRUE(repeated.state == found);
+}
+
+static void test_an_entirely_undated_baseline_cannot_prove_a_log_restart() {
+    const WatchState before = watching(166, 0);
+    const LogStep repeated = latchkey_util::stepLog(before, page(1, {recorded(0, 1, kNoon)}), kOffset);
+    TEST_ASSERT_TRUE(repeated.fresh.empty());
+    TEST_ASSERT_TRUE(repeated.state == before);
+    const LogStep next = latchkey_util::stepLog(before, page(167, {recorded(166, 1, kNoon + 60)}), kOffset);
+    TEST_ASSERT_EQUAL_UINT(1, next.fresh.size());
+    TEST_ASSERT_EQUAL_UINT32(kNoon + 60, next.state.lastUtc);
+}
+
+static void test_end_search_keeps_the_maximum_date_seen_in_a_mixed_page() {
+    LogEndSearch search;
+    const uint16_t asked = search.slot();
+    const auto undated = entry(asked + 1, 1, LockTime{2025, 0, 0, 0, 0, 0}, 80);
+    search.read(page(asked + 2, {recorded(asked, 1, kNoon), undated}), kOffset);
+    TEST_ASSERT_EQUAL_UINT32(kNoon, search.baseline({}).lastUtc);
+}
+
 static void test_history_keeps_each_records_offset_across_a_clock_change() {
     WatchState state = watching(12, kNoon + 60);
     latchkey_util::clockSet(state, kOffset, kNoon);
@@ -263,5 +299,8 @@ int main(int, char**) {
     RUN_TEST(test_the_end_search_finds_the_slot_after_the_newest_record);
     RUN_TEST(test_the_end_search_on_short_and_empty_logs);
     RUN_TEST(test_the_end_search_keeps_the_clock_part_of_the_state);
+    RUN_TEST(test_an_undated_tail_preserves_the_known_baseline_and_does_not_replay_old_records);
+    RUN_TEST(test_an_entirely_undated_baseline_cannot_prove_a_log_restart);
+    RUN_TEST(test_end_search_keeps_the_maximum_date_seen_in_a_mixed_page);
     return UNITY_END();
 }
