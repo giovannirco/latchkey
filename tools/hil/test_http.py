@@ -228,7 +228,7 @@ def test_every_response_carries_the_security_headers(relay: Relay, codes: Codes,
             {"type": "http", "method": "POST", "path": "/", "body": ""},
             rpc_step("system.info", cookie=session.cookie, headers={"Origin": FOREIGN_ORIGIN}),
             rpc_step("system.info", cookie=session.cookie, headers={"Content-Type": "text/plain"}),
-            rpc_step("system.info", {"pad": "x" * 9000}, session.cookie),
+            rpc_step("system.info", {"pad": "x" * 16384}, session.cookie),
             {"type": "http", "path": "/api/events", "headers": {"Cookie": session.cookie}},
         ]
     )
@@ -289,7 +289,7 @@ def test_cross_origin_and_other_content_types_are_refused(relay: Relay, session:
             rpc_step("system.info", cookie=session.cookie, headers={"Origin": FOREIGN_ORIGIN}),
             rpc_step("system.info", cookie=session.cookie, headers={"Content-Type": "text/plain"}),
             rpc_step("system.info", cookie=session.cookie, headers={"Origin": origin}),
-            rpc_step("system.info", {"pad": "x" * 9000}, session.cookie),
+            rpc_step("system.info", {"pad": "x" * 16384}, session.cookie),
         ]
     )
     assert foreign["status"] == 403
@@ -464,12 +464,13 @@ def test_the_reset_button_switch_is_checked_before_the_press(
     unknown = job_run(relay, session, origin, "lock.resetButton.set", {"lock": DOCUMENTATION_MAC, "enabled": True}, 20)
     assert job_outcome(unknown)["error"]["code"] == "not_paired"
     assert events_named(unknown, "confirm.required") == []
-    if not any(lock["id"] == lock_mac for lock in console.call("locks.list")["locks"]):
+    held = next((lock for lock in console.call("locks.list")["locks"] if lock["id"] == lock_mac), None)
+    if held is None:
         pytest.skip("this board holds no keys for the lock")
     if "reset_button" not in console.call("lock.features", {"lock": lock_mac}, timeout=60.0)["features"]:
         pytest.skip("the lock does not report reset_button")
     off = job_run(relay, session, origin, "lock.resetButton.set", {"lock": lock_mac, "enabled": False}, 20)
-    assert job_outcome(off)["error"]["code"] == "backup_required"
+    assert job_outcome(off)["error"]["code"] == ("unverified" if held["backedUp"] else "backup_required")
     assert events_named(off, "confirm.required") == []
     on = job_run(relay, session, origin, "lock.resetButton.set", {"lock": lock_mac, "enabled": True}, 45)
     assert events_named(on, "confirm.required") == []
@@ -662,7 +663,7 @@ def test_wifi_settings_from_the_web_take_the_whole_static_address(
     assert kept, "the board did not keep its static address"
 
 
-def test_heap_holds_with_one_tls_session_and_events(relay: Relay, session: Login, origin: str) -> None:
+def test_heap_holds_with_one_tls_session_and_events(console: Console, relay: Relay, session: Login, origin: str) -> None:
     result = relay.step(
         {
             "type": "ws",
@@ -688,7 +689,17 @@ def test_heap_holds_with_one_tls_session_and_events(relay: Relay, session: Login
     assert info["ble"]["ready"] is True
     assert heap["minFree"] >= MIN_FREE_HEAP
     assert heap["largestBlock"] > 16_384
-    assert all(free >= 1024 for free in info["stackFree"].values() if free)
+    active = {"lockWorker", "nimbleHost", "console", "httpsServer", "webRequests", "webJobs"}
+    if info["syslog"]["enabled"]:
+        active.add("syslog")
+    mqtt = console.call("mqtt.get")
+    if mqtt["enabled"]:
+        active.add("mqtt")
+    if mqtt["connected"]:
+        active.add("mqttClient")
+    for name in active:
+        free = info["stackFree"][name]
+        assert free is not None and free >= 1024, f"{name} stack headroom: {free}"
 
 
 def test_no_secret_reaches_the_console_or_the_audit(console: Console, secrets: dict[str, Any]) -> None:

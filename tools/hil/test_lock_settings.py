@@ -229,8 +229,10 @@ def test_the_reset_button_is_not_turned_off_without_a_key_backup(
     before = frames(console)
     started = time.monotonic()
     reply = console.request("lock.resetButton.set", {"lock": lock_mac, "enabled": False}, timeout=LOCK_TIMEOUT_S)
-    assert reply["error"]["code"] == "backup_required"
-    assert "keys.export" in reply["error"]["message"]
+    expected = "unverified" if held["backedUp"] else "backup_required"
+    assert reply["error"]["code"] == expected
+    if not held["backedUp"]:
+        assert "keys.export" in reply["error"]["message"]
     assert time.monotonic() - started < 5.0
     assert frames(console) == before
 
@@ -245,7 +247,8 @@ def test_unverified_switch_writes_send_no_frames(
         if feature not in features:
             continue
         for enabled in (True, False):
-            expected = "backup_required" if feature == "reset_button" and not enabled else "unverified"
+            missing_backup = feature == "reset_button" and not enabled and not held["backedUp"]
+            expected = "backup_required" if missing_backup else "unverified"
             assert code_of(console, f"{prefix}.set", {"lock": lock_mac, "enabled": enabled}) == expected
     assert frames(console) == before
 
@@ -256,7 +259,7 @@ def test_auto_lock_changes_and_comes_back(
     if "auto_lock" not in features_of(console, lock_mac):
         pytest.skip("the lock does not report auto_lock")
     found = call(console, "lock.autolock.get", lock_mac)
-    other = found["seconds"] + 1 if found["seconds"] < (found["max"] or 65535) else found["seconds"] - 1
+    other = (found["min"] or 1) if found["seconds"] == 0 else 0
     try:
         changed = call(console, "lock.autolock.set", lock_mac, {"seconds": other})
         assert changed == {**found, "seconds": other}
