@@ -88,7 +88,7 @@ jobs:
 
   web:
     name: Web UI tests
-    runs-on: ubuntu-24.04
+    runs-on: macos-15
     timeout-minutes: 20
     permissions:
       contents: read
@@ -100,18 +100,28 @@ jobs:
         with:
           node-version: "26.12.1"
           package-manager-cache: false
-      - name: Install headless Chromium and its system libraries
+      - name: Install headless Chromium
         run: |
           version=$(sed -n 's/^PLAYWRIGHT_VERSION=//p' tools/ui-tests/run.sh)
           test -n "$version"
-          npx --yes "playwright@${version}" install --with-deps --only-shell chromium
+          npx --yes "playwright@${version}" install --only-shell chromium
       - name: Bundler tests and Playwright suite against the mock
         run: sh tools/ui-tests/run.sh
+      - name: Browser installer and USB transport tests
+        run: sh tools/pages-tests/run.sh
       - name: Keep the Playwright traces of failed tests
         if: failure()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: playwright-results
           path: tools/ui-tests/test-results/
+          retention-days: 7
+          if-no-files-found: ignore
+      - name: Keep failed installer traces
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: pages-test-results
+          path: /tmp/latchkey-pages-test-results/
           retention-days: 7
           if-no-files-found: ignore

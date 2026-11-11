@@ -4,8 +4,8 @@
 
     python3 tools/release/build_site.py --version 0.1.0 --dist dist --out site [--docs docs]
 
-Only the files in SITE_DOCS leave docs/: index.html, which needs nothing else from the site (its
-style and script are inline, ESP Web Tools comes from unpkg), and the two notes it refers to.
+Only the files in SITE_DOCS leave docs/: the installer, its local assets and two reference notes.
+ESP Web Tools comes from unpkg with pinned integrity hashes.
 Every image, manifest and SHA256SUMS from --dist goes under firmware/<version>/, next to each
 other, so ESP Web Tools fetches them from the page's own origin. index.html must contain
 `<meta name="latchkey-version" content="">` once; the site's copy names the version, which the
@@ -24,7 +24,7 @@ from pathlib import Path
 
 VERSION = re.compile(r"[0-9]+\.[0-9]+\.[0-9]+")
 VERSION_MARKER = '<meta name="latchkey-version" content="">'
-SITE_DOCS = ("index.html", "protocol.md", "hardware.md")
+SITE_DOCS = ("index.html", "installer.css", "installer.mjs", "installer-serial.mjs", "protocol.md", "hardware.md")
 RELEASE_FILES = ("*.bin", "manifest-*.json", "SHA256SUMS")
 DEFAULT_DOCS = Path(__file__).resolve().parents[2] / "docs"
 

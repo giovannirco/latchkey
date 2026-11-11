@@ -5,6 +5,11 @@ Notable changes to Latchkey, in the format of [Keep a Changelog](https://keepach
 
 ## [Unreleased]
 
+### Added
+
+- Guided GitHub Pages installer with responsive board selection, an explicit factory-erase acknowledgement, USB owner/Wi-Fi setup, one-time authenticator capture, local encrypted lock-backup import and certificate/connection checks. Existing `.lkb` files exclude owner login, network settings and TLS identity; each board keeps its own certificate.
+- Pages-only publishing reuses checksum-verified binaries from the latest stable release without rebuilding or retagging firmware. Browser and serial tests cover setup, recovery, file validation and uncertain writes; fresh-board browser commissioning remains a hardware acceptance item.
+
 ## [0.7.0] - 2026-11-11
 
 ### Added

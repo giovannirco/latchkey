@@ -4,149 +4,13 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="color-scheme" content="light dark">
+<meta name="color-scheme" content="light">
 <meta name="referrer" content="no-referrer">
 <meta name="description" content="Install Latchkey, owner-only firmware for TTLock smart locks, on an ESP32 board from the browser.">
 <meta name="latchkey-version" content="">
 <title>Install Latchkey</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%231d5fd1' stroke-width='2.4' stroke-linecap='round'%3E%3Ccircle cx='7.5' cy='15.5' r='4.5'/%3E%3Cpath d='M10.7 12.3 20 3M15.5 7.5l3 3'/%3E%3C/svg%3E">
-<style>
-:root {
-  color-scheme: light dark;
-  --bg: #f3f4f6;
-  --surface: #ffffff;
-  --surface-2: #eceff3;
-  --text: #14171c;
-  --muted: #59616e;
-  --border: #d7dbe1;
-  --accent: #1d5fd1;
-  --accent-text: #ffffff;
-  --warn: #935600;
-  --warn-soft: #fbeed9;
-  --danger: #bf242b;
-  --danger-soft: #fce6e6;
-  --focus: #1d5fd1;
-  --radius: 12px;
-  --font: system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
-  --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace;
-}
-
-@media (prefers-color-scheme: dark) {
-  :root {
-    --bg: #0d1015;
-    --surface: #161a21;
-    --surface-2: #1f252e;
-    --text: #e5e8ed;
-    --muted: #9ca6b4;
-    --border: #2c333e;
-    --accent: #6aa4ff;
-    --accent-text: #08111f;
-    --warn: #f0a845;
-    --warn-soft: #2d2110;
-    --danger: #ff7b7b;
-    --danger-soft: #36161a;
-    --focus: #8fbaff;
-  }
-}
-
-*, *::before, *::after { box-sizing: border-box; }
-
-[hidden] { display: none !important; }
-
-body {
-  margin: 0;
-  background: var(--bg);
-  color: var(--text);
-  font: 16px/1.55 var(--font);
-}
-
-main {
-  max-width: 46rem;
-  margin: 0 auto;
-  padding: 2.5rem 1rem 3rem;
-}
-
-h1 { font-size: 2rem; margin: 0 0 0.25rem; letter-spacing: -0.01em; }
-h2 { font-size: 1.15rem; margin: 0 0 0.75rem; }
-p { margin: 0 0 0.75rem; }
-a { color: var(--accent); }
-:focus-visible { outline: 3px solid var(--focus); outline-offset: 2px; }
-
-.lead { font-size: 1.1rem; }
-.muted { color: var(--muted); }
-
-section {
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  padding: 1.25rem 1.25rem 0.75rem;
-  margin: 1rem 0;
-}
-
-section.danger { background: var(--danger-soft); border-color: var(--danger); }
-section.danger h2 { color: var(--danger); }
-
-ul { margin: 0 0 0.75rem; padding-left: 1.25rem; }
-li { margin: 0.25rem 0; }
-
-code, pre { font-family: var(--mono); font-size: 0.9em; }
-code { background: var(--surface-2); border-radius: 4px; padding: 0.05em 0.3em; }
-pre {
-  background: var(--surface-2);
-  border-radius: 8px;
-  padding: 0.75rem;
-  margin: 0 0 0.75rem;
-  overflow-x: auto;
-  white-space: pre;
-}
-pre code { background: none; padding: 0; }
-
-fieldset { border: 0; margin: 0 0 0.75rem; padding: 0; }
-
-.visually-hidden {
-  position: absolute;
-  width: 1px;
-  height: 1px;
-  overflow: hidden;
-  clip-path: inset(50%);
-  white-space: nowrap;
-}
-
-.board {
-  display: flex;
-  gap: 0.75rem;
-  align-items: flex-start;
-  border: 1px solid var(--border);
-  border-radius: 10px;
-  padding: 0.75rem;
-  margin-bottom: 0.5rem;
-  cursor: pointer;
-}
-.board:has(input:checked) { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); }
-.board input { margin-top: 0.3rem; }
-.board span { display: block; }
-.board strong { display: block; }
-
-.install-button {
-  font: inherit;
-  font-weight: 600;
-  color: var(--accent-text);
-  background: var(--accent);
-  border: 0;
-  border-radius: 999px;
-  padding: 0.65rem 1.5rem;
-  cursor: pointer;
-}
-
-.notice {
-  background: var(--warn-soft);
-  border-left: 4px solid var(--warn);
-  border-radius: 6px;
-  padding: 0.6rem 0.8rem;
-}
-
-footer { color: var(--muted); font-size: 0.9rem; margin-top: 1.5rem; }
-</style>
+<link rel="stylesheet" href="installer.css">
 <script type="importmap">
 {
   "integrity": {
@@ -180,125 +44,158 @@ footer { color: var(--muted); font-size: 0.9rem; margin-top: 1.5rem; }
 }
 </script>
 <script type="module" src="https://unpkg.com/esp-web-tools@10.4.0/dist/web/install-button.js" integrity="sha384-9XfyvAabgkISlB/Xb3OpshGKpZx0TOt5Mmu78SeiNU3so/p4o2s9m66vy6Utdnom" crossorigin="anonymous"></script>
-<script type="module">
-const version = document.querySelector('meta[name="latchkey-version"]').content;
-const button = document.querySelector('esp-web-install-button');
-const downloads = {
-  factory: document.getElementById('download-factory'),
-  ota: document.getElementById('download-ota'),
-  sums: document.getElementById('download-sums'),
-  release: document.getElementById('download-release'),
-};
-
-function showBoard() {
-  const board = document.querySelector('input[name="board"]:checked').value;
-  const base = `firmware/${version}/`;
-  const factory = `latchkey-${version}-${board}-factory.bin`;
-  const ota = `latchkey-${version}-${board}-ota.bin`;
-  button.setAttribute('manifest', `${base}manifest-${board}.json`);
-  downloads.factory.href = base + factory;
-  downloads.factory.textContent = factory;
-  downloads.ota.href = base + ota;
-  downloads.ota.textContent = ota;
-}
-
-if (/^[0-9]+\.[0-9]+\.[0-9]+$/.test(version)) {
-  document.getElementById('release-version').textContent = version;
-  downloads.sums.href = `firmware/${version}/SHA256SUMS`;
-  downloads.release.href = `https://github.com/giovannirco/latchkey/releases/tag/v${version}`;
-  for (const input of document.querySelectorAll('input[name="board"]')) {
-    input.addEventListener('change', showBoard);
-  }
-  showBoard();
-  document.getElementById('release-none').hidden = true;
-  document.getElementById('release').hidden = false;
-}
-</script>
+<script type="module" src="installer.mjs"></script>
 </head>
 <body>
+<a class="skip-link" href="#workspace">Skip to setup</a>
+<header class="site-header">
+  <a class="wordmark" href="./" aria-label="Latchkey home"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="7.5" cy="15.5" r="4.5"/><path d="M10.7 12.3 20 3M15.5 7.5l3 3"/></svg>Latchkey</a>
+  <nav aria-label="Project"><a href="#downloads">Downloads</a><a href="https://github.com/giovannirco/latchkey">GitHub</a></nav>
+</header>
 <main>
-  <header>
-    <h1>Latchkey</h1>
-    <p class="lead">Firmware for ESP32 boards that pairs, manages and hardens a TTLock Bluetooth LE smart lock with no cloud and no phone, behind an owner-only web UI.</p>
-    <p class="muted">Early development: pairing, lock control, access credentials, lock settings, operation logs and unlock alerts, HTTPS with TOTP login, button confirmation, Home Assistant over MQTT, log lines with syslog shipping, encrypted key backup and partial hardening (the reset-button step stays skipped) are released. Firmware updates from the web page are not. See the <a href="https://github.com/giovannirco/latchkey">source on GitHub</a> and the <a href="https://github.com/giovannirco/latchkey/blob/main/docs/v1-readiness.md">v1.0.0 checklist</a>.</p>
-  </header>
-
-  <section class="danger" aria-labelledby="erase-title">
-    <h2 id="erase-title">Flashing erases the board</h2>
-    <p>The factory image rewrites the flash from address 0: bootloader, partition table and every setting stored on the board, including the owner claim, the Wi-Fi settings, the audit log and the keys of any lock paired with it. Whatever was on the board before is gone, whether or not you also choose to erase it in the installer.</p>
-    <p>If this board manages a lock, that lock can no longer be managed from it. A lock whose reset button is still enabled can be returned to factory state with that button and paired again; a lock whose reset button is off can only be recovered from an encrypted key backup restored on a board. Export the keys before you reflash, and never flash this image on a board that holds a lock.</p>
-  </section>
-
-  <section aria-labelledby="board-title">
-    <h2 id="board-title">1. Pick the board</h2>
-    <fieldset>
-      <legend class="visually-hidden">Board</legend>
-      <label class="board">
-        <input type="radio" name="board" value="esp32" checked>
-        <span><strong>Classic ESP32</strong> ESP32 DevKit or any ESP32 board with 4 MB of flash. The board button is GPIO0 (BOOT).</span>
-      </label>
-      <label class="board">
-        <input type="radio" name="board" value="esp32s3">
-        <span><strong>ESP32-S3</strong> M5Stack StampS3, or another ESP32-S3 board with 8 MB of flash and the native USB port. The board button is GPIO0 (BOOT).</span>
-      </label>
-    </fieldset>
-    <p class="muted">An M5 ATOM is a classic ESP32 with its button on GPIO39, and an M5Stack AtomS3 an ESP32-S3 with its button on GPIO41: both images read GPIO0, so these boards need a build with <code>LATCHKEY_BUTTON_GPIO=39</code> or <code>LATCHKEY_BUTTON_GPIO=41</code>. See <a href="https://github.com/giovannirco/latchkey/blob/main/docs/hardware.md">the hardware notes</a>.</p>
-  </section>
-
-  <section aria-labelledby="install-title">
-    <h2 id="install-title">2. Install</h2>
-    <p id="release-none" class="notice">No release has been published on this site yet. Build and flash from source as the <a href="https://github.com/giovannirco/latchkey#build-test-flash">README</a> explains.</p>
-    <div id="release" hidden>
-      <p>Connect the board over USB, then install version <strong id="release-version"></strong>. This needs Chrome or Edge on a desktop computer: the installer talks to the board through Web Serial.</p>
-      <p>
-        <esp-web-install-button>
-          <button slot="activate" type="button" class="install-button">Install on the board</button>
-          <span slot="unsupported" class="notice">This browser cannot open serial ports. Use Chrome or Edge on a desktop computer, or flash with esptool.</span>
-          <span slot="not-allowed" class="notice">The installer only works on an HTTPS page.</span>
-        </esp-web-install-button>
-      </p>
-      <p>Files for this board: <a id="download-factory" href="#"></a> (flash at 0x0), <a id="download-ota" href="#"></a> (app image only; the board cannot install it from the web page yet), <a id="download-sums" href="#">SHA256SUMS</a>, <a id="download-release" href="#">release notes</a>.</p>
-      <p>Prefer the command line? Download the factory image and SHA256SUMS, check one against the other (<code>shasum -a 256</code> instead of <code>sha256sum</code> on macOS), then write the image at 0x0 with esptool 5 (<code>--chip esp32s3</code> for the S3 image):</p>
-<pre><code>sha256sum --check --ignore-missing SHA256SUMS
-esptool --chip esp32 --port &lt;port&gt; write-flash 0x0 latchkey-&lt;version&gt;-esp32-factory.bin</code></pre>
+  <div class="setup-layout">
+    <aside class="intro">
+      <h1>Set up your<br> Latchkey.</h1>
+      <p class="lead">Your TTLock. Your keys.<br>A small board, under your control.</p>
+      <p>Install over USB, create your login, and bring your lock keys with you. Everything stays between this browser and your board.</p>
+      <ol class="steps" aria-label="Setup progress">
+        <li aria-current="step"><span class="step-number">1</span><span><strong>Install &amp; connect</strong><small>Choose your board</small></span></li>
+        <li><span class="step-number">2</span><span><strong>Make it yours</strong><small>Wi-Fi &amp; owner access</small></span></li>
+        <li><span class="step-number">3</span><span><strong>Bring your keys</strong><small>Optional encrypted backup</small></span></li>
+        <li><span class="step-number">4</span><span><strong>Open Latchkey</strong><small>Verify your connection</small></span></li>
+      </ol>
+      <p class="intro-note">Open source. Local control.<br>No vendor account required.</p>
+    </aside>
+    <div id="workspace" class="workspace" tabindex="-1">
+      <div class="connection"><span id="connection-status" role="status">USB not connected</span><button id="disconnect" class="text-button" hidden>Disconnect</button></div>
+      <p id="error" class="notice danger" role="alert" tabindex="-1" hidden></p>
+      <p id="status" role="status" class="notice" hidden></p>
+      <noscript><p class="notice">Enable JavaScript for browser installation and setup. Firmware downloads are available on <a href="https://github.com/giovannirco/latchkey/releases">GitHub Releases</a>.</p></noscript>
+      <section id="install-panel" class="panel" aria-labelledby="install-title">
+        <h2 id="install-title" tabindex="-1">Start with your board.</h2>
+        <p>Plug it into your computer with a USB data cable. Keep other serial monitors closed.</p>
+        <fieldset class="board-options">
+          <legend>Which board are you using?</legend>
+          <label class="board"><input type="radio" name="board" value="esp32" checked><span><strong>Classic ESP32</strong><small>DevKit · 4 MB flash · BOOT on GPIO0</small></span><span class="chip-name" aria-hidden="true">ESP32</span></label>
+          <label class="board"><input type="radio" name="board" value="esp32s3"><span><strong>ESP32-S3</strong><small>StampS3 · 8 MB flash · native USB · GPIO0</small></span><span class="chip-name" aria-hidden="true">S3</span></label>
+        </fieldset>
+        <p class="small">Other boards may need a custom build. <a href="https://github.com/giovannirco/latchkey/blob/main/docs/hardware.md">Check compatibility</a>.</p>
+        <div class="install-choice">
+          <h3>New or empty board</h3>
+          <p class="small">Published release: <a id="release-link" href="https://github.com/giovannirco/latchkey/releases"><span id="release-version">unavailable</span></a></p>
+          <p class="warning-copy">Factory installation erases all board settings and lock keys, even without selecting “erase” in the installer.</p>
+          <label class="check"><input id="erase-ack" type="checkbox"><span>This board has no lock keys or settings I need to keep.</span></label>
+          <p id="release-none" class="notice" hidden>No release is available on this copy of the site. Use <a href="https://github.com/giovannirco/latchkey/releases">GitHub Releases</a>.</p>
+          <esp-web-install-button>
+            <button id="install-button" slot="activate" type="button" disabled>Install firmware</button>
+            <span slot="unsupported">Browser flashing is unavailable here.</span>
+            <span slot="not-allowed">Open this page over HTTPS to install.</span>
+          </esp-web-install-button>
+          <p id="flasher-unavailable" class="notice" hidden>The flashing tool could not load. Reload this page or use the downloads below.</p>
+          <p class="small">When installation finishes, close its dialog and connect for setup below.</p>
+        </div>
+        <div class="connect-choice">
+          <h3>Already has Latchkey?</h3>
+          <p>Continue setup or restore a backup without reinstalling firmware.</p>
+          <button id="connect" class="secondary" type="button" disabled>Connect for setup</button>
+          <p id="browser-support" class="notice" hidden>Open this page in a desktop browser with Web Serial, such as Chrome or Edge.</p>
+        </div>
+        <details><summary>Updating a board that already manages a lock?</summary><p>Keep its settings and keys. Use the <a href="https://github.com/giovannirco/latchkey/blob/main/docs/hardware.md">normal upload procedure</a>; do not use this factory installer. Export an encrypted backup from the board before updating. Browser firmware updates are not available in v0.7.0.</p></details>
+      </section>
+      <section id="setup-panel" class="panel" aria-labelledby="setup-title" hidden>
+        <h2 id="setup-title" tabindex="-1">Make this board yours.</h2>
+        <p>Choose its local address and owner password. Your board will create a new authenticator account for login.</p>
+        <form id="setup-form" autocomplete="off">
+          <fieldset><legend>Wi-Fi connection</legend>
+            <label>Wi-Fi name<input name="ssid" autocomplete="off" required maxlength="32"></label>
+            <label>Wi-Fi password<input name="wifi-password" type="password" autocomplete="new-password" maxlength="63" aria-describedby="wifi-password-hint"></label>
+            <p id="wifi-password-hint" class="small">Leave blank only for an open network.</p>
+            <p class="small">Use an unused static IPv4 address on your network, reserved outside its DHCP pool. Ask your router administrator if unsure.</p>
+            <div class="form-grid">
+              <label>Board IP address<input name="ip" inputmode="decimal" placeholder="192.0.2.50" required></label>
+              <label>Gateway<input name="gateway" inputmode="decimal" placeholder="192.0.2.1" required></label>
+              <label>Subnet mask<input name="netmask" inputmode="decimal" value="255.255.255.0" required></label>
+              <label>DNS server<input name="dns" inputmode="decimal" placeholder="192.0.2.1" required></label>
+            </div>
+          </fieldset>
+          <fieldset><legend>Owner login</legend>
+            <label>Owner password<input name="password" type="password" autocomplete="new-password" required maxlength="128" aria-describedby="owner-password-hint"></label>
+            <p id="owner-password-hint" class="small">12–128 UTF-8 bytes. Store it in your password manager.</p>
+            <label>Confirm owner password<input name="confirm-password" type="password" autocomplete="new-password" required></label>
+          </fieldset>
+          <button type="submit">Create owner access</button>
+          <p class="small">Keep this tab open. The authenticator secret is shown only once.</p>
+        </form>
+      </section>
+      <section id="auth-panel" class="panel" aria-labelledby="auth-title" hidden>
+        <h2 id="auth-title" tabindex="-1">Save your authenticator.</h2>
+        <p>Add a time-based account to your authenticator or password manager. Use this secret with <strong>SHA-1, 6 digits, 30 seconds</strong>.</p>
+        <label>Authenticator secret<input id="totp-secret" class="secret" readonly autocomplete="off" spellcheck="false"></label>
+        <button id="copy-auth" class="secondary" type="button">Copy authenticator URI</button>
+        <p class="small">The URI includes the account name and secret. Treat it like a password.</p>
+        <p class="notice">This secret cannot be shown again after you leave this step. Save it before continuing.</p>
+        <label class="check"><input id="auth-saved" type="checkbox"><span>I saved this account in my authenticator.</span></label>
+        <button id="auth-next" type="button" disabled>Continue to backup</button>
+      </section>
+      <section id="recovery-panel" class="panel" aria-labelledby="recovery-title" hidden>
+        <h2 id="recovery-title" tabindex="-1">Recover your owner login.</h2>
+        <p>This session could not confirm owner creation, but the board now has an owner. Its authenticator secret may have been lost with the reply.</p>
+        <p>Keep your owner password. If you did not save the authenticator, follow the USB guide to replace it deliberately. Do not reflash or reset the board.</p>
+        <p><a href="https://github.com/giovannirco/latchkey/blob/main/docs/hardware.md#recovering-a-lost-setup-reply" target="_blank" rel="noopener noreferrer">USB owner recovery guide</a></p>
+        <label class="check"><input id="recovery-ack" type="checkbox"><span>I recovered and verified this board’s owner login.</span></label>
+        <button id="recovery-next" type="button" disabled>Continue after recovery</button>
+      </section>
+      <section id="backup-panel" class="panel" aria-labelledby="backup-title" hidden>
+        <h2 id="backup-title" tabindex="-1">Bring your lock keys.</h2>
+        <p>Replacing a board? Restore its encrypted <code>.lkb</code> backup over USB. Existing locks on this board are never overwritten.</p>
+        <div class="backup-scope"><strong>Lock access comes with you.</strong><p>Wi-Fi, owner login, certificates and MQTT settings are not in this backup. Each board creates its own certificate.</p></div>
+        <form id="backup-form" autocomplete="off">
+          <label>Encrypted lock backup<input id="backup-file" type="file" accept=".lkb" required></label>
+          <label>Backup passphrase<input id="backup-passphrase" type="password" autocomplete="off" required><small>The passphrase used when exporting this backup.</small></label>
+          <button type="submit">Restore lock keys</button>
+        </form>
+        <p id="restore-result" class="notice success" role="status" hidden></p>
+        <button id="skip-backup" class="text-button continue" type="button">Continue without a backup</button>
+        <p class="small">Starting with a new lock? Pair it later in the board’s web interface.</p>
+      </section>
+      <section id="ready-panel" class="panel" aria-labelledby="ready-title" hidden>
+        <h2 id="ready-title" tabindex="-1">Open your Latchkey.</h2>
+        <p id="ready-description">Check the board’s connection before opening its local interface.</p>
+        <dl class="readiness">
+          <div><dt>Firmware</dt><dd id="board-firmware">Not checked</dd></div>
+          <div><dt>Wi-Fi</dt><dd id="board-wifi">Not checked</dd></div>
+          <div><dt>Owner login</dt><dd id="board-owner">Not checked</dd></div>
+          <div><dt>Clock</dt><dd id="board-clock">Not checked</dd></div>
+        </dl>
+        <a id="open-board" class="button" hidden target="_blank" rel="noopener noreferrer">Open board</a>
+        <button id="refresh" class="secondary" type="button">Check again</button>
+        <button id="sync-clock" class="secondary" type="button" hidden>Set clock from this computer</button>
+        <details open><summary>Verify the board’s certificate</summary>
+          <p>A new board uses a self-signed certificate. Before trusting it in your browser, compare its SHA-256 fingerprint with the value read here over USB.</p>
+          <code id="fingerprint">Not available yet</code>
+          <p class="small">A replacement board has a new certificate, even after a lock backup is restored.</p>
+        </details>
+        <p class="notice">Test lock access with the door open before relying on this board.</p>
+        <p class="small">Use your password and authenticator code to log in. Review the time zone, Home Assistant settings and backup status in the board’s interface.</p>
+      </section>
     </div>
+  </div>
+  <section id="downloads" class="downloads" aria-labelledby="downloads-title">
+    <div><h2 id="downloads-title">Keep a copy.</h2><p>Firmware and checksums for the selected board.<br>Recovery starts before you need it.</p></div>
+    <div class="download-links" id="release-downloads" hidden>
+      <a id="download-factory">Factory image<span>New boards only</span></a>
+      <a id="download-ota">App image<span>For the documented update procedure</span></a>
+      <a id="download-sums">SHA256SUMS<span>Verify your downloads</span></a>
+      <a id="download-release">Release notes<span>Changes and known limits</span></a>
+    </div>
+    <a id="download-fallback" href="https://github.com/giovannirco/latchkey/releases">Browse releases on GitHub</a>
   </section>
-
-  <section aria-labelledby="claim-title">
-    <h2 id="claim-title">3. Claim it over USB</h2>
-    <p>A fresh board has no owner. Claiming happens only over the USB serial console, which counts as physical presence: send <code>system.setup</code> with <code>tools/latchkey_cli.py</code> from a checkout of the repository. The Wi-Fi settings need a static IPv4 address; the owner password is 12 to 128 bytes.</p>
-<pre><code>git clone https://github.com/giovannirco/latchkey.git
-cd latchkey
-uv run -q --no-project --python 3.14 --with pyserial==3.5 \
-  python -I tools/latchkey_cli.py --port &lt;port&gt; system.info
-uv run -q --no-project --python 3.14 --with pyserial==3.5 \
-  python -I tools/latchkey_cli.py --port &lt;port&gt; system.setup - &lt; setup.json</code></pre>
-    <p><code>setup.json</code>, which keeps the passwords out of your shell history:</p>
-<pre><code>{
-  "wifi": {
-    "ssid": "your-network",
-    "password": "your-wifi-password",
-    "ip": "192.0.2.50",
-    "gateway": "192.0.2.1",
-    "netmask": "255.255.255.0",
-    "dns": "192.0.2.1"
-  },
-  "password": "a long owner password"
-}</code></pre>
-    <p>The reply carries an <code>otpauth://</code> URI, once: add it to an authenticator app for the TOTP codes of the web login, then delete <code>setup.json</code>. The port is <code>/dev/cu.usbserial-*</code> or <code>/dev/cu.usbmodem*</code> on macOS, <code>/dev/ttyUSB*</code> or <code>/dev/ttyACM*</code> on Linux and <code>COM*</code> on Windows.</p>
+  <section class="notes" aria-label="Installation notes">
+    <details><summary>Supported hardware</summary><p>Classic ESP32 images need 4 MB flash; ESP32-S3 images need 8 MB and native USB. Both expect the confirmation button on GPIO0. M5 ATOM (GPIO39) and AtomS3 (GPIO41) need a custom build. ESP8266 has no Bluetooth; ESP32-C3, C6 and H2 builds are not provided.</p><a href="https://github.com/giovannirco/latchkey/blob/main/docs/hardware.md">Hardware and flashing guide</a></details>
+    <details><summary>Privacy &amp; recovery</summary><p>Your backup is read locally and sent to the board over USB. This page does not upload credentials or backups, or save them in browser storage. Keep your encrypted backup and its passphrase somewhere safe. A backup does not replace a physical key.</p><a href="https://github.com/giovannirco/latchkey/blob/main/docs/backup-hardening.md">What a backup contains</a></details>
+    <details><summary>Prefer the command line?</summary><p>Verify downloaded images against SHA256SUMS before flashing. Follow the repository instructions for USB setup and uploads that preserve settings.</p><a href="https://github.com/giovannirco/latchkey#build-test-flash">Build, test and flash</a></details>
   </section>
-
-  <section aria-labelledby="unsupported-title">
-    <h2 id="unsupported-title">Not supported</h2>
-    <ul>
-      <li>ESP8266 boards: they have no Bluetooth radio, and TTLock locks only talk Bluetooth LE.</li>
-      <li>Other ESP32 chips (C3, C6, H2 and so on): there is no build for them yet.</li>
-    </ul>
-  </section>
-
-  <footer>
-    <p>Latchkey is free software under the GPL-3.0-or-later. The TTLock protocol work builds on <a href="https://github.com/kind3r/ttlock-sdk-js">kind3r/ttlock-sdk-js</a> and <a href="https://github.com/roquerodrigo/ttlock-ble">roquerodrigo/ttlock-ble</a>. The installer is <a href="https://github.com/esphome/esp-web-tools">ESP Web Tools</a> 10.4.0 (Apache-2.0), loaded from unpkg with every module pinned by its SHA-384 hash. <a href="https://github.com/giovannirco/latchkey/blob/main/SECURITY.md">Security model</a>.</p>
-  </footer>
 </main>
+<footer class="site-footer"><p>Latchkey is free software, GPL-3.0-or-later.</p><p><a href="https://github.com/giovannirco/latchkey/blob/main/SECURITY.md">Security</a><a href="https://github.com/giovannirco/latchkey/blob/main/docs/v1-readiness.md">Development status</a></p><p class="credits">TTLock protocol work builds on <a href="https://github.com/kind3r/ttlock-sdk-js">kind3r/ttlock-sdk-js</a> and <a href="https://github.com/roquerodrigo/ttlock-ble">roquerodrigo/ttlock-ble</a>. Browser flashing uses <a href="https://github.com/esphome/esp-web-tools">ESP Web Tools</a> 10.4.0, with pinned module integrity hashes.</p></footer>
 </body>
 </html>
