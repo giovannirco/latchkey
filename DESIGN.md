@@ -88,7 +88,7 @@ components:
 
 **Creative North Star: "The Commissioning Workspace"**
 
-This document records the implemented GitHub Pages installer in `docs/index.html` and `docs/installer.css`. It does not define the firmware interface in `web/`. The design was derived from the implementation; the descriptive language here is documentation, not a record of explicit user style approval.
+This document records the implemented GitHub Pages installer in `docs/index.html` and `docs/installer.css`. It does not define the firmware interface in `web/`. Tokens and patterns are extracted from the implementation.
 
 Purpose and progress occupy the left column. One active task occupies the white workspace on the right, beneath persistent USB connection status. Clear labels, restrained teal, and flat surfaces keep attention on the next action. There is no ambient motion or decorative imagery.
 
