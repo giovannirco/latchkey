@@ -29,7 +29,7 @@ Notable changes to Latchkey, in the format of [Keep a Changelog](https://keepach
 - Gateway-unlock API/UI controls and further passage-readback investigation are outside the installation and v1 scope. Existing passage controls remain available; the previously observed readback disconnect is unresolved.
 - Reset-button, privacy-lock and tamper-alert writes remain disabled pending protocol verification. Hardening remains partial. OTA updates and rollback are not included; update existing boards with a normal PlatformIO upload that preserves NVS, never a merged factory image.
 - Classic ESP32 heap under combined load and the first TLS connection dropping during MQTT announcements remain hardware investigations. Alert deduplication retains eight entries and does not guarantee exactly-once notifications through storage failures.
-- Native and browser regression tests cover backup and recovery. Physical restore, web button flows and installed-door operation must be verified separately; an encrypted backup excludes board login, Wi-Fi and MQTT settings.
+- Hardware acceptance verified an authenticated ESP32-S3 USB export, restoration onto a classic ESP32, retained keys after restart, and one unlock from the restored spare followed by a lock from the S3. The lock ended locked with its reset button enabled. Web backup button flows, maximum-size device backups and installed-door operation remain unverified; an encrypted backup excludes board login, Wi-Fi and MQTT settings.
 
 ## [0.5.0] - 2026-11-09
 

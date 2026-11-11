@@ -67,6 +67,6 @@ Native builds fetch the exact cJSON component shared by both target lockfiles us
 
 `tools/mock_api.py` uses opaque fixture-only backup tokens and in-memory snapshots, not a second crypto implementation. Its backups work only during that mock lifetime and are incompatible with boards. It models public job results, confirmation, preview and partial failures; native tests exercise actual serialization, cryptography and persistence.
 
-On an ESP32-S3 holding a real lock, a USB export and a hardening preview were checked; the other hardware checks, including full reset-button hardening ([#20](https://github.com/giovannirco/latchkey/issues/20)), are tracked in [docs/v1-readiness.md](v1-readiness.md) and [#26](https://github.com/giovannirco/latchkey/issues/26).
+On real hardware, an ESP32-S3 USB export and a hardening preview were checked. Before v0.6.0, a fresh encrypted export was restored onto a classic ESP32, retained through restart, and used to unlock the lock; the S3 then locked it again with the reset button still enabled. Web backup button flows, maximum-size device backups and other hardware checks, including full reset-button hardening ([#20](https://github.com/giovannirco/latchkey/issues/20)), are tracked in [docs/v1-readiness.md](v1-readiness.md) and [#26](https://github.com/giovannirco/latchkey/issues/26).
 
 The buffer-overlap contract follows the [PSA API conventions](https://arm-software.github.io/psa-api/crypto/1.2/overview/conventions.html#overlap-between-parameters).
