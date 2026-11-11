@@ -1359,3 +1359,56 @@ main.login {
     transition: none !important;
   }
 }
+
+.log-credential {
+  min-width: 10rem;
+  max-width: 22rem;
+  overflow-wrap: anywhere;
+}
+
+@media (max-width: 640px) {
+  .operation-log thead {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+  }
+
+  .operation-log tbody tr {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 6px 12px;
+    padding: 12px 0;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .operation-log td {
+    padding: 0;
+    border: 0;
+  }
+
+  .operation-log td:first-child {
+    grid-column: 1 / -1;
+    color: var(--muted);
+  }
+
+  .operation-log td:nth-child(2),
+  .operation-log td:nth-child(3) {
+    grid-column: 1;
+  }
+
+  .operation-log td:last-child {
+    grid-column: 2;
+    grid-row: 2;
+  }
+
+  .operation-log td:last-child::before {
+    content: 'Battery ';
+  }
+
+  .operation-log .log-credential {
+    min-width: 0;
+    max-width: none;
+  }
+}

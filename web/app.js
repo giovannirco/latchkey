@@ -137,10 +137,10 @@ const METHOD_TEXT = {
 const LOG_TEXT = {
   1: 'Unlocked from the app',
   4: 'Unlocked with a passcode',
-  5: 'Passcode changed on the keypad',
-  6: 'Passcode deleted on the keypad',
+  5: 'Passcode changed',
+  6: 'Passcode deleted',
   7: 'Wrong passcode entered',
-  8: 'All passcodes deleted on the keypad',
+  8: 'All passcodes deleted',
   9: 'Passcode pushed out by a newer one',
   10: 'Clearing passcode used',
   11: 'Expired passcode entered',
@@ -176,6 +176,8 @@ const LOG_TEXT = {
   41: 'App unlock refused, door locked',
   55: 'Wireless key fob',
   56: 'Wireless keypad battery report',
+  92: 'Unlocked with the admin passcode',
+  93: 'Passcode added',
 };
 
 const PASSCODE_TYPES = [
@@ -644,6 +646,7 @@ const STORED_WARNING_TEXT = {
 function alertText(data) {
   const lock = state.locks.find((item) => item.id === data.lock);
   const name = lock ? lock.name : data.lock;
+  if (data.kind === 'low_battery') return `${name} battery is low (${data.battery}%). Replace the batteries.`;
   if (data.method === 'forced') return `${name} was forced open`;
   const how = METHOD_TEXT[data.method];
   return how ? `${name} was unlocked ${how}, and not by Latchkey` : `${name} was unlocked, and not by Latchkey`;
@@ -654,6 +657,14 @@ events.on('lock.alert', (data) => {
   toast(alertText(data), {
     alarm: true,
     detail: `${formatTime(data.time)}, read from the lock's log. Check who can open it.`,
+  });
+});
+
+events.on('lock.battery.alert', (data) => {
+  if (!data || typeof data.lock !== 'string') return;
+  toast(alertText(data), {
+    warning: true,
+    detail: `${formatTime(data.time)}. The lock reported less than 40% battery.`,
   });
 });
 
@@ -1360,7 +1371,7 @@ function lockCard(lock) {
     const result = await rpc('lock.alerts.list', { lock: lock.id });
     if (requested === alertGeneration) showAlertCount(result.alerts.length);
   }
-  for (const name of ['lock.alert', 'lock.alerts.changed']) {
+  for (const name of ['lock.alert', 'lock.battery.alert', 'lock.alerts.changed']) {
     listen(name, (data) => {
       if (data.lock === lock.id) reloadAlertCount().catch(toastError);
     });
@@ -1881,7 +1892,7 @@ async function renderAlerts(view, lock) {
       acknowledge.disabled = through === 0;
     }
   });
-  for (const event of ['lock.alert', 'lock.alerts.changed']) {
+  for (const event of ['lock.alert', 'lock.battery.alert', 'lock.alerts.changed']) {
     listen(event, (data) => {
       if (data.lock === lock.id) load().catch(toastError);
     });
@@ -2736,6 +2747,18 @@ function passageSection(lock) {
   return item;
 }
 
+function logCredential(detail) {
+  if (!detail) return null;
+  const kind = { fingerprint: 'fingerprint', passcode: 'passcode', card: 'card' }[detail.kind] || 'credential';
+  return h(
+    'div',
+    { class: 'log-credential' },
+    h('div', null, detail.name || (detail.id ? capitalize(kind) : `Unidentified ${kind}`)),
+    detail.id ? h('div', { class: 'small muted' }, `ID ${detail.id}`) : null,
+    detail.name ? h('div', { class: 'small muted' }, detail.nameSource === 'last_known_label' ? 'Last-known label' : 'Current label') : null,
+  );
+}
+
 async function renderLog(panel, lock) {
   const fetchNew = h('button', { class: 'button small', type: 'button' }, icon('refresh'), 'Fetch new entries');
   const item = section('Operation log', 'list', [fetchNew]);
@@ -2746,7 +2769,22 @@ async function renderLog(panel, lock) {
       'tr',
       null,
       h('td', { class: 'nowrap' }, formatTime(entry.time)),
-      h('td', null, entry.name || LOG_TEXT[entry.type] || `Event ${entry.type}`),
+      h('td', null,
+        h('div', null, entry.name || LOG_TEXT[entry.type] || `Event ${entry.type}`),
+        entry.outcome === 'failure' ? h('span', { class: 'badge warn' }, 'Failed') : null,
+        h('details', { class: 'small muted' },
+          h('summary', null, `Record ${entry.seq}`),
+          h('div', null, `Event type ${entry.type}`),
+          typeof entry.uid === 'number' ? h('div', null, `App user ID ${entry.uid}`) : null,
+          typeof entry.recordId === 'number' ? h('div', null, `Operation ID ${entry.recordId}`) : null,
+        ),
+      ),
+      h('td', null,
+        logCredential(entry.credential),
+        entry.newCredential ? h('div', { class: 'small muted' }, 'Changed to') : null,
+        logCredential(entry.newCredential),
+        !entry.credential ? '—' : null,
+      ),
       h('td', null, typeof entry.battery === 'number' ? `${entry.battery}%` : '—'),
     );
   const table = h(
@@ -2754,7 +2792,7 @@ async function renderLog(panel, lock) {
     { class: 'table-wrap' },
     h(
       'table',
-      null,
+      { class: 'operation-log' },
       h('caption', { class: 'visually-hidden' }, 'Operation log'),
       h(
         'thead',
@@ -2764,6 +2802,7 @@ async function renderLog(panel, lock) {
           null,
           h('th', { scope: 'col' }, 'When'),
           h('th', { scope: 'col' }, 'Event'),
+          h('th', { scope: 'col' }, 'Credential'),
           h('th', { scope: 'col' }, 'Battery'),
         ),
       ),
@@ -2800,7 +2839,7 @@ async function renderLog(panel, lock) {
     await readOn(await rpc('lock.log.fetch', { lock: lock.id }));
     item.body.replaceChildren(
       rows.childNodes.length ? table : h('p', { class: 'empty' }, 'The lock has no log entries.'),
-      h('p', { class: 'hint' }, 'Entries come from the lock itself, with the time on its own clock.'),
+      h('p', { class: 'hint' }, 'Entries come from the lock itself, with the time on its own clock. Labels describe saved credentials, not a verified person. Retired labels are limited to the 16 most recently removed names. PIN digits stay private; unidentified attempts may have no usable ID.'),
     );
   });
 }
