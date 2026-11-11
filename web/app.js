@@ -1390,6 +1390,7 @@ function lockCard(lock) {
 
 async function viewPair(view) {
   heading(view, 'Add a lock');
+  append(view, [zoneNotice()]);
   const steps = ['Scan', 'Pair', 'Harden'].map((text) => h('li', null, text));
   const panel = h('section', { class: 'card stack', 'aria-label': 'Add a lock' });
   view.append(h('ol', { class: 'stepper' }, steps), panel);
@@ -1785,6 +1786,7 @@ async function viewLock(view, lockId, tab = 'access') {
     return;
   }
   title.textContent = lock.name;
+  append(view, [zoneNotice()]);
   rename.disabled = false;
   rename.addEventListener('click', async () => {
     const input = h('input', { type: 'text', maxlength: '32', required: true, value: lock.name, autocomplete: 'off' });
@@ -1931,6 +1933,21 @@ function zoneHint() {
   if (board === here)
     return `Dates and times are in this device's time zone, ${here}, the same as the board's${named}.`;
   return `Dates and times are in this device's time zone, ${here}. The board keeps ${board}${named}, and the lock follows the board.`;
+}
+
+function zoneNotice() {
+  const local = state.info?.localTime;
+  if (typeof local !== 'string' || !/[+-]\d\d:\d\d$/.test(local)) return null;
+  const board = `UTC${local.slice(-6)}`;
+  const browser = zoneLabel(-new Date().getTimezoneOffset());
+  if (board === browser) return null;
+  return h(
+    'p',
+    { class: 'notice', role: 'status' },
+    `Board time zone differs from this device: ${board} on the board, ${browser} here. Weekly schedules use the lock's local clock. `,
+    h('a', { href: '#/system' }, 'Review time zone'),
+    ', then open the lock’s Settings and choose Sync time. Keep the board zone if it is correct for the lock’s location.',
+  );
 }
 
 function codeInput(props = {}) {
@@ -2576,7 +2593,7 @@ async function renderSettings(panel, lock, has) {
 
   const clock = section('Clock', 'clock');
   clock.load = async () => {
-    const sync = h('button', { class: 'button small', type: 'button' }, icon('refresh'), "Set the lock's clock");
+    const sync = h('button', { class: 'button small', type: 'button' }, icon('refresh'), 'Sync time');
     sync.addEventListener('click', async () => {
       try {
         const result = await pending(sync, () => rpc('lock.time.sync', target));
@@ -3332,6 +3349,7 @@ async function viewSystem(view) {
   heading(view, 'System');
   const board = section('Board', 'chip');
   const wifi = section('Wi-Fi', 'wifi');
+  const timezone = section('Time zone', 'clock');
   const ota = section('Firmware update', 'upload');
   const mqtt = section('Home Assistant (MQTT)', 'wifi');
   const remote = section('Remote logging (syslog)', 'upload');
@@ -3484,7 +3502,7 @@ async function viewSystem(view) {
 
   view.append(
     h('div', { class: 'grid' }, board.el, wifi.el),
-    ota.el,
+    timezone.el,
     mqtt.el,
     remote.el,
     logs.el,
@@ -3522,6 +3540,74 @@ async function viewSystem(view) {
         ['Clock', clock.synced ? `Synced · ${formatTime(clock.utc)}` : 'Not synced yet'],
         ['Wi-Fi', net.connected ? `${net.ssid} · ${net.ip} · ${net.rssi} dBm` : 'Not connected'],
       ]),
+    );
+  });
+  await load(timezone.body, async () => {
+    const settings = await rpc('system.timezone.get');
+    const zone = h('input', {
+      type: 'text',
+      value: settings.tz,
+      required: true,
+      maxlength: '64',
+      autocomplete: 'off',
+      autocapitalize: 'off',
+      spellcheck: 'false',
+    });
+    const save = h('button', { class: 'button small primary', type: 'submit' }, 'Save time zone');
+    const status = h('p', { class: 'muted small', 'aria-live': 'polite' });
+    const showStatus = (settings) => {
+      status.textContent =
+        typeof settings.utcOffset === 'number'
+          ? `Current board offset: ${zoneLabel(settings.utcOffset / 60)}.`
+          : 'The board clock is not synced; its current offset is unavailable.';
+    };
+    showStatus(settings);
+    const browserZone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+    const browserOffset = zoneLabel(-new Date().getTimezoneOffset());
+    const useBrowser = h('button', { class: 'button small', type: 'button' }, 'Use current browser offset');
+    useBrowser.addEventListener('click', () => {
+      const offset = new Date().getTimezoneOffset();
+      const magnitude = Math.abs(offset);
+      zone.value = `UTC${offset < 0 ? '-' : ''}${Math.floor(magnitude / 60)}${magnitude % 60 ? `:${pad(magnitude % 60)}` : ''}`;
+      zone.focus();
+    });
+    const form = h(
+      'form',
+      { class: 'stack', 'aria-label': 'Time zone' },
+      field(
+        'POSIX time zone',
+        zone,
+        'For example, <-03>3 keeps UTC-03:00; EST5EDT,M3.2.0,M11.1.0 includes daylight rules.',
+      ),
+      h('div', { class: 'row' }, useBrowser, save),
+    );
+    form.addEventListener('submit', async (event) => {
+      event.preventDefault();
+      try {
+        const saved = await pending(save, () => rpc('system.timezone.set', { tz: zone.value }));
+        zone.value = saved.tz;
+        showStatus(saved);
+        state.info = { ...state.info, timezone: saved.tz, localTime: null };
+        toast('Time zone saved');
+        state.info = await rpc('system.info');
+      } catch (failure) {
+        toastError(failure);
+      }
+    });
+    timezone.body.replaceChildren(
+      h(
+        'p',
+        { class: 'hint' },
+        'The lock follows the board’s time zone. Use POSIX rules, not an IANA name. A fixed offset does not adjust for daylight saving.',
+      ),
+      h(
+        'p',
+        { class: 'muted small' },
+        `Browser time zone: ${browserZone} (${browserOffset} now). This is guidance only; choose rules for the lock’s location.`,
+      ),
+      status,
+      form,
+      h('p', { class: 'hint' }, 'After saving, open each lock’s Settings and choose Sync time to apply its clock now.'),
     );
   });
   await load(mqtt.body, async () => {
