@@ -1,0 +1,289 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-11-11T14:21:48.415Z",
+  "title": "Design System: Latchkey Pages Installer",
+  "extensions": {
+    "colorMeta": {
+      "teal": {
+        "role": "primary",
+        "displayName": "Deep Teal",
+        "tonalRamp": [
+          "oklch(15.00% 0.07742 188.92)",
+          "oklch(26.43% 0.07742 188.92)",
+          "oklch(37.86% 0.07742 188.92)",
+          "oklch(49.29% 0.07742 188.92)",
+          "oklch(60.71% 0.07742 188.92)",
+          "oklch(72.14% 0.07742 188.92)",
+          "oklch(83.57% 0.07742 188.92)",
+          "oklch(95.00% 0.07742 188.92)"
+        ]
+      },
+      "teal-dark": {
+        "role": "primary",
+        "displayName": "Dark Teal",
+        "tonalRamp": [
+          "oklch(15.00% 0.06364 188.82)",
+          "oklch(26.43% 0.06364 188.82)",
+          "oklch(37.86% 0.06364 188.82)",
+          "oklch(49.29% 0.06364 188.82)",
+          "oklch(60.71% 0.06364 188.82)",
+          "oklch(72.14% 0.06364 188.82)",
+          "oklch(83.57% 0.06364 188.82)",
+          "oklch(95.00% 0.06364 188.82)"
+        ]
+      },
+      "ink": {
+        "role": "neutral",
+        "displayName": "Ink",
+        "tonalRamp": [
+          "oklch(15.00% 0.02855 221.94)",
+          "oklch(26.43% 0.02855 221.94)",
+          "oklch(37.86% 0.02855 221.94)",
+          "oklch(49.29% 0.02855 221.94)",
+          "oklch(60.71% 0.02855 221.94)",
+          "oklch(72.14% 0.02855 221.94)",
+          "oklch(83.57% 0.02855 221.94)",
+          "oklch(95.00% 0.02855 221.94)"
+        ]
+      },
+      "muted": {
+        "role": "neutral",
+        "displayName": "Muted Slate",
+        "tonalRamp": [
+          "oklch(15.00% 0.02638 213.82)",
+          "oklch(26.43% 0.02638 213.82)",
+          "oklch(37.86% 0.02638 213.82)",
+          "oklch(49.29% 0.02638 213.82)",
+          "oklch(60.71% 0.02638 213.82)",
+          "oklch(72.14% 0.02638 213.82)",
+          "oklch(83.57% 0.02638 213.82)",
+          "oklch(95.00% 0.02638 213.82)"
+        ]
+      },
+      "paper": {
+        "role": "neutral",
+        "displayName": "Ice Paper",
+        "tonalRamp": [
+          "oklch(15.00% 0.00849 197.02)",
+          "oklch(26.43% 0.00849 197.02)",
+          "oklch(37.86% 0.00849 197.02)",
+          "oklch(49.29% 0.00849 197.02)",
+          "oklch(60.71% 0.00849 197.02)",
+          "oklch(72.14% 0.00849 197.02)",
+          "oklch(83.57% 0.00849 197.02)",
+          "oklch(95.00% 0.00849 197.02)"
+        ]
+      },
+      "line": {
+        "role": "neutral",
+        "displayName": "Pale Line",
+        "tonalRamp": [
+          "oklch(15.00% 0.01939 200.84)",
+          "oklch(26.43% 0.01939 200.84)",
+          "oklch(37.86% 0.01939 200.84)",
+          "oklch(49.29% 0.01939 200.84)",
+          "oklch(60.71% 0.01939 200.84)",
+          "oklch(72.14% 0.01939 200.84)",
+          "oklch(83.57% 0.01939 200.84)",
+          "oklch(95.00% 0.01939 200.84)"
+        ]
+      },
+      "white": {
+        "role": "neutral",
+        "displayName": "White",
+        "tonalRamp": [
+          "oklch(15.00% 0.00000 0.00)",
+          "oklch(26.43% 0.00000 0.00)",
+          "oklch(37.86% 0.00000 0.00)",
+          "oklch(49.29% 0.00000 0.00)",
+          "oklch(60.71% 0.00000 0.00)",
+          "oklch(72.14% 0.00000 0.00)",
+          "oklch(83.57% 0.00000 0.00)",
+          "oklch(95.00% 0.00000 0.00)"
+        ]
+      },
+      "warning": {
+        "role": "neutral",
+        "displayName": "Rust Warning",
+        "tonalRamp": [
+          "oklch(15.00% 0.11960 37.19)",
+          "oklch(26.43% 0.11960 37.19)",
+          "oklch(37.86% 0.11960 37.19)",
+          "oklch(49.29% 0.11960 37.19)",
+          "oklch(60.71% 0.11960 37.19)",
+          "oklch(72.14% 0.11960 37.19)",
+          "oklch(83.57% 0.11960 37.19)",
+          "oklch(95.00% 0.11960 37.19)"
+        ]
+      },
+      "warning-bg": {
+        "role": "neutral",
+        "displayName": "Warm Warning Paper",
+        "tonalRamp": [
+          "oklch(15.00% 0.01691 50.44)",
+          "oklch(26.43% 0.01691 50.44)",
+          "oklch(37.86% 0.01691 50.44)",
+          "oklch(49.29% 0.01691 50.44)",
+          "oklch(60.71% 0.01691 50.44)",
+          "oklch(72.14% 0.01691 50.44)",
+          "oklch(83.57% 0.01691 50.44)",
+          "oklch(95.00% 0.01691 50.44)"
+        ]
+      }
+    },
+    "typographyMeta": {
+      "display": {
+        "displayName": "Display",
+        "purpose": "The setup introduction only."
+      },
+      "headline": {
+        "displayName": "Task Heading",
+        "purpose": "The active commissioning task."
+      },
+      "body": {
+        "displayName": "Body",
+        "purpose": "Instructions and controls."
+      },
+      "small": {
+        "displayName": "Supporting Copy",
+        "purpose": "Hints and technical context."
+      }
+    },
+    "shadows": [
+      {
+        "name": "board-selection",
+        "value": "inset 0 0 0 1px var(--teal)",
+        "purpose": "Selected board radio option; no workspace elevation."
+      }
+    ],
+    "motion": [],
+    "breakpoints": [
+      {
+        "name": "compact",
+        "value": "850px"
+      },
+      {
+        "name": "stacked",
+        "value": "680px"
+      }
+    ]
+  },
+  "components": [
+    {
+      "name": "Primary Button",
+      "kind": "button",
+      "refersTo": "button-primary",
+      "description": "The next action in the current task.",
+      "html": "<button class=\"ds-primary\" type=\"button\">Install firmware</button>",
+      "css": ".ds-primary{font-family:'Avenir Next',Avenir,'Segoe UI',sans-serif;display:inline-flex;justify-content:center;align-items:center;min-height:48px;padding:.7rem 1.25rem;border:1px solid var(--teal);border-radius:7px;font-size:16px;font-weight:600;line-height:1.3;cursor:pointer;background:var(--teal);color:var(--white)}.ds-primary:hover:not(:disabled){background:var(--teal-dark)}.ds-primary:disabled{background:#e3ebec;border-color:#e3ebec;color:var(--muted);cursor:not-allowed}.ds-primary:focus-visible{outline:3px solid var(--teal);outline-offset:4px;}"
+    },
+    {
+      "name": "Secondary Button",
+      "kind": "button",
+      "refersTo": "button-secondary",
+      "description": "A supporting task action.",
+      "html": "<button class=\"ds-secondary\" type=\"button\">Connect for setup</button>",
+      "css": ".ds-secondary{font-family:'Avenir Next',Avenir,'Segoe UI',sans-serif;display:inline-flex;justify-content:center;align-items:center;min-height:48px;padding:.7rem 1.25rem;border:1px solid var(--teal);border-radius:7px;font-size:16px;font-weight:600;line-height:1.3;cursor:pointer;background:var(--white);color:var(--teal);border-color:var(--line)}.ds-secondary:hover:not(:disabled){background:var(--paper);color:var(--teal-dark)}.ds-secondary:disabled{cursor:not-allowed}.ds-secondary:focus-visible{outline:3px solid var(--teal);outline-offset:4px;}"
+    },
+    {
+      "name": "Text Button",
+      "kind": "button",
+      "refersTo": "button-text",
+      "description": "An understated continuation or disconnect action.",
+      "html": "<button class=\"ds-text\" type=\"button\">Continue without a backup</button>",
+      "css": ".ds-text{font-family:'Avenir Next',Avenir,'Segoe UI',sans-serif;display:inline-flex;justify-content:center;align-items:center;min-height:48px;padding:.7rem 1.25rem;border:1px solid var(--teal);border-radius:7px;font-size:16px;font-weight:600;line-height:1.3;cursor:pointer;min-height:44px;padding:.45rem 0;border:0;background:transparent;color:var(--teal);text-decoration:underline;text-underline-offset:.2em}.ds-text:hover:not(:disabled){color:var(--teal-dark)}.ds-text:focus-visible{outline:3px solid var(--teal);outline-offset:4px;}"
+    },
+    {
+      "name": "Text Field",
+      "kind": "input",
+      "refersTo": "input",
+      "description": "A visible label with an editable field.",
+      "html": "<label class=\"ds-field\">Board IP address<input inputmode=\"decimal\" placeholder=\"192.0.2.50\"></label>",
+      "css": ".ds-field{font-family:'Avenir Next',Avenir,'Segoe UI',sans-serif;display:grid;gap:.4rem;font-size:.9rem;font-weight:550;color:var(--ink)}.ds-field input{font-family:'Avenir Next',Avenir,'Segoe UI',sans-serif;width:100%;min-width:0;min-height:46px;border:1px solid #a9c1c4;border-radius:5px;padding:.65rem .75rem;background:var(--white);color:var(--ink);font-size:1rem}.ds-field input::placeholder{color:var(--muted);opacity:1}.ds-field input[readonly]{background:var(--paper)}.ds-field input:focus-visible{outline:3px solid var(--teal);outline-offset:4px;}"
+    },
+    {
+      "name": "Project Navigation",
+      "kind": "nav",
+      "refersTo": "navigation",
+      "description": "Small text links above setup.",
+      "html": "<nav class=\"ds-nav\" aria-label=\"Project\"><a href=\"#downloads\">Downloads</a><a href=\"https://github.com/giovannirco/latchkey\">GitHub</a></nav>",
+      "css": ".ds-nav{font-family:'Avenir Next',Avenir,'Segoe UI',sans-serif;display:flex;gap:2rem}.ds-nav a{color:var(--teal);font-size:.9rem;font-weight:600;text-decoration:none}.ds-nav a:hover{color:var(--teal-dark)}.ds-nav a:focus-visible{outline:3px solid var(--teal);outline-offset:4px;}@media(max-width:680px){.ds-nav{gap:1rem}.ds-nav a{font-size:.8rem}}"
+    },
+    {
+      "name": "Board Choice",
+      "kind": "card",
+      "refersTo": "board-option",
+      "description": "A full-row native radio option with a selection stroke.",
+      "html": "<label class=\"ds-board\"><input type=\"radio\" name=\"ds-board\" checked><span><strong>Classic ESP32</strong><small>DevKit · 4 MB flash · BOOT on GPIO0</small></span><span class=\"ds-chip\">ESP32</span></label>",
+      "css": ".ds-board{font-family:'Avenir Next',Avenir,'Segoe UI',sans-serif;display:flex;align-items:center;gap:.85rem;padding:1rem;border:1px solid var(--line);border-radius:7px;cursor:pointer;color:var(--ink)}.ds-board:has(input:checked){border-color:var(--teal);background:#f3f9f8;box-shadow:inset 0 0 0 1px var(--teal)}.ds-board input{width:18px;height:18px;flex:0 0 18px;accent-color:var(--teal);margin:.15rem 0}.ds-board strong,.ds-board small{display:block}.ds-board strong{font-size:1rem}.ds-board small{font-size:.75rem;line-height:1.5;margin-top:.2rem;color:var(--muted)}.ds-chip{margin-left:auto;font-weight:650;font-size:.8rem;color:var(--muted)}.ds-board input:focus-visible{outline:3px solid var(--teal);outline-offset:4px;}@media(max-width:850px){.ds-board{padding:.8rem}.ds-chip{display:none}}"
+    },
+    {
+      "name": "USB Workspace",
+      "kind": "card",
+      "refersTo": "workspace",
+      "description": "A flat task container beneath persistent connection status.",
+      "html": "<section class=\"ds-workspace\"><div class=\"ds-connection\"><span role=\"status\">USB not connected</span></div><div class=\"ds-panel\"><h2>Start with your board.</h2><p>Plug it into your computer with a USB data cable.</p></div></section>",
+      "css": ".ds-workspace{font-family:'Avenir Next',Avenir,'Segoe UI',sans-serif;min-width:0;background:var(--white);color:var(--ink);border:1px solid var(--line);border-radius:16px;overflow:clip}.ds-connection{display:flex;align-items:center;min-height:54px;padding:.5rem 2rem;border-bottom:1px solid var(--line);color:var(--muted);font-size:.8rem}.ds-connection span:before{content:'';display:inline-block;width:7px;height:7px;border-radius:50%;margin-right:.5rem;background:#829599}.ds-panel{padding:2rem}.ds-panel h2{font-size:1.85rem;font-weight:650;line-height:1.2;letter-spacing:-.025em;margin:0 0 .75rem}.ds-panel p{margin:0 0 1rem;font-size:.95rem;line-height:1.55;color:var(--muted)}@media(max-width:850px){.ds-panel{padding:1.5rem}.ds-connection{padding-inline:1.5rem}}@media(max-width:680px){.ds-panel{padding:1.4rem 1.2rem}.ds-connection{padding-inline:1.2rem}.ds-panel h2{font-size:1.6rem}}"
+    },
+    {
+      "name": "Status Notice",
+      "kind": "custom",
+      "refersTo": "notice",
+      "description": "A quiet message with a thin left border.",
+      "html": "<p class=\"ds-notice\" role=\"status\">Save your authenticator before continuing.</p>",
+      "css": ".ds-notice{font-family:'Avenir Next',Avenir,'Segoe UI',sans-serif;padding:.9rem 1rem;border-left:1px solid var(--teal);background:var(--paper);color:var(--ink);font-size:.9rem;line-height:1.55;overflow-wrap:anywhere}.ds-notice.ds-danger{border-color:var(--warning);background:var(--warning-bg);color:var(--warning)}"
+    },
+    {
+      "name": "Setup Progress",
+      "kind": "custom",
+      "refersTo": "progress",
+      "description": "Four numbered task states, with current state exposed semantically.",
+      "html": "<ol class=\"ds-steps\" aria-label=\"Setup progress\"><li aria-current=\"step\"><span class=\"ds-number\">1</span><strong>Install &amp; connect</strong></li><li><span class=\"ds-number\">2</span><strong>Make it yours</strong></li><li><span class=\"ds-number\">3</span><strong>Bring your keys</strong></li><li><span class=\"ds-number\">4</span><strong>Open Latchkey</strong></li></ol>",
+      "css": ".ds-steps{font-family:'Avenir Next',Avenir,'Segoe UI',sans-serif;list-style:none;padding:0;margin:0}.ds-steps li{display:flex;align-items:flex-start;gap:.9rem;padding-bottom:1.4rem;position:relative;color:var(--muted)}.ds-steps li:not(:last-child):after{content:'';position:absolute;top:35px;bottom:5px;left:16px;width:1px;background:var(--line)}.ds-number{flex:0 0 33px;width:33px;height:33px;border:1px solid var(--line);border-radius:50%;display:grid;place-items:center;font-size:.8rem;background:var(--paper)}.ds-steps strong{font-size:.95rem;font-weight:600}.ds-steps [aria-current]{color:var(--ink)}.ds-steps [aria-current] .ds-number{background:var(--teal);border-color:var(--teal);color:var(--white)}.ds-complete .ds-number{border-color:var(--teal);color:var(--teal)}@media(max-width:680px){.ds-steps{display:grid;grid-template-columns:repeat(4,1fr);gap:.35rem}.ds-steps li{flex-direction:column;gap:.5rem;padding:0}.ds-steps li:not(:last-child):after{height:1px;top:16px;left:42px;right:6px;width:auto}.ds-steps strong{font-size:.7rem;line-height:1.4}}"
+    }
+  ],
+  "narrative": {
+    "northStar": "The Commissioning Workspace",
+    "overview": "This document records the implemented GitHub Pages installer in `docs/index.html` and `docs/installer.css`. It does not define the firmware interface in `web/`. The design was derived from the implementation; the descriptive language here is documentation, not a record of explicit user style approval.\n\nPurpose and progress occupy the left column. One active task occupies the white workspace on the right, beneath persistent USB connection status. Clear labels, restrained teal, and flat surfaces keep attention on the next action. There is no ambient motion or decorative imagery.",
+    "keyCharacteristics": [
+      "Four real setup steps, with supporting panels inside the current step.",
+      "Teal actions and white surfaces against a pale ice background.",
+      "Local system typography and visible keyboard focus.",
+      "Release metadata inside the installation task."
+    ],
+    "rules": [
+      {
+        "name": "The State Rule",
+        "body": "Use text and native control state alongside color to communicate selection, connection and errors.",
+        "section": "colors"
+      },
+      {
+        "name": "The Heading Rule",
+        "body": "Keep the display heading's measured tracking; avoid tightening it further or adding an eyebrow above it.",
+        "section": "typography"
+      },
+      {
+        "name": "The Task Rule",
+        "body": "Keep USB status above the active task and release metadata within installation.",
+        "section": "layout"
+      },
+      {
+        "name": "The Focus Rule",
+        "body": "Preserve the teal keyboard outline (3px with 4px offset), the skip link and focusable task headings.",
+        "section": "components"
+      }
+    ],
+    "dos": [
+      "Do keep one active task inside the persistent USB workspace.",
+      "Do place destructive consequences beside the action and its acknowledgement.",
+      "Do preserve native controls, visible labels and keyboard focus.",
+      "Do keep release details inside installation and technical downloads below setup."
+    ],
+    "donts": [
+      "Don't apply this installer specification to the firmware interface without a separate design decision.",
+      "Don't add ambient motion, decorative imagery or a workspace shadow.",
+      "Don't replace the four real steps with decorative progress.",
+      "Don't hide errors or use color alone to communicate state."
+    ]
+  }
+}
