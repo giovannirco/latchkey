@@ -1,7 +1,7 @@
 <!-- SPDX-License-Identifier: GPL-3.0-or-later -->
 # v1.0.0 readiness
 
-This is the checklist for v1.0.0. The latest release is [v0.6.0](https://github.com/giovannirco/latchkey/releases/tag/v0.6.0) (2026-11-11); v1.0.0 is not ready to tag. The roadmap and its discussion are in [#26](https://github.com/giovannirco/latchkey/issues/26); `CHANGELOG.md` lists what each release contains.
+This is the checklist for v1.0.0. The latest release is [v0.7.0](https://github.com/giovannirco/latchkey/releases/tag/v0.7.0) (2026-11-11); v1.0.0 is not ready to tag. The roadmap and its discussion are in [#26](https://github.com/giovannirco/latchkey/issues/26); `CHANGELOG.md` lists what each release contains.
 
 ## Released
 
@@ -13,6 +13,7 @@ This is the checklist for v1.0.0. The latest release is [v0.6.0](https://github.
 | v0.4.0 | Log lines on the board, syslog shipping, the full Wi-Fi form. |
 | v0.5.0 | Encrypted key export/import, pending admin-code recovery, previewed partial hardening with the reset-button step skipped. |
 | v0.6.0 | Time-zone controls, HTTP and logging hardening, bounded MQTT state, credential cleanup and alert persistence recovery. |
+| v0.7.0 | Credential details and failure outcomes in operation logs, bounded retired labels and persistent battery warnings below 40%. |
 
 Gateway-unlock API/UI controls are not planned for the installation or v1. The protocol primitive remains available; its effect on Latchkey unlocking is unverified.
 
@@ -63,6 +64,8 @@ Alert deduplication remains bounded to eight entries. A longer backlog and faile
 
 Local verification on 2026-11-11: 869 native tests, 177 browser tests including desktop/phone screenshots, 23 browser-build/mock Python tests, 22 CI-tool tests and 28 release-tool tests passed. A subsequent mock log identity correction passed all 10 log-view browser tests. Both target builds passed; the v0.6.0 classic ESP32 image was 1,403,360 bytes against the 1,887,436-byte limit. Updated hardware suites collected 75 cases without running them against a device. The separate v0.6.0 hardware checks verified the two-board restore and one unlock/lock cycle, preserving the enabled reset button. CI on the final `main` commit remains the release gate.
 
+v0.7.0 validation passed 903 native tests, 180 passing browser cases plus four final targeted cases, and 27 passing mock/bundler tests. Independent firmware and UI reviews resolved label reuse, failed status interpretation and battery-alert overflow. Credential identification and battery thresholds are covered by deterministic fixtures; physical failed attempts and battery depletion were not induced.
+
 ## Deferred beyond v1.0.0
 
 | Item | Status |
@@ -70,7 +73,7 @@ Local verification on 2026-11-11: 869 native tests, 177 browser tests including 
 | Weekly (cyclic) passcode creation and editing ([#22](https://github.com/giovannirco/latchkey/issues/22)) | Not built. Weekly passcodes can be listed and deleted; the command layout for writing their window lacks protocol evidence. Fingerprint and card weekly windows work. |
 | Board firmware updates from the web page, with rollback ([#23](https://github.com/giovannirco/latchkey/issues/23)) | Not in any release; paused on branch `feat/ota`. The System page hides the upload form because the board does not serve `/api/ota`. |
 | Update and rollback on hardware ([#24](https://github.com/giovannirco/latchkey/issues/24)) | Waits for #23. |
-| Rotating OTP keypad codes and per-user unlock attribution ([#37](https://github.com/giovannirco/latchkey/issues/37)) | Not built. |
+| Rotating OTP keypad codes and per-user unlock attribution ([#37](https://github.com/giovannirco/latchkey/issues/37)) | Not built. v0.7.0 identifies supported credential IDs and labels, but does not establish which person acted. |
 | Other ideas ([#22](https://github.com/giovannirco/latchkey/issues/22)) | Offline guest codes, metrics, MQTT over TLS, wireless keypad and key fob support. Reported hotel and accessory feature bits have no controls. |
 
 ## Checks before tagging
