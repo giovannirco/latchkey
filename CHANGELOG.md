@@ -5,6 +5,23 @@ Notable changes to Latchkey, in the format of [Keep a Changelog](https://keepach
 
 ## [Unreleased]
 
+### Added
+
+- System time-zone form initialized from the board's POSIX setting, with browser zone guidance, an explicit fixed-offset suggestion and daylight-saving rules. Pairing and lock pages warn about current offset differences; existing locks have a named Sync time action. Browser and mock API regressions cover saving, validation, persistence and failures.
+
+### Fixed
+
+- Hide the firmware upload form while the released board API has no upload endpoint.
+- Reset-button disabling checks stored backup status: `backup_required` before export, `unverified` after it, and `internal` for unreadable metadata. Native tests confirm no Bluetooth write or button prompt; switch writes remain unverified on hardware.
+- Align mock audit pagination, reboot/reset replies, diagnostics and paired-record flags with the firmware API.
+- Limit anonymous HTTP body reads to two seconds and authenticated reads to ten seconds, including stalled TLS reads. Abandoned requests shut down their owned socket before releasing it. HTTPS stack telemetry distinguishes unavailable (`null`) from an observed zero watermark.
+- Bound MQTT stale-identifier history to 32 entries and wipe unused pending passwords. Settings loads and lock-record updates clear temporary credential copies. Pairing seed storage no longer charges the protected lock reserve twice.
+- Identify the default ESP32-S3 build as `esp32s3`, retaining GPIO0. Existing TOTP credentials remain usable; the HIL parser accepts the previously issued S3 label.
+- Normalize the unused month of weekly passage records, retain dated operation-log evidence through undated records, and require a known previous timestamp before inferring a log restart.
+- Serialize alert acknowledgement with monitoring and refuse it while alert/cursor persistence is unresolved, including after restart. Undated alert identities remain stable across retries; recovery tests exercise failed writes, restart, log rollover and acknowledgement retries. Deduplication remains limited to eight retained alerts.
+- Withhold truncated and interrupted lines and secret-shaped tags from the captured log ring and syslog. Syslog reconnect backoff survives peer closure and local-only sends, and enabled settings are persisted only after the worker can start.
+- Match mock auto-lock limits and eight-entry passage-day lists to the firmware; hardware checks choose supported auto-lock values and no longer skip genuine zero stack watermarks for exercised tasks.
+
 ## [0.5.0] - 2026-11-09
 
 ### Added
