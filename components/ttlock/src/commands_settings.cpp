@@ -84,7 +84,9 @@ bool parsePassagePage(const Bytes& data, PassagePage& out) {
     page.last = page.next == 0 || page.next == kPassageEnd;
     for (size_t offset = kPassageHeaderSize; offset < data.size(); offset += kPassageEntrySize) {
         const uint8_t* entry = data.data() + offset;
-        page.items.push_back(PassageMode{static_cast<PassageType>(entry[0]), entry[1], entry[2], entry[3], entry[4],
+        const auto type = static_cast<PassageType>(entry[0]);
+        const uint8_t month = type == PassageType::Weekly ? 0 : entry[2];
+        page.items.push_back(PassageMode{type, entry[1], month, entry[3], entry[4],
                                          entry[5], entry[6]});
     }
     out = std::move(page);

@@ -558,6 +558,24 @@ static void test_passage_pages_parse_every_seven_byte_entry() {
     TEST_ASSERT_FALSE(ttlock::parsePassagePage(Bytes{0x5A, 0x02, 0xFF}, page));
 }
 
+static void test_weekly_passage_ignores_month_while_monthly_and_unknown_entries_keep_it() {
+    const Bytes data{0x5A, 0x01, 0xFF,
+                     0x01, 0x05, 0x07, 0x08, 0x00, 0x11, 0x1E,
+                     0x02, 0x0F, 0x09, 0x08, 0x00, 0x11, 0x1E,
+                     0x03, 0x05, 0x0B, 0x08, 0x00, 0x11, 0x1E};
+    ttlock::PassagePage page;
+    TEST_ASSERT_TRUE(ttlock::parsePassagePage(data, page));
+    TEST_ASSERT_EQUAL_UINT(3, page.items.size());
+    TEST_ASSERT_EQUAL_UINT8(0, page.items[0].month);
+    TEST_ASSERT_EQUAL_UINT8(9, page.items[1].month);
+    TEST_ASSERT_EQUAL_UINT8(11, page.items[2].month);
+    const ttlock::PassageMode listed{ttlock::PassageType::Weekly, 5, 0, 8, 0, 17, 30};
+    TEST_ASSERT_TRUE(listed == page.items[0]);
+    const Bytes wanted = ttlock::buildPassageDelete(listed);
+    const Bytes actual = ttlock::buildPassageDelete(page.items[0]);
+    assertBytes(wanted.data(), wanted.size(), actual, "weekly delete from readback");
+}
+
 static void test_sound_commands_match_kind3r_and_ttlock_ble() {
     assertBytes(k3::kSoundQuery, ttlock::buildSoundQuery(), "kind3r query");
     assertBytes(tb::kSoundQuery, ttlock::buildSoundQuery(), "ttlock-ble query");
@@ -781,6 +799,7 @@ int main() {
     RUN_TEST(test_cyclic_card_numbers_from_2_31_go_out_unsigned_where_kind3r_throws);
     RUN_TEST(test_passage_mode_requests_match_kind3r);
     RUN_TEST(test_passage_pages_parse_every_seven_byte_entry);
+    RUN_TEST(test_weekly_passage_ignores_month_while_monthly_and_unknown_entries_keep_it);
     RUN_TEST(test_sound_commands_match_kind3r_and_ttlock_ble);
     RUN_TEST(test_auto_lock_commands_match_kind3r_and_ttlock_ble);
     RUN_TEST(test_remote_unlock_and_screen_passcode_match_kind3r);
