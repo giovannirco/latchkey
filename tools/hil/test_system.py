@@ -19,7 +19,7 @@ from board import error_code, is_json_object, set_clock
 from latchkey_cli import Console
 from owner import claim_secret, holds_no_secret, setup_params, wifi_params
 
-BOARDS = {"esp32": ("esp32-devkit", 0), "esp32s3": ("esp32s3-atom", 0)}
+BOARDS = {"esp32": ("esp32-devkit", 0), "esp32s3": ("esp32s3", 0)}
 FIRMWARE = re.search(
     r'set\(PROJECT_VER "([^"]+)"\)', (Path(__file__).resolve().parents[2] / "CMakeLists.txt").read_text()
 ).group(1)
