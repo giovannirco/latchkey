@@ -7,10 +7,12 @@
 #include <utility>
 
 #include "esp_log.h"
+#include "mbedtls/platform_util.h"
 
 #include "access_requests.h"
 #include "audit.h"
 #include "events.h"
+#include "hmac.h"
 #include "latchkey_util/lock_log.h"
 #include "latchkey_util/lock_time.h"
 #include "latchkey_util/unlock_alert.h"
@@ -198,26 +200,42 @@ bool report(const std::string& mac, const LogPage& page, const latchkey_util::Pa
     return saved;
 }
 
-cJSON* fetchResult(const Entries& entries, std::optional<uint16_t> since, uint32_t until, bool more,
-                    const latchkey_util::WatchState& state, int32_t offset) {
-    std::vector<LogEntry> listed;
+rpc::Reply fetchResult(const Entries& entries, std::optional<uint16_t> since, uint32_t until, bool more,
+                        const latchkey_util::WatchState& state, int32_t offset, const store::locks::Record& record) {
+    latchkey_util::LogLabels labels;
+    const esp_err_t loaded = lock_manager::loadLogLabels(record.mac, labels);
+    if (loaded != ESP_OK) return lock_access::labelsUnreadable(loaded);
+    std::string listed = "[";
+    uint16_t last = since.value_or(0);
+    bool first = true;
+    const uint32_t from = since.has_value() ? *since + 1U : until > kShownSlots ? until - kShownSlots : 0;
     for (const LogEntry& entry : entries.items()) {
-        if ((since.has_value() && entry.recordNumber <= *since) || entry.recordNumber >= until) {
+        if (entry.recordNumber < from || entry.recordNumber >= until) {
             continue;
         }
-        LogEntry shown;
-        shown.recordNumber = entry.recordNumber;
-        shown.type = entry.type;
-        shown.time = entry.time;
-        shown.battery = entry.battery;
-        listed.push_back(shown);
+        latchkey_util::LockAesKey key;
+        std::copy(std::begin(record.aesKey), std::end(record.aesKey), key.begin());
+        std::string rendered;
+        const bool ready = latchkey_util::logEntryJson(entry, latchkey_util::recordOffset(state, entry.recordNumber, offset),
+                                                       labels, key, hmac::sha256, rendered);
+        mbedtls_platform_zeroize(key.data(), key.size());
+        if (!ready) return rpc::fail("internal", "cannot compute a log credential id");
+        if (!first) listed += ',';
+        first = false;
+        listed += rendered;
+        last = entry.recordNumber;
     }
-    cJSON* result = cJSON_CreateObject();
-    cJSON_AddItemToObject(result, "entries", lock_access::rawJson(latchkey_util::logEntriesJson(listed, state, offset)));
-    const uint16_t last = listed.empty() ? since.value_or(0) : listed.back().recordNumber;
-    cJSON_AddNumberToObject(result, "last", last);
-    cJSON_AddBoolToObject(result, "more", more);
-    return result;
+    listed += ']';
+    rpc::Json result(cJSON_CreateObject());
+    rpc::Json items(lock_access::rawJson(listed));
+    if (!result || !items || !cJSON_AddItemToObject(result.get(), "entries", items.get())) {
+        return rpc::fail("internal", "cannot allocate the lock log response");
+    }
+    items.release();
+    if (!cJSON_AddNumberToObject(result.get(), "last", last) || !cJSON_AddBoolToObject(result.get(), "more", more)) {
+        return rpc::fail("internal", "cannot allocate the lock log response");
+    }
+    return rpc::ok(result.release());
 }
 
 }

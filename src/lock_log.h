@@ -9,6 +9,8 @@
 
 #include "cJSON.h"
 #include "latchkey_util/log_watch.h"
+#include "rpc.h"
+#include "store.h"
 #include "ttlock/session.h"
 #include "ttlock/types.h"
 
@@ -41,7 +43,7 @@ ttlock::Status catchUp(ttlock::Session& session, const std::string& mac, int32_t
 
 ttlock::Status readSlots(ttlock::Session& session, uint16_t from, uint16_t to, Entries& out);
 
-cJSON* fetchResult(const Entries& entries, std::optional<uint16_t> since, uint32_t until, bool more,
-                    const latchkey_util::WatchState& state, int32_t offset);
+rpc::Reply fetchResult(const Entries& entries, std::optional<uint16_t> since, uint32_t until, bool more,
+                        const latchkey_util::WatchState& state, int32_t offset, const store::locks::Record& record);
 
 }

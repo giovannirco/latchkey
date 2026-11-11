@@ -5,6 +5,21 @@ Notable changes to Latchkey, in the format of [Keep a Changelog](https://keepach
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-11-11
+
+### Added
+
+- Credential details in operation logs for supported fingerprint, passcode and IC-card unlocks, locking, additions, changes, deletions and failed attempts. Exact IDs resolve to current saved labels; up to 16 retired labels per lock preserve last-known names after removal. Labels are explicitly marked as current or last-known, not asserted as historical identity.
+- Failed-attempt outcomes and record details, including the lock's event type and available app user/operation IDs. Unknown attempts remain unidentified. PINs are matched by exact opaque keyed IDs; entered PIN digits and replacement codes never appear in logs, including incorrect or padded attempts.
+- Persistent low-battery alerts below 40%, with a live browser warning and dashboard badge. Acknowledgement survives restart and suppresses repeated warnings for that low-battery episode. A fresh reading of at least 40% clears the warning and rearms it. Battery alerts survive overflow of the bounded alert list; existing v0.6.0 alerts are preserved on upgrade.
+
+### Scope and known limits
+
+- Identification depends on what the lock records. An unrecognized fingerprint often has no usable ID; clear-all records do not identify individual credentials. Current and retired names are descriptive labels, not proof of who acted, and reused IDs cannot establish historical identity. No anti-peeping substring matching or guessed PIN identity is performed.
+- Retired labels are local bounded history, excluded from key backups. Previous deletions whose names were already discarded cannot be reconstructed. The spare maintains its own log metadata and alert state.
+- Battery warnings use fresh authenticated status/push/operation responses, not cached or unauthenticated advertisement values. Background monitoring checks status while connected and on its existing approximately six-hour schedule when the lock is reachable; this is not an instant remote notification service. Existing Home Assistant battery reporting remains available.
+- Existing update, hardware and hardening limitations from v0.6.0 remain in effect.
+
 ## [0.6.0] - 2026-11-11
 
 ### Added

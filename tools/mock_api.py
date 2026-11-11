@@ -699,6 +699,9 @@ class Mock:
     def emit(self, event: str, data: Any, generation: int | None = None, tokens: set[str | None] | None = None) -> None:
         if generation is not None and generation != self.generation:
             return
+        if event == "lock.battery.alert":
+            self.observe_battery(self.locks[data["lock"]], data["battery"])
+            return
         if event == "lock.alert":
             with self.lock:
                 lock = self.locks[data["lock"]]
@@ -707,8 +710,35 @@ class Mock:
                     return
                 lock["alerts"].append({"id": lock["alertNext"], **alert})
                 lock["alertNext"] += 1
-                lock["alerts"] = lock["alerts"][-8:]
+                if len(lock["alerts"]) > 8:
+                    oldest = next(index for index, held in enumerate(lock["alerts"])
+                                  if held["kind"] != "low_battery")
+                    del lock["alerts"][oldest]
         self.events.publish(event, data, tokens)
+
+    def observe_battery(self, lock: dict, level: int) -> None:
+        if type(level) is not int or not 0 <= level <= 100:
+            return
+        with self.lock:
+            lock["battery"] = level
+            if level < 40:
+                if lock.get("batteryLow", False):
+                    return
+                lock["batteryLow"] = True
+                alert = {
+                    "id": lock["alertNext"], "kind": "low_battery", "battery": level,
+                    "time": now() if self.config.time_synced else None, "method": "none", "seq": 0, "type": 0,
+                }
+                lock["alerts"].append(alert)
+                lock["alerts"] = lock["alerts"][-8:]
+                lock["alertNext"] += 1
+                self.events.publish("lock.battery.alert", {"lock": lock["id"], **alert})
+                return
+            if not lock.get("batteryLow", False):
+                return
+            lock["batteryLow"] = False
+            lock["alerts"] = [alert for alert in lock["alerts"] if alert["kind"] != "low_battery"]
+            self.events.publish("lock.alerts.changed", {"lock": lock["id"], "alertCount": len(lock["alerts"])})
 
     def wait(self, seconds: float, generation: int) -> bool:
         deadline = time.monotonic() + seconds
@@ -775,9 +805,44 @@ class Mock:
             self.audit.append(entry)
         self.emit("audit.appended", entry)
 
-    def append_log(self, lock: dict, kind: int) -> None:
+    def retire_label(self, lock: dict, collection: str, entry: dict) -> None:
+        if not entry.get("name"):
+            return
+        retired = lock.setdefault("retiredLabels", [])
+        retired[:] = [held for held in retired if (held["collection"], held["id"]) != (collection, entry["id"])]
+        retired.append({"collection": collection, "id": entry["id"], "name": entry["name"]})
+        del retired[:-16]
+
+    def log_entry(self, lock: dict, entry: dict) -> dict:
+        shown = {key: value for key, value in entry.items() if key != "credentialRef"}
+        actions = {1: "unlock", 4: "unlock", 5: "change", 6: "delete", 7: "unlock", 8: "clear",
+                   15: "add", 16: "clear", 17: "unlock", 18: "delete", 20: "unlock", 21: "add",
+                   22: "unlock", 23: "delete", 24: "clear", 25: "unlock", 26: "lock", 93: "add"}
+        failed = entry["type"] in (7, 11, 12, 13, 22, 25, 38, 39, 40, 41)
+        shown.setdefault("action", "unlock" if failed else actions.get(entry["type"], "unknown"))
+        shown.setdefault("outcome", "failure" if failed else
+                         "success" if entry["type"] in actions else "unknown")
+        reference = entry.get("credentialRef")
+        if reference:
+            collection, item_id = reference
+            current = next((item for item in lock[collection] if item["id"] == item_id), None)
+            retired = next((item for item in lock.get("retiredLabels", [])
+                            if (item["collection"], item["id"]) == (collection, item_id)), None)
+            label = current if current is not None else retired
+            name = label.get("name") if label else None
+            shown["credential"] = {
+                "kind": {"passcodes": "passcode", "fingerprints": "fingerprint", "cards": "card"}[collection],
+                "id": item_id, "name": name or None,
+                "nameSource": ("current_label" if current is not None else "last_known_label") if name else None,
+            }
+        return shown
+
+    def append_log(self, lock: dict, kind: int, reference: tuple[str, str] | None = None) -> None:
         seq = lock["log"][-1]["seq"] + 1 if lock["log"] else 1
-        lock["log"].append({"seq": seq, "time": now(), "type": kind, "battery": lock["battery"]})
+        entry = {"seq": seq, "time": now(), "type": kind, "battery": lock["battery"]}
+        if reference:
+            entry["credentialRef"] = reference
+        lock["log"].append(entry)
 
     def dispatch(self, name: str, params: Any, ctx: Context) -> dict[str, Any]:
         with self.lock:
@@ -895,7 +960,7 @@ class Mock:
                 if summary(lock)["warnings"]
             ]
         return {
-            "firmware": "0.6.0",
+            "firmware": "0.7.0",
             "board": "esp32s3",
             "chip": "esp32s3",
             "idf": "v6.1.0",
@@ -1197,6 +1262,7 @@ class Mock:
         lock = self.get_lock(params)
         with self.radio():
             lock["lastSeen"] = now()
+            self.observe_battery(lock, lock["battery"])
         return {"state": lock["state"], "battery": lock["battery"]}
 
     @rpc("lock.info", audited=False, job=True)
@@ -1364,6 +1430,7 @@ class Mock:
             raise RpcError("lock_error", IN_USE)
         with self.radio():
             lock["passcodes"].append(entry)
+            self.append_log(lock, 93, ("passcodes", entry["id"]))
         result: dict[str, Any] = {"passcode": {**public_passcode(entry), "code": code}}
         if is_easy_code(code):
             result["warning"] = EASY_CODE_WARNING
@@ -1397,14 +1464,19 @@ class Mock:
         lock = self.get_lock(params)
         entry = self._find(lock, "passcodes", params.get("id"))
         with self.radio():
+            self.retire_label(lock, "passcodes", entry)
             lock["passcodes"].remove(entry)
+            self.append_log(lock, 6, ("passcodes", entry["id"]))
         return {}
 
     @rpc("lock.passcodes.clear", feature="passcode", job=True)
     def lock_passcodes_clear(self, ctx: Context, params: dict) -> dict:
         lock = self.get_lock(params)
         with self.radio():
+            for entry in lock["passcodes"]:
+                self.retire_label(lock, "passcodes", entry)
             lock["passcodes"] = []
+            self.append_log(lock, 8)
         return {}
 
     def _credentials(self, params: dict, collection: str) -> dict:
@@ -1433,6 +1505,7 @@ class Mock:
                 item_id = str(1_000_000_000 + secrets.randbelow(3_000_000_000))
             entry = {"id": item_id, "name": name, "validity": validity}
             lock[collection].append(entry)
+            self.append_log(lock, 21 if collection == "fingerprints" else 15, (collection, item_id))
             self.emit("enroll.progress", {**progress, "stage": "added", "id": item_id}, generation)
         return {kind: dict(entry)}
 
@@ -1455,13 +1528,18 @@ class Mock:
         lock = self.get_lock(params)
         entry = self._find(lock, collection, params.get("id"))
         with self.radio():
+            self.retire_label(lock, collection, entry)
             lock[collection].remove(entry)
+            self.append_log(lock, 23 if collection == "fingerprints" else 18, (collection, entry["id"]))
         return {}
 
     def _clear(self, params: dict, collection: str) -> dict:
         lock = self.get_lock(params)
         with self.radio():
+            for entry in lock[collection]:
+                self.retire_label(lock, collection, entry)
             lock[collection] = []
+            self.append_log(lock, 24 if collection == "fingerprints" else 16)
         return {}
 
     @rpc("lock.fingerprints.list", feature="finger_print", audited=False, job=True)
@@ -1510,10 +1588,10 @@ class Mock:
         since = int_param(params, "since", lo=0, hi=LOG_LAST_SLOT)
         with self.radio():
             if since is None:
-                entries = [dict(entry) for entry in lock["log"][-LOG_SHOWN:]]
+                entries = [self.log_entry(lock, entry) for entry in lock["log"][-LOG_SHOWN:]]
                 more = False
             else:
-                newer = [dict(entry) for entry in lock["log"] if entry["seq"] > since]
+                newer = [self.log_entry(lock, entry) for entry in lock["log"] if entry["seq"] > since]
                 entries = newer[:LOG_SHOWN]
                 more = len(newer) > LOG_SHOWN
         last = entries[-1]["seq"] if entries else (since or 0)

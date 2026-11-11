@@ -292,6 +292,46 @@ static void test_undated_alert_after_epoch_reset_waits_for_catchup_after_reboot(
     TEST_ASSERT_TRUE(lock_manager::acknowledgeAlerts(std::string(kMac), 1).error.empty());
 }
 
+static void test_missing_operation_battery_cannot_reuse_advertised_level() {
+    lock_manager::noteState(std::string(kMac), ttlock::LockState::Locked, 20, false);
+    auto* lock = lock_manager::findLocked(kMac);
+    lock->live.battery = 90;
+    Rig rig;
+    rig.radio.expect(ttlock::command::kCheckUserTime, rig.keys.aesKey,
+        {fake::success(rig.keys.aesKey, ttlock::command::kCheckUserTime, fake::be32(42))});
+    rig.radio.expect(ttlock::command::kLock, rig.keys.aesKey,
+        {fake::success(rig.keys.aesKey, ttlock::command::kLock)});
+    rpc::Reply reply;
+    TEST_ASSERT_EQUAL_INT(Status::Ok, lock_manager::operate(rig.session, *lock, false, reply));
+    TEST_ASSERT_TRUE(rig.radio.scriptDone());
+    TEST_ASSERT_EQUAL_UINT(1, lock->live.alerts.entries().size());
+    TEST_ASSERT_EQUAL_INT(latchkey_util::LockAlertKind::LowBattery, lock->live.alerts.entries()[0].kind);
+}
+
+static void test_failed_battery_save_is_visible_and_retried_without_duplicate_alert() {
+    s_failWrite = s_writes + 1;
+    lock_manager::noteState(std::string(kMac), ttlock::LockState::Locked, 39, false);
+    auto& live = lock_manager::findLocked(kMac)->live;
+    TEST_ASSERT_TRUE(live.alertWriteFailed);
+    TEST_ASSERT_EQUAL_UINT(1, batteryAlertEvents);
+    TEST_ASSERT_EQUAL_INT(39, lastBatteryAlertLevel);
+    TEST_ASSERT_EQUAL_UINT(1, live.alerts.entries().size());
+    TEST_ASSERT_EQUAL_STRING("storage_error", lock_manager::acknowledgeAlerts(std::string(kMac), 1).error.c_str());
+    s_failWrite = 0;
+    lock_manager::noteState(std::string(kMac), ttlock::LockState::Locked, 39, false);
+    TEST_ASSERT_FALSE(live.alertWriteFailed);
+    TEST_ASSERT_EQUAL_UINT(1, batteryAlertEvents);
+    TEST_ASSERT_EQUAL_UINT(1, live.alerts.entries().size());
+    TEST_ASSERT_TRUE(lock_manager::acknowledgeAlerts(std::string(kMac), 1).error.empty());
+    reboot();
+    lock_manager::noteState(std::string(kMac), ttlock::LockState::Locked, 20, false);
+    TEST_ASSERT_TRUE(lock_manager::findLocked(kMac)->live.alerts.entries().empty());
+    lock_manager::noteState(std::string(kMac), ttlock::LockState::Locked, 40, false);
+    reboot();
+    lock_manager::noteState(std::string(kMac), ttlock::LockState::Locked, 20, false);
+    TEST_ASSERT_EQUAL_UINT(1, lock_manager::findLocked(kMac)->live.alerts.entries().size());
+}
+
 int main() {
     rpc::init();
     UNITY_BEGIN();
@@ -305,5 +345,7 @@ int main() {
     RUN_TEST(test_reboot_rechecks_wrapped_and_restarted_alerts_before_allowing_acknowledgement);
     RUN_TEST(test_genuine_log_restart_releases_old_high_sequence_alerts_after_catchup);
     RUN_TEST(test_undated_alert_after_epoch_reset_waits_for_catchup_after_reboot);
+    RUN_TEST(test_missing_operation_battery_cannot_reuse_advertised_level);
+    RUN_TEST(test_failed_battery_save_is_visible_and_retried_without_duplicate_alert);
     return UNITY_END();
 }

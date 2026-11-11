@@ -206,8 +206,15 @@ rpc::Reply credentialsList(const Credentials& kind, const cJSON* params) {
                 }
             }
             text += ']';
-            if (labels.keepOnly(present)) {
-                lock_manager::saveLabels(mac, kind.labels, labels);
+            if (labels.keepOnly(present) && lock_manager::saveLabels(mac, kind.labels, labels) != ESP_OK) {
+                out = rpc::fail("storage_error", "cannot preserve removed credential labels");
+                return Status::Ok;
+            }
+            for (const uint64_t id : present) {
+                if (lock_manager::forgetRetiredLabel(mac, kind.labels, id) != ESP_OK) {
+                    out = rpc::fail("storage_error", "cannot clear a previous credential label");
+                    return Status::Ok;
+                }
             }
             cJSON* result = cJSON_CreateObject();
             cJSON_AddItemToObject(result, kind.collection, lock_access::rawJson(text));
@@ -287,15 +294,19 @@ rpc::Reply credentialsEnroll(const Credentials& kind, const cJSON* params) {
             }
             publishProgress(mac, kind, "added", kind.scans, id);
             LabelTable labels;
-            bool stored = true;
-            if (!name.empty()) {
-                Label label;
-                label.id = id;
-                label.name = name;
-                stored = lock_manager::loadLabels(mac, kind.labels, labels) == ESP_OK && labels.put(label) &&
-                         lock_manager::saveLabels(mac, kind.labels, labels) == ESP_OK;
+            if (lock_manager::loadLabels(mac, kind.labels, labels) != ESP_OK) {
+                out = rpc::fail("storage_error", "credential added, but its label could not be saved");
+                return Status::Ok;
             }
-            out = entryResult(kind, id, validity, labels.find(id), stored);
+            Label label;
+            label.id = id;
+            label.name = name;
+            if (!labels.put(label) || lock_manager::saveLabels(mac, kind.labels, labels) != ESP_OK ||
+                lock_manager::forgetRetiredLabel(mac, kind.labels, id) != ESP_OK) {
+                out = rpc::fail("storage_error", "credential added, but its previous label could not be replaced");
+                return Status::Ok;
+            }
+            out = entryResult(kind, id, validity, labels.find(id), true);
             return Status::Ok;
         });
     return lock_access::withTarget(std::move(reply), mac);
@@ -405,11 +416,16 @@ rpc::Reply credentialsDelete(const Credentials& kind, const cJSON* params) {
             if (!loadLabels(mac, kind, labels, out)) {
                 return Status::Ok;
             }
+            const bool removed = labels.remove(id);
+            if (lock_manager::retainLabels(mac, kind.labels, labels) != ESP_OK) {
+                out = rpc::fail("storage_error", "cannot preserve the credential label before deletion");
+                return Status::Ok;
+            }
             const Status status = (session.*kind.remove)(id);
             if (status != Status::Ok) {
                 return status;
             }
-            const bool stored = !labels.remove(id) || lock_manager::saveLabels(mac, kind.labels, labels) == ESP_OK;
+            const bool stored = !removed || lock_manager::saveLabels(mac, kind.labels, labels) == ESP_OK;
             cJSON* result = cJSON_CreateObject();
             lock_access::addWarnings(result, {stored ? "" : lock_access::kNamesNotStored});
             out = rpc::ok(result);
@@ -429,6 +445,10 @@ rpc::Reply credentialsClear(const Credentials& kind, const cJSON* params) {
     }
     rpc::Reply reply = lock_manager::runOnLock(
         mac, kind.clearMethod, [&kind, mac](Session& session, const Record&, rpc::Reply& out) {
+            if (lock_manager::retainLabels(mac, kind.labels, LabelTable{}) != ESP_OK) {
+                out = rpc::fail("storage_error", "cannot preserve credential labels before clearing");
+                return Status::Ok;
+            }
             const Status status = (session.*kind.clear)();
             if (status != Status::Ok) {
                 return status;

@@ -9,6 +9,7 @@
 
 #include "esp_err.h"
 #include "latchkey_util/key_restore.h"
+#include "latchkey_util/lock_log.h"
 #include "rpc.h"
 #include "store.h"
 #include "ttlock/session.h"
@@ -53,6 +54,12 @@ rpc::Reply failure(ttlock::Status status, uint8_t lockError);
 esp_err_t loadLabels(const std::string& mac, store::labels::Kind kind, latchkey_util::LabelTable& out);
 
 esp_err_t saveLabels(const std::string& mac, store::labels::Kind kind, const latchkey_util::LabelTable& table);
+
+esp_err_t retainLabels(const std::string& mac, store::labels::Kind kind, const latchkey_util::LabelTable& next);
+
+esp_err_t loadLogLabels(const std::string& mac, latchkey_util::LogLabels& out);
+
+esp_err_t forgetRetiredLabel(const std::string& mac, store::labels::Kind kind, uint64_t id);
 
 bool labelsFit(const std::string& mac, store::labels::Kind kind, const latchkey_util::LabelTable& table);
 

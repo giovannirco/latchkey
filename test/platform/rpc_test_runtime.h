@@ -28,6 +28,8 @@ bool fixtureClockSynced = false;
 int64_t fixtureUtc = 1762524000;
 size_t auditWrites = 0;
 size_t alertEvents = 0;
+size_t batteryAlertEvents = 0;
+int lastBatteryAlertLevel = -1;
 std::string lastAuditResult;
 std::function<void()> beforePress;
 bool openSession = true;
@@ -146,6 +148,11 @@ namespace events {
 void publish(const char* name, cJSON* data) {
     rpc::Json owned(data);
     if (std::strcmp(name, "lock.alert") == 0) ++alertEvents;
+    if (std::strcmp(name, "lock.battery.alert") == 0) {
+        ++batteryAlertEvents;
+        const auto* level = cJSON_GetObjectItemCaseSensitive(data, "battery");
+        lastBatteryAlertLevel = cJSON_IsNumber(level) ? level->valueint : -1;
+    }
 }
 void addSink(Sink sink) { eventSink = std::move(sink); }
 }
@@ -173,7 +180,8 @@ void resetRpcFixture() {
     fixtureClockSynced = false;
     fixtureUtc = 1762524000;
     auditWrites = 0;
-    alertEvents = 0;
+    alertEvents = batteryAlertEvents = 0;
+    lastBatteryAlertLevel = -1;
     lastAuditResult.clear();
     beforePress = {};
     watchedSecret = {};

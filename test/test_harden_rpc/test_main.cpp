@@ -7,11 +7,6 @@
 #include "../../src/methods_harden.cpp"
 #include "ttlock/commands.h"
 
-namespace hmac {
-bool sha256(const uint8_t* key, size_t keyLength, const uint8_t* data, size_t length, uint8_t (&out)[32]) {
-    return reference::hmacSha256(key, keyLength, data, length, out);
-}
-}
 namespace cmd = ttlock::command;
 using latchkey_util::AdminProvenance;
 static const std::string mac(kMac);
@@ -188,6 +183,7 @@ static void test_preview_releases_new_and_reused_links_before_worker_monitoring(
         managerTime = 60000000;
         held.live.lastAdvertMs = 60000;
         rig.clock();
+        rig.lock.expect(cmd::kSearchStatus, rig.key, {fake::success(rig.key, cmd::kSearchStatus, {90, 0})});
         TEST_ASSERT_TRUE(lock_manager::watchAlone());
         TEST_ASSERT_GREATER_THAN(0, s_writes);
         TEST_ASSERT_TRUE(rig.lock.scriptDone());
@@ -497,6 +493,7 @@ static void test_preclock_alert_failure_stops_mutations_and_monitoring_delivers_
         rig.unlockLog();
         rig.lock.expect(cmd::kGetOperateLog, rig.key, {fake::success(rig.key, cmd::kGetOperateLog, {0, 0})});
         TEST_ASSERT_EQUAL_INT(ttlock::Status::Ok, lock_manager::openLink(held.record));
+        rig.lock.expect(cmd::kSearchStatus, rig.key, {fake::success(rig.key, cmd::kSearchStatus, {90, 0})});
         TEST_ASSERT_EQUAL_INT(ttlock::Status::Ok, lock_manager::watchLock(*lock_manager::s_link.session, mac));
         TEST_ASSERT_EQUAL_UINT(2, held.live.alerts.entries().size());
         TEST_ASSERT_EQUAL_UINT(2, alertEvents);

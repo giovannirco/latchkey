@@ -218,7 +218,7 @@ size_t reservedEntries(uint32_t nextAuditSequence) {
     needs.auditRecordBytes = sizeof(audit::Record);
     needs.lockRecordBytes = sizeof(locks::Record);
     needs.seedTableBytes = latchkey_util::kSeedTableSize;
-    needs.spareEntries = kSpareEntries;
+    needs.spareEntries = kSpareEntries + locks::kMaxLocks * latchkey_util::nvsBlobEntries(latchkey_util::kRetiredLabelsBytes);
     needs.watchStateBytes = latchkey_util::kWatchStateSize;
     needs.watchStates = locks::kMaxLocks;
     needs.alertTableBytes = latchkey_util::kLockAlertsBytes;
@@ -648,6 +648,39 @@ esp_err_t eraseAll() { return eraseNamespace(kLocksNamespace); }
 
 namespace labels {
 
+esp_err_t loadRetired(const char* mac, latchkey_util::RetiredLabels& out) {
+    char key[kLockKeySize];
+    if (!lockKey(mac, key)) return ESP_ERR_INVALID_ARG;
+    Handle handle(kLabelsNamespace, NVS_READONLY);
+    if (handle.error() == ESP_ERR_NVS_NOT_FOUND) {
+        out = {};
+        return ESP_OK;
+    }
+    if (!handle.ok()) return handle.error();
+    size_t length = 0;
+    esp_err_t error = nvs_get_blob(handle.get(), key, nullptr, &length);
+    if (error == ESP_ERR_NVS_NOT_FOUND) {
+        out = {};
+        return ESP_OK;
+    }
+    if (error != ESP_OK) return error;
+    if (length > latchkey_util::kRetiredLabelsBytes) return ESP_ERR_INVALID_SIZE;
+    std::vector<uint8_t> bytes(length);
+    error = nvs_get_blob(handle.get(), key, bytes.data(), &length);
+    if (error != ESP_OK) return error;
+    return latchkey_util::RetiredLabels::decode(bytes.data(), length, out) ? ESP_OK : ESP_ERR_INVALID_CRC;
+}
+
+esp_err_t saveRetired(const char* mac, const latchkey_util::RetiredLabels& table) {
+    char key[kLockKeySize];
+    if (!lockKey(mac, key)) return ESP_ERR_INVALID_ARG;
+    const auto bytes = table.encode();
+    Handle handle(kLabelsNamespace, NVS_READWRITE);
+    if (!handle.ok()) return handle.error();
+    const esp_err_t error = nvs_set_blob(handle.get(), key, bytes.data(), bytes.size());
+    return error == ESP_OK ? nvs_commit(handle.get()) : error;
+}
+
 esp_err_t load(const char* mac, Kind kind, latchkey_util::LabelTable& out) {
     char key[kLabelKeySize];
     if (!labelKey(mac, kind, key)) {
@@ -714,7 +747,9 @@ esp_err_t erase(const char* mac) {
             return error;
         }
     }
-    return ESP_OK;
+    char key[kLockKeySize];
+    if (!lockKey(mac, key)) return ESP_ERR_INVALID_ARG;
+    return eraseKey(kLabelsNamespace, key);
 }
 
 esp_err_t eraseAll() { return eraseNamespace(kLabelsNamespace); }

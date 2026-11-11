@@ -9,9 +9,16 @@
 #define LATCHKEY_TRACK_SCALAR_ALLOCATIONS
 #include "rpc_test_runtime.h"
 #include "key_store_test_runtime.h"
+#include "../reference/hmac_sha256.h"
 #include "../../src/lock_manager.cpp"
 #include "../../src/lock_log.cpp"
 #include "../../src/access_requests.cpp"
+
+namespace hmac {
+bool sha256(const uint8_t* key, size_t keyLength, const uint8_t* data, size_t length, uint8_t (&out)[32]) {
+    return reference::hmacSha256(key, keyLength, data, length, out);
+}
+}
 
 inline std::atomic<int64_t> managerTime{0};
 inline std::atomic<bool> managerBusy{false};
@@ -129,10 +136,25 @@ esp_err_t load(const char* mac, Kind kind, latchkey_util::LabelTable& out) {
     if (error != ESP_OK) return error;
     return latchkey_util::LabelTable::decode(bytes.data(), length, out) ? ESP_OK : ESP_ERR_INVALID_CRC;
 }
-esp_err_t save(const char*, Kind, const latchkey_util::LabelTable&) { return mutate([] {}); }
+esp_err_t save(const char* mac, Kind kind, const latchkey_util::LabelTable& table) {
+    return mutate([&] { s_namespaces["labels"][storedKey(mac) + static_cast<char>(kind)] = {NVS_TYPE_BLOB, table.encode()}; });
+}
+esp_err_t loadRetired(const char* mac, latchkey_util::RetiredLabels& out) {
+    size_t length = 0;
+    auto error = key_store::readBlob("labels", storedKey(mac).c_str(), nullptr, length);
+    if (error == ESP_ERR_NVS_NOT_FOUND) { out = {}; return ESP_OK; }
+    if (error != ESP_OK) return error;
+    std::vector<uint8_t> bytes(length);
+    error = key_store::readBlob("labels", storedKey(mac).c_str(), bytes.data(), length);
+    if (error != ESP_OK) return error;
+    return latchkey_util::RetiredLabels::decode(bytes.data(), length, out) ? ESP_OK : ESP_ERR_INVALID_CRC;
+}
+esp_err_t saveRetired(const char* mac, const latchkey_util::RetiredLabels& table) {
+    return mutate([&] { s_namespaces["labels"][storedKey(mac)] = {NVS_TYPE_BLOB, table.encode()}; });
+}
 bool fits(const char*, Kind, const latchkey_util::LabelTable&) { return true; }
 esp_err_t erase(const char* mac) {
-    return mutate([&] { for (char kind : {'p', 'f', 'c'}) s_namespaces["labels"].erase(storedKey(mac) + kind); });
+    return mutate([&] { for (char kind : {'p', 'f', 'c'}) s_namespaces["labels"].erase(storedKey(mac) + kind); s_namespaces["labels"].erase(storedKey(mac)); });
 }
 esp_err_t eraseAll() { return eraseFixtureNamespace("labels"); }
 }
