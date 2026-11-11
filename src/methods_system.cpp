@@ -116,11 +116,12 @@ bool readWifi(const cJSON* object, store::cfg::Wifi& out) {
                        readIpv4(object, "gateway", wifi.gateway) && readIpv4(object, "netmask", wifi.netmask) &&
                        readIpv4(object, "dns", wifi.dns) && wifi.dns != 0 &&
                        latchkey_util::isStaticIpv4(wifi.ip, wifi.gateway, wifi.netmask);
-    if (!valid) {
-        return false;
+    if (valid) {
+        mbedtls_platform_zeroize(out.password.data(), out.password.size());
+        out = wifi;
     }
-    out = std::move(wifi);
-    return true;
+    mbedtls_platform_zeroize(wifi.password.data(), wifi.password.size());
+    return valid;
 }
 
 void restartNow(void*) {
@@ -263,6 +264,7 @@ rpc::Reply setup(const cJSON* params, const rpc::Context&) {
     }
     std::string password;
     if (!readString(params, "password", auth::kMinPassword, auth::kMaxPassword, password)) {
+        mbedtls_platform_zeroize(wifi.password.data(), wifi.password.size());
         return rpc::fail("invalid_argument", "password must be 12 to 128 bytes");
     }
     store::auth::Owner owner;
@@ -273,11 +275,15 @@ rpc::Reply setup(const cJSON* params, const rpc::Context&) {
     const bool hashed = auth::hashPassword(password, owner.password);
     mbedtls_platform_zeroize(password.data(), password.size());
     if (!hashed) {
+        mbedtls_platform_zeroize(wifi.password.data(), wifi.password.size());
+        mbedtls_platform_zeroize(&owner, sizeof(owner));
         return rpc::fail("internal", "password hashing failed");
     }
     ESP_LOGI(TAG, "owner password hashed with %u iterations in %lld ms", static_cast<unsigned>(owner.password.iterations),
              static_cast<long long>((esp_timer_get_time() - started) / 1000));
-    if (store::cfg::saveWifi(wifi) != ESP_OK || wifi::apply(wifi) != ESP_OK) {
+    const bool configured = store::cfg::saveWifi(wifi) == ESP_OK && wifi::apply(wifi) == ESP_OK;
+    mbedtls_platform_zeroize(wifi.password.data(), wifi.password.size());
+    if (!configured) {
         mbedtls_platform_zeroize(&owner, sizeof(owner));
         return rpc::fail("internal", "cannot store or apply the Wi-Fi configuration");
     }
@@ -326,6 +332,8 @@ rpc::Reply wifiSet(const cJSON* params, const rpc::Context&) {
     mbedtls_platform_zeroize(wifi.password.data(), wifi.password.size());
     if (s_wifiSwitch == nullptr &&
         xTaskCreate(switchWifi, "wifi_switch", kWifiSwitchStack, nullptr, kWifiSwitchPriority, &s_wifiSwitch) != pdPASS) {
+        mbedtls_platform_zeroize(s_pendingWifi.password.data(), s_pendingWifi.password.size());
+        s_pendingWifi = {};
         s_wifiSwitch = nullptr;
         return rpc::fail("internal", "the Wi-Fi configuration is stored, but the board cannot switch now: restart it");
     }

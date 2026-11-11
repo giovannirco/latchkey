@@ -116,20 +116,25 @@ esp_err_t nvs_erase_key(nvs_handle_t handle, const char* key) {
 
 esp_err_t nvs_commit(nvs_handle_t) { return mutate([] {}); }
 
-struct nvs_iterator { Entries::const_iterator current; Entries::const_iterator end; };
+struct nvs_iterator { Entries::const_iterator current; Entries::const_iterator end; nvs_type_t type; };
 
 esp_err_t nvs_entry_find_in_handle(nvs_handle_t handle, nvs_type_t type, nvs_iterator_t* out) {
     if (!canRead()) return ESP_FAIL;
-    TEST_ASSERT_EQUAL_INT(NVS_TYPE_ANY, type);
     const auto& entries = s_namespaces.at(s_handles.at(handle));
     if (entries.empty()) return ESP_ERR_NVS_NOT_FOUND;
-    *out = new nvs_iterator{entries.begin(), entries.end()};
+    auto current = entries.begin();
+    while (current != entries.end() && type != NVS_TYPE_ANY && current->second.type != type) ++current;
+    if (current == entries.end()) return ESP_ERR_NVS_NOT_FOUND;
+    *out = new nvs_iterator{current, entries.end(), type};
     return ESP_OK;
 }
 
 esp_err_t nvs_entry_next(nvs_iterator_t* entry) {
     if (!canRead()) return ESP_FAIL;
-    if (++(*entry)->current != (*entry)->end) return ESP_OK;
+    ++(*entry)->current;
+    while ((*entry)->current != (*entry)->end && (*entry)->type != NVS_TYPE_ANY &&
+           (*entry)->current->second.type != (*entry)->type) ++(*entry)->current;
+    if ((*entry)->current != (*entry)->end) return ESP_OK;
     delete *entry;
     *entry = nullptr;
     return ESP_ERR_NVS_NOT_FOUND;
@@ -148,6 +153,7 @@ esp_err_t nvs_erase_all(nvs_handle_t handle) {
     return mutate([&] { s_namespaces.at(s_handles.at(handle)).clear(); });
 }
 
+#ifndef LATCHKEY_NATIVE_REAL_STORE
 namespace store {
 
 esp_err_t usage(Usage& out) {
@@ -162,3 +168,4 @@ size_t reservedEntries(uint32_t nextSequence) {
 }
 
 }
+#endif

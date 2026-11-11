@@ -12,6 +12,9 @@ enum nvs_type_t { NVS_TYPE_U32 = 0x04, NVS_TYPE_BLOB = 0x42, NVS_TYPE_ANY = 0xFF
 inline constexpr esp_err_t ESP_ERR_NVS_NOT_FOUND = 0x1102;
 inline constexpr esp_err_t ESP_ERR_NVS_TYPE_MISMATCH = 0x1103;
 inline constexpr esp_err_t ESP_ERR_NVS_INVALID_LENGTH = 0x110c;
+inline constexpr esp_err_t ESP_ERR_NVS_NOT_ENOUGH_SPACE = 0x1105;
+inline constexpr const char* NVS_DEFAULT_PART_NAME = "nvs";
+struct nvs_stats_t { size_t used_entries; size_t available_entries; size_t total_entries; size_t namespace_count; };
 
 struct nvs_iterator;
 using nvs_iterator_t = nvs_iterator*;
@@ -30,3 +33,10 @@ esp_err_t nvs_entry_next(nvs_iterator_t* entry);
 esp_err_t nvs_entry_info(nvs_iterator_t entry, nvs_entry_info_t* out);
 esp_err_t nvs_erase_all(nvs_handle_t handle);
 void nvs_release_iterator(nvs_iterator_t entry);
+esp_err_t nvs_get_stats(const char*, nvs_stats_t*);
+esp_err_t nvs_get_str(nvs_handle_t, const char*, char*, size_t*);
+esp_err_t nvs_set_str(nvs_handle_t, const char*, const char*);
+esp_err_t nvs_get_u64(nvs_handle_t, const char*, uint64_t*);
+esp_err_t nvs_set_u64(nvs_handle_t, const char*, uint64_t);
+esp_err_t nvs_set_u32(nvs_handle_t, const char*, uint32_t);
+esp_err_t nvs_entry_find(const char*, const char*, nvs_type_t, nvs_iterator_t*);
