@@ -1,0 +1,28 @@
+{
+  "detector": {
+    "ignoreRules": [],
+    "ignoreFiles": [],
+    "ignoreValues": [
+      {
+        "rule": "cramped-padding",
+        "value": "*",
+        "files": [
+          "_worktrees/pages-installer/docs/index.html",
+          "docs/index.html"
+        ],
+        "createdAt": "2026-11-11T15:19:48.561Z",
+        "reason": "Agent verified live browser at 1440px and 390px: downloads padding-block produces 40px and 32px top padding; detector misses logical padding"
+      },
+      {
+        "rule": "design-system-font",
+        "value": "next",
+        "files": [
+          "_worktrees/pages-installer/docs/index.html",
+          "docs/index.html"
+        ],
+        "createdAt": "2026-11-11T15:19:48.718Z",
+        "reason": "Agent verified rendered Avenir Next, Avenir, Segoe UI, sans-serif matches DESIGN.md; next is a detector parsing fragment of the documented Avenir Next family"
+      }
+    ]
+  }
+}
