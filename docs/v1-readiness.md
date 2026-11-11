@@ -1,7 +1,7 @@
 <!-- SPDX-License-Identifier: GPL-3.0-or-later -->
 # v1.0.0 readiness
 
-This is the checklist for v1.0.0. The latest release is [v0.5.0](https://github.com/giovannirco/latchkey/releases/tag/v0.5.0) (2026-11-09); v1.0.0 is not ready to tag. The roadmap and its discussion are in [#26](https://github.com/giovannirco/latchkey/issues/26); `CHANGELOG.md` lists what each release contains.
+This is the checklist for v1.0.0. The latest release is [v0.6.0](https://github.com/giovannirco/latchkey/releases/tag/v0.6.0) (2026-11-11); v1.0.0 is not ready to tag. The roadmap and its discussion are in [#26](https://github.com/giovannirco/latchkey/issues/26); `CHANGELOG.md` lists what each release contains.
 
 ## Released
 
@@ -12,13 +12,15 @@ This is the checklist for v1.0.0. The latest release is [v0.5.0](https://github.
 | v0.3.0 | Lock settings, the operation log, persistent unlock alerts, lock clock sync. |
 | v0.4.0 | Log lines on the board, syslog shipping, the full Wi-Fi form. |
 | v0.5.0 | Encrypted key export/import, pending admin-code recovery, previewed partial hardening with the reset-button step skipped. |
+| v0.6.0 | Time-zone controls, HTTP and logging hardening, bounded MQTT state, credential cleanup and alert persistence recovery. |
+
+Gateway-unlock API/UI controls are not planned for the installation or v1. The protocol primitive remains available; its effect on Latchkey unlocking is unverified.
 
 ## Required for v1.0.0
 
 | Item | Status |
 |---|---|
-| Remote-unlock (gateway) control | Pending product decision. The protocol core has `CONTROL_REMOTE_UNLOCK`; the board API, the web UI and their tests are missing. This is the lock's gateway-unlock permission, not Internet connectivity. Its effect on Latchkey's authenticated Bluetooth unlock path is unverified. |
-| Final review ([#25](https://github.com/giovannirco/latchkey/issues/25)) | Local #21 fixes and broader code/UI review completed on `fix/readiness-findings`. Still required: review any subsequent gateway work and CI on the final `main` commit. |
+| Final review ([#25](https://github.com/giovannirco/latchkey/issues/25)) | Local #21 fixes and broader code/UI review completed on `fix/readiness-findings`. Still required: CI on the final `main` commit before tagging. |
 
 ## Unverified on hardware
 
@@ -28,12 +30,12 @@ Hardware acceptance is deferred beyond v1.0.0; these stay listed as unverified i
 |---|---|
 | Backup, recovery and hardening ([#19](https://github.com/giovannirco/latchkey/issues/19)) | Built in v0.5.0 with native and browser tests. On an ESP32-S3 holding the real lock, a USB export and a hardening preview were checked. Unverified: import on a board, a two-board restore, a real hardening run, the web button flow for these, and the classic ESP32's heap during a backup. Mock results in the browser tests are not evidence of recovery on hardware. |
 | Switch writes ([#20](https://github.com/giovannirco/latchkey/issues/20)) | Reset button, privacy lock and tamper alert writes refuse before any Bluetooth frame until their layout is proven on a real lock. Full hardening (turning the reset button off) depends on this. |
-| Passage readback ([#31](https://github.com/giovannirco/latchkey/issues/31)) | A passage write was acknowledged once and its readback connection then dropped; untraced. |
+| Passage readback ([#31](https://github.com/giovannirco/latchkey/issues/31)) | Further investigation is outside the installation and v1 scope by decision on 2026-11-11. The acknowledged write followed by a dropped readback connection remains unresolved; existing passage controls remain available. |
 | Classic ESP32 heap and HTTPS ([#21](https://github.com/giovannirco/latchkey/issues/21)) | One stress run recorded a 27,576-byte minimum heap; later runs passed the 30 KB check. The first TLS connection closing during MQTT announcements, minimum heap under combined load, and stack headroom with a full log page and active alert monitoring remain untraced on hardware. Native fixes do not establish their cause. |
 
 ## Issue #21 review
 
-The November 2026 review covers the issue body and follow-up comments. Already released fixes remain distinguished from changes under `Unreleased`; neither category substitutes for the hardware checks above.
+The November 2026 review covers the issue body and follow-up comments. Already released fixes remain distinguished from the v0.6.0 fixes; neither category substitutes for the hardware checks above.
 
 | Finding | Disposition |
 |---|---|

@@ -96,7 +96,7 @@ test('Copy puts the shown lines on the clipboard as text', async ({ page, contex
   await expect(toast(page, 'Copied')).toBeVisible();
   const text = await page.evaluate(() => navigator.clipboard.readText());
   const lines = text.trim().split('\n');
-  expect(lines[0]).toMatch(/^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z info latchkey 0\.5\.0 board=esp32s3 /);
+  expect(lines[0]).toMatch(/^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z info latchkey 0\.6\.0 board=esp32s3 /);
   expect(text).toContain(' warn wifi: disconnected, reason 8');
   expect(lines.at(-1)).toContain('HTTPS on port 443, redirect on port 80');
 });

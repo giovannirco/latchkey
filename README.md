@@ -5,7 +5,7 @@
 
 Latchkey is firmware for ESP32 boards that takes a TTLock Bluetooth LE smart lock off the TTLock cloud and puts it under one owner's control: the board pairs with the lock by itself, manages what the TTLock app can manage on that lock, and serves an owner-only web UI, with no phone app, TTLock account or computer Bluetooth involved.
 
-Latchkey is in early development; the current release is [v0.5.0](https://github.com/giovannirco/latchkey/releases/tag/v0.5.0). [CHANGELOG.md](CHANGELOG.md) lists what each release added. What is not built yet, and what is still unverified on hardware, is in the [v1.0.0 checklist](docs/v1-readiness.md) and the roadmap issue [#26](https://github.com/giovannirco/latchkey/issues/26).
+Latchkey is in early development; the current release is [v0.6.0](https://github.com/giovannirco/latchkey/releases/tag/v0.6.0). [CHANGELOG.md](CHANGELOG.md) lists what each release added. What is not built yet, and what is still unverified on hardware, is in the [v1.0.0 checklist](docs/v1-readiness.md) and the roadmap issue [#26](https://github.com/giovannirco/latchkey/issues/26).
 
 ## Why
 
@@ -27,7 +27,7 @@ Works today:
 - Logs: the board keeps its recent log lines in RAM and shows them on the System page, and can ship them to a syslog collector (RFC 5424 over UDP or TCP), off until configured.
 - Encrypted key export and import, recovery of an admin-passcode change whose outcome was lost, and partial lock hardening after a read-only preview (the reset-button step stays skipped). See the [backup and hardening contract](docs/backup-hardening.md).
 
-Not built yet: the remote-unlock (gateway) control in the board API and the web UI, creating or editing weekly passcodes, rotating OTP codes, and board firmware updates from the web page. The [v1.0.0 checklist](docs/v1-readiness.md) has the status of each.
+Not built yet: creating or editing weekly passcodes, rotating OTP codes, and board firmware updates from the web page. Gateway-unlock API/UI controls and further passage-readback investigation are outside the installation and v1 scope. The [v1.0.0 checklist](docs/v1-readiness.md) has the status of each.
 
 ## Security model
 

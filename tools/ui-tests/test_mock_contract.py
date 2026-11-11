@@ -108,7 +108,7 @@ class MockContractTest(unittest.TestCase):
 
     def test_system_and_lock_summaries_include_firmware_diagnostics(self):
         info = self.call("system.info")
-        self.assertEqual(info["firmware"], "0.5.0")
+        self.assertEqual(info["firmware"], "0.6.0")
         for field in ["claimed", "button", "ble", "nvs", "stackFree"]:
             self.assertIn(field, info)
         self.assertIn("largestBlock", info["heap"])

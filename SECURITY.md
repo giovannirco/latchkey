@@ -7,7 +7,7 @@ Report it privately through GitHub: the "Report a vulnerability" button on the r
 
 ## Status
 
-Latchkey is in early development. This document describes the security design of the current tree; v0.5.0 is the latest release and `CHANGELOG.md` identifies unreleased changes. What is not built yet and what is still unverified on hardware is listed in [docs/v1-readiness.md](docs/v1-readiness.md).
+Latchkey is in early development. This document describes the security design of the current tree; v0.6.0 is the latest release and `CHANGELOG.md` identifies unreleased changes. What is not built yet and what is still unverified on hardware is listed in [docs/v1-readiness.md](docs/v1-readiness.md).
 
 ## The model in plain words
 

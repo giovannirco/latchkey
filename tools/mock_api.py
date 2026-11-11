@@ -651,7 +651,7 @@ class Mock:
     def _seed_logs(self) -> None:
         synced = int(self.started) + 3
         for uptime_ms, level, tag, message in (
-            (120, "info", "", "latchkey 0.5.0 board=esp32s3 chip=esp32s3 idf=v6.1.0"),
+            (120, "info", "", "latchkey 0.6.0 board=esp32s3 chip=esp32s3 idf=v6.1.0"),
             (380, "info", "certs", f"HTTPS certificate SHA-256 {CERT_FINGERPRINT}"),
             (2100, "info", "wifi", "connected, ip 192.0.2.10"),
             (2950, "info", "clock", f"SNTP synced, utc {synced}"),
@@ -895,7 +895,7 @@ class Mock:
                 if summary(lock)["warnings"]
             ]
         return {
-            "firmware": "0.5.0",
+            "firmware": "0.6.0",
             "board": "esp32s3",
             "chip": "esp32s3",
             "idf": "v6.1.0",

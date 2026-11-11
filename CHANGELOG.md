@@ -5,6 +5,8 @@ Notable changes to Latchkey, in the format of [Keep a Changelog](https://keepach
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-11-11
+
 ### Added
 
 - System time-zone form initialized from the board's POSIX setting, with browser zone guidance, an explicit fixed-offset suggestion and daylight-saving rules. Pairing and lock pages warn about current offset differences; existing locks have a named Sync time action. Browser and mock API regressions cover saving, validation, persistence and failures.
@@ -21,6 +23,13 @@ Notable changes to Latchkey, in the format of [Keep a Changelog](https://keepach
 - Serialize alert acknowledgement with monitoring and refuse it while alert/cursor persistence is unresolved, including after restart. Undated alert identities remain stable across retries; recovery tests exercise failed writes, restart, log rollover and acknowledgement retries. Deduplication remains limited to eight retained alerts.
 - Withhold truncated and interrupted lines and secret-shaped tags from the captured log ring and syslog. Syslog reconnect backoff survives peer closure and local-only sends, and enabled settings are persisted only after the worker can start.
 - Match mock auto-lock limits and eight-entry passage-day lists to the firmware; hardware checks choose supported auto-lock values and no longer skip genuine zero stack watermarks for exercised tasks.
+
+### Scope and known limits
+
+- Gateway-unlock API/UI controls and further passage-readback investigation are outside the installation and v1 scope. Existing passage controls remain available; the previously observed readback disconnect is unresolved.
+- Reset-button, privacy-lock and tamper-alert writes remain disabled pending protocol verification. Hardening remains partial. OTA updates and rollback are not included; update existing boards with a normal PlatformIO upload that preserves NVS, never a merged factory image.
+- Classic ESP32 heap under combined load and the first TLS connection dropping during MQTT announcements remain hardware investigations. Alert deduplication retains eight entries and does not guarantee exactly-once notifications through storage failures.
+- Native and browser regression tests cover backup and recovery. Physical restore, web button flows and installed-door operation must be verified separately; an encrypted backup excludes board login, Wi-Fi and MQTT settings.
 
 ## [0.5.0] - 2026-11-09
 
