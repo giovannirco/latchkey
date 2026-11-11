@@ -12,6 +12,7 @@ struct StaticSemaphore_t {
     bool given = false;
 };
 using SemaphoreHandle_t = StaticSemaphore_t*;
+SemaphoreHandle_t xSemaphoreCreateBinary();
 SemaphoreHandle_t xSemaphoreCreateBinaryStatic(StaticSemaphore_t* storage);
 BaseType_t xSemaphoreGive(SemaphoreHandle_t semaphore);
 BaseType_t xSemaphoreTake(SemaphoreHandle_t semaphore, TickType_t ticks);

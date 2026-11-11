@@ -1,0 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+#pragma once
+#include <cstdint>
+#include "esp_err.h"
+inline constexpr int ESP_MAC_WIFI_STA = 0;
+esp_err_t esp_read_mac(uint8_t*, int);
