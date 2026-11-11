@@ -60,7 +60,7 @@ An M5 ATOM runs the `esp32` build with `LATCHKEY_BUTTON_GPIO=39`, and an M5Stack
 ## Quick start
 
 1. Flash the board: with Chrome or Edge, open the [browser flasher](https://giovannirco.github.io/latchkey/), or build and flash from source as below. The flasher writes a factory image, which erases the board, lock keys included: use it only on a new board, never on one that holds a lock.
-2. Claim it over USB with `system.setup`, sending the Wi-Fi settings (static IPv4) and an owner password of 12 to 128 bytes from a file, so they stay out of your shell history:
+2. Close the flashing dialog and use **Connect for setup** on the installer to configure Wi-Fi, owner login and an optional local `.lkb` restore. Save the authenticator secret when shown. The backup restores lock keys, not Wi-Fi, owner login or certificates. See [browser setup and recovery](docs/hardware.md#browser-setup-and-recovery). For CLI setup instead, send `system.setup` with static IPv4 settings and a 12–128-byte owner password from a private file:
 
    ```sh
    uv run -q --no-project --python 3.14 --with pyserial==3.5 python -I tools/latchkey_cli.py --port <port> system.setup - < setup.json
@@ -107,6 +107,7 @@ python3 tools/ci/firmware_size.py                                   # app image 
 python3 -m unittest discover -s tools/ci -p 'test_*.py'             # self-tests of the CI tools
 python3 -m unittest discover -s tools/release -p 'test_*.py'        # self-tests of the release tools
 sh tools/ui-tests/run.sh                                            # web UI: bundler tests and the Playwright suite
+sh tools/pages-tests/run.sh                                         # Pages installer and USB transport tests
 ```
 
 [web/README.md](web/README.md) explains the web UI, its mock and its tests.

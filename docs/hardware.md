@@ -41,6 +41,27 @@ The factory image of a release covers everything from `0x0` to the end of the ap
 - When an S3 does not enter download mode on its own, for example because the running firmware no longer answers on USB, hold the board's download-mode button while plugging it in, as the board vendor documents.
 - Flashing the factory image erases the board, lock keys included: never write it, with esptool or the browser flasher, to a board that holds a lock. Updates from the web page are not in any release ([docs/v1-readiness.md](https://github.com/giovannirco/latchkey/blob/main/docs/v1-readiness.md)), so a board in use is updated from a checkout of the release tag: `uvx platformio==6.2.0 run -e <env> -t upload --upload-port <port>` writes the bootloader, partition table, `otadata` and app at their offsets and leaves `nvs` alone, so the keys survive. Never add `-t nobuild`: without the build step the app is written at the default offset, over `nvs`.
 
+## Browser setup and recovery
+
+After installing on a new board, close the flashing dialog and choose **Connect for setup** on the [installer](https://giovannirco.github.io/latchkey/). Pick the board's running USB port again if the S3 has re-enumerated. The page reads its status before offering owner setup or a local encrypted backup import. Close other serial tools first.
+
+Setup sends static Wi-Fi settings and an owner password over USB, then displays the authenticator secret once. Save it before continuing. An existing `.lkb` backup restores lock data only: it excludes Wi-Fi, owner login, TLS identity and MQTT settings. The replacement board generates its own certificate; compare the SHA-256 fingerprint read over USB with the browser's certificate before trusting it. Neither credentials nor backups are uploaded to the Pages server or saved in browser storage.
+
+The final connection check reads the board's status; it does not verify physical lock operation. Test access with the door open. Browser setup and restore have automated serial/browser coverage; commissioning a new empty board through this flow still needs hardware acceptance. Existing configured boards must not be factory-flashed to test it.
+
+### Recovering a lost setup reply
+
+If USB drops during `system.setup`, the owner may have been stored even though the authenticator reply was lost. Do not reset or reflash. Reconnect and read `system.info`: `claimed: false` means setup can be attempted again; `claimed: true` means an owner is already stored.
+
+If claimed, keep the owner password you supplied. If you saved the authenticator secret, verify login with it. Otherwise, after deliberately choosing to replace this board's authenticator, disconnect the browser's USB session and use the CLI from a checkout:
+
+```sh
+umask 077
+uv run -q --no-project --python 3.14 --with pyserial==3.5 python -I tools/latchkey_cli.py --port <port> auth.rotateTotp > owner-recovery.json
+```
+
+This invalidates the previous authenticator secret immediately; it does not change the password or lock keys. Import the returned `otpauth://` URI from the private output file into your authenticator, verify login, then delete the file. Never publish that output. A lost rotation reply needs the same deliberate recovery process, not an automatic retry. If you also lost the owner password, stop and plan recovery over the physically trusted USB console before any reset; preserve a verified lock backup first.
+
 ## Power
 
 - USB at 5 V from a supply of at least 1 A and a short, decent cable. Wi-Fi transmit peaks draw short current spikes: a weak supply or a long thin cable makes the brownout detector reset the board.

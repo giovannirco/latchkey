@@ -42,6 +42,8 @@ class BuildSiteTest(unittest.TestCase):
         (self.docs / "index.html").write_text(INDEX)
         (self.docs / "protocol.md").write_text("# Protocol\n")
         (self.docs / "hardware.md").write_text("# Hardware\n")
+        for name in ("installer.css", "installer.mjs", "installer-serial.mjs"):
+            (self.docs / name).write_text("fixture asset\n")
         self.dist = self.root / "dist"
         self.dist.mkdir()
         for env in ("esp32", "esp32s3"):
@@ -66,6 +68,19 @@ class BuildSiteTest(unittest.TestCase):
         self.assertEqual((self.site / "hardware.md").read_text(), "# Hardware\n")
         self.assertTrue((self.site / "index.html").is_file())
 
+    def test_installer_assets_are_published(self):
+        code, output = self.run_main()
+        self.assertEqual(code, 0, output)
+        for name in ("installer.css", "installer.mjs", "installer-serial.mjs"):
+            self.assertTrue((self.site / name).is_file(), name)
+
+    def test_missing_installer_asset_fails_before_publishing(self):
+        (self.docs / "installer.mjs").unlink()
+        code, output = self.run_main()
+        self.assertEqual(code, 1)
+        self.assertIn("installer.mjs", output)
+        self.assertFalse(self.site.exists())
+
     def test_unlisted_files_under_docs_are_not_published(self):
         (self.docs / "notes.md").write_text("draft\n")
         (self.docs / "superpowers" / "plans").mkdir(parents=True)
@@ -75,7 +90,7 @@ class BuildSiteTest(unittest.TestCase):
         published = sorted(str(path.relative_to(self.site)) for path in self.site.rglob("*") if path.is_file())
         self.assertEqual(
             [name for name in published if not name.startswith("firmware/")],
-            ["hardware.md", "index.html", "protocol.md"],
+            ["hardware.md", "index.html", "installer-serial.mjs", "installer.css", "installer.mjs", "protocol.md"],
         )
 
     def test_missing_listed_doc_fails(self):
