@@ -7,6 +7,9 @@
 #include <vector>
 
 #include "latchkey_util/lock_watch.h"
+#include "latchkey_util/label_table.h"
+#include "latchkey_util/passcode_id.h"
+#include "latchkey_util/retired_labels.h"
 #include "ttlock/commands.h"
 #include "ttlock/types.h"
 
@@ -19,6 +22,16 @@ struct LogStep {
     WatchState state;
     bool more = false;
 };
+
+struct LogLabels {
+    LabelTable passcodes;
+    LabelTable fingerprints;
+    LabelTable cards;
+    RetiredLabels retired;
+};
+
+bool logEntryJson(const ttlock::LogEntry& entry, int32_t lockUtcOffsetSeconds, const LogLabels& labels,
+                   const LockAesKey& key, HmacSha256 hmac, std::string& out);
 
 std::string logEntriesJson(const std::vector<ttlock::LogEntry>& entries, int32_t lockUtcOffsetSeconds);
 

@@ -114,10 +114,7 @@ size_t readPasscode(const uint8_t* data, size_t size, std::string& out) {
 void readPasscodePair(const uint8_t* data, size_t size, LogEntry& entry) {
     const size_t used = readPasscode(data, size, entry.credential);
     if (used > 0 && used < size) {
-        std::string replacement;
-        const size_t length = data[used];
-        replacement.assign(data + used + 1, data + std::min(size, used + 1 + length));
-        entry.newCredential = std::move(replacement);
+        readPasscode(data + used, size - used, entry.newCredential);
     }
 }
 
@@ -242,7 +239,7 @@ LockEvent parseLockEvent(const Reply& reply) {
     event.command = reply.command;
     event.status = reply.status;
     event.data = reply.data;
-    if (reply.command != command::kSearchStatus || reply.data.empty()) {
+    if (reply.command != command::kSearchStatus || reply.status != kReplySuccess || reply.data.empty()) {
         return event;
     }
     event.battery = reply.data[0];
