@@ -134,6 +134,7 @@ struct Live {
     bool alertWriteFailed = false;
     bool watchReadFailed = false;
     bool watchWriteFailed = false;
+    bool alertsAwaitingCatchup = false;
     bool metadataReadFailed = false;
 };
 
@@ -401,11 +402,12 @@ bool updateRecord(std::string_view mac, const std::function<void(Record&)>& chan
     Record record = lock->record;
     change(record);
     const esp_err_t error = store::locks::save(record);
+    if (error == ESP_OK) lock->record = record;
+    mbedtls_platform_zeroize(&record, sizeof(record));
     if (error != ESP_OK) {
         ESP_LOGE(TAG, "cannot store the lock record: %s", esp_err_to_name(error));
         return false;
     }
-    lock->record = record;
     return true;
 }
 
@@ -507,6 +509,9 @@ cJSON* lockWarnings(const Live& live) {
     }
     if (live.watchWriteFailed) {
         cJSON_AddItemToArray(warnings, cJSON_CreateString("The operation-log cursor could not be saved."));
+    }
+    if (live.alertsAwaitingCatchup) {
+        cJSON_AddItemToArray(warnings, cJSON_CreateString("Monitoring must finish reading the lock log before alerts can be acknowledged."));
     }
     return warnings;
 }
@@ -963,6 +968,7 @@ Status readInfo(ttlock::Session& session, const Lock& lock, rpc::Reply& reply) {
     copyDeviceInfo(record, info);
     updateRecord(record.mac, [&info](Record& stored) { copyDeviceInfo(stored, info); });
     reply = rpc::ok(infoJson(record));
+    mbedtls_platform_zeroize(&record, sizeof(record));
     return Status::Ok;
 }
 
@@ -1061,6 +1067,10 @@ void keepWatch(const std::string& mac, const WatchView& view, bool answered, boo
     }
     saveWatch(*lock, view.watch.state());
     lock->live.watch = view.watch;
+    if (answered && !more && view.watch.state().baselined &&
+        !lock->live.alertWriteFailed && !lock->live.watchWriteFailed) {
+        lock->live.alertsAwaitingCatchup = false;
+    }
     lock->live.schedule.attempted(monotonicMs(), answered);
     if (more) {
         lock->live.schedule.more();
@@ -1860,7 +1870,7 @@ void start() {
     {
         std::lock_guard<std::mutex> guard(s_mutex);
         const int64_t nowMs = monotonicMs();
-        for (const Record& record : records) {
+        for (Record& record : records) {
             if (s_lockCount == s_locks.size()) abort();
             std::unique_ptr<Lock> held(new (std::nothrow) Lock);
             if (!held) abort();
@@ -1887,8 +1897,16 @@ void start() {
             if (alertsChanged) {
                 lock.live.alertWriteFailed = store::alerts::save(record.mac, lock.live.alerts) != ESP_OK;
             }
+            const auto& state = lock.live.watch.state();
+            const auto alerts = lock.live.alerts.entries();
+            lock.live.alertsAwaitingCatchup = std::any_of(alerts.begin(), alerts.end(), [&state](const auto& alert) {
+                return alert.kind == latchkey_util::LockAlertKind::UnexpectedUnlock &&
+                       (!state.baselined || alert.time == 0 || alert.seq >= state.cursor ||
+                        (state.lastUtc != 0 && alert.time > state.lastUtc));
+            });
             lock.live.schedule.begin(s_lockCount, nowMs, kWatchFirstMs, kWatchSpreadMs);
             s_locks[s_lockCount++] = std::move(held);
+            mbedtls_platform_zeroize(&record, sizeof(record));
         }
     }
     ESP_LOGI(TAG, "%u lock(s) stored", static_cast<unsigned>(records.size()));
@@ -2144,10 +2162,12 @@ rpc::Reply rename(const std::string& mac, const std::string& name) {
     }
     Record record = lock->record;
     copyText(record.name, name);
-    if (store::locks::save(record) != ESP_OK) {
+    const esp_err_t error = store::locks::save(record);
+    if (error == ESP_OK) lock->record = record;
+    mbedtls_platform_zeroize(&record, sizeof(record));
+    if (error != ESP_OK) {
         return rpc::fail("internal", "cannot store the new name");
     }
-    lock->record = record;
     cJSON* result = cJSON_CreateObject();
     cJSON_AddItemToObject(result, "lock", summaryJson(*lock));
     return rpc::ok(result);
@@ -2245,22 +2265,21 @@ rpc::Reply alerts(const std::string& mac) {
 }
 
 rpc::Reply acknowledgeAlerts(const std::string& mac, uint32_t through) {
-    rpc::Reply reply;
     size_t remaining = 0;
-    {
-        std::lock_guard<std::mutex> guard(s_mutex);
-        if (storageBlocked()) return storageUnavailable();
+    rpc::Reply reply = runStorage("lock.alerts.ack", [mac, through, &remaining](latchkey_util::RestoreStorage&, StoragePublication&) {
         Lock* lock = findLocked(mac);
         if (lock == nullptr) {
             return notPaired();
+        }
+        if (lock->live.alertWriteFailed || lock->live.watchWriteFailed || lock->live.alertsAwaitingCatchup) {
+            return rpc::fail("storage_error", "alerts cannot be acknowledged until monitoring finishes and its state is stored");
         }
         latchkey_util::LockAlerts changed = lock->live.alerts;
         if (!changed.acknowledge(through)) {
             return rpc::fail("invalid_argument", "through must identify an alert already issued for this lock");
         }
-        if (changed.encode() != lock->live.alerts.encode() || lock->live.alertWriteFailed) {
+        if (changed.encode() != lock->live.alerts.encode()) {
             const esp_err_t error = store::alerts::save(mac.c_str(), changed);
-            lock->live.alertWriteFailed = error != ESP_OK;
             if (error != ESP_OK) {
                 return rpc::fail("internal", "the board cannot save the alert acknowledgement");
             }
@@ -2268,8 +2287,9 @@ rpc::Reply acknowledgeAlerts(const std::string& mac, uint32_t through) {
         }
         lock->live.watchReadFailed = holdsAlertOf(lock->live, latchkey_util::LockAlertKind::WatchStateUnreadable);
         remaining = changed.entries().size();
-        reply = rpc::ok(alertsJson(lock->live));
-    }
+        return rpc::ok(alertsJson(lock->live));
+    });
+    if (!reply.error.empty()) return reply;
     cJSON* data = cJSON_CreateObject();
     cJSON_AddStringToObject(data, "lock", mac.c_str());
     cJSON_AddNumberToObject(data, "alertCount", remaining);

@@ -2,6 +2,7 @@
 #pragma once
 
 #include <cstdint>
+#include <optional>
 
 #include "esp_http_server.h"
 
@@ -11,7 +12,7 @@ void start();
 
 bool fromBoardAddress(httpd_req_t* req);
 
-uint32_t serverStackFree();
+std::optional<uint32_t> serverStackFree();
 
 uint32_t workerStackFree();
 

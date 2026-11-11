@@ -2,6 +2,7 @@
 #include "http.h"
 
 #include <atomic>
+#include <cerrno>
 #include <cstdlib>
 #include <cstring>
 #include <new>
@@ -15,10 +16,12 @@
 #include "esp_log.h"
 #include "esp_netif.h"
 #include "esp_timer.h"
+#include "esp_tls_errors.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
 #include "freertos/task.h"
 #include "lwip/inet.h"
+#include "lwip/sockets.h"
 #include "mbedtls/platform_util.h"
 #include "sdkconfig.h"
 
@@ -54,6 +57,7 @@ constexpr uint16_t kSendTimeoutS = 3;
 constexpr uint16_t kReceiveTimeoutS = 4;
 constexpr uint32_t kHandshakeTimeoutMs = 3500;
 constexpr int64_t kBodyDeadlineUs = 10 * 1000 * 1000;
+constexpr int64_t kAnonymousBodyDeadlineUs = 2 * 1000 * 1000;
 constexpr int kKeepAliveIdleS = 30;
 constexpr int kKeepAliveIntervalS = 5;
 constexpr int kKeepAliveCount = 3;
@@ -161,35 +165,58 @@ esp_err_t servePage(httpd_req_t* req) {
     return httpd_resp_send(req, reinterpret_cast<const char*>(kPageStart), kPageEnd - kPageStart);
 }
 
-bool readBody(httpd_req_t* req, latchkey_util::RpcText& body) {
-    if (!body.resize(req->content_len)) return false;
-    const int64_t deadline = esp_timer_get_time() + kBodyDeadlineUs;
-    size_t received = 0;
-    while (received < body.size()) {
-        if (esp_timer_get_time() > deadline) {
-            return false;
-        }
-        const int count = httpd_req_recv(req, body.data() + received, body.size() - received);
-        if (count == HTTPD_SOCK_ERR_TIMEOUT) {
-            continue;
-        }
-        if (count <= 0) {
-            return false;
-        }
-        received += static_cast<size_t>(count);
-    }
-    return true;
-}
-
-bool bodyAllowed(httpd_req_t* req) {
-    if (req->content_len <= kMaxBody) return true;
-    if (req->content_len > latchkey_util::kMaxRpcText) return false;
+bool hasSession(httpd_req_t* req) {
     char token[kTokenBuffer] = {};
     size_t length = sizeof(token);
     const bool allowed = httpd_req_get_cookie_val(req, latchkey_util::kSessionCookieName, token, &length) == ESP_OK &&
                          auth::sessionFor(token).has_value();
     mbedtls_platform_zeroize(token, sizeof(token));
     return allowed;
+}
+
+bool receiveBody(httpd_req_t* req, latchkey_util::RpcText& body, int64_t deadline) {
+    const int fd = httpd_req_to_sockfd(req);
+    size_t received = 0;
+    while (received < body.size()) {
+        if (esp_timer_get_time() >= deadline) return false;
+        const int count = httpd_req_recv(req, body.data() + received, body.size() - received);
+        if (count > 0) {
+            received += static_cast<size_t>(count);
+            continue;
+        }
+        if (count != HTTPD_SOCK_ERR_TIMEOUT && count != ESP_TLS_ERR_SSL_WANT_READ &&
+            count != ESP_TLS_ERR_SSL_WANT_WRITE) {
+            return false;
+        }
+        const int64_t remaining = deadline - esp_timer_get_time();
+        if (remaining <= 0) return false;
+        fd_set ready;
+        FD_ZERO(&ready);
+        FD_SET(fd, &ready);
+        timeval timeout{static_cast<time_t>(remaining / 1000000),
+                        static_cast<suseconds_t>(remaining % 1000000)};
+        const bool write = count == ESP_TLS_ERR_SSL_WANT_WRITE;
+        const int selected = select(fd + 1, write ? nullptr : &ready, write ? &ready : nullptr, nullptr, &timeout);
+        if (selected == 0 || (selected < 0 && errno != EINTR)) return false;
+    }
+    return esp_timer_get_time() < deadline;
+}
+
+bool readBody(httpd_req_t* req, latchkey_util::RpcText& body) {
+    if (!body.resize(req->content_len)) return false;
+    const int fd = httpd_req_to_sockfd(req);
+    const int flags = fcntl(fd, F_GETFL, 0);
+    if (flags < 0 || fcntl(fd, F_SETFL, flags | O_NONBLOCK) != 0) return false;
+    const int64_t budget = hasSession(req) ? kBodyDeadlineUs : kAnonymousBodyDeadlineUs;
+    const bool received = receiveBody(req, body, esp_timer_get_time() + budget);
+    const bool restored = fcntl(fd, F_SETFL, flags) == 0;
+    return received && restored;
+}
+
+bool bodyAllowed(httpd_req_t* req) {
+    if (req->content_len <= kMaxBody) return true;
+    if (req->content_len > latchkey_util::kMaxRpcText) return false;
+    return hasSession(req);
 }
 
 esp_err_t acceptRpc(httpd_req_t* req) {
@@ -230,10 +257,11 @@ std::string sessionToken(httpd_req_t* req) {
 }
 
 void abandon(httpd_req_t* req) {
-    const httpd_handle_t server = req->handle;
     const int fd = httpd_req_to_sockfd(req);
+    if (shutdown(fd, SHUT_RDWR) != 0) {
+        ESP_LOGE(TAG, "cannot shut down an abandoned request: errno %d", errno);
+    }
     httpd_req_async_handler_complete(req);
-    httpd_sess_trigger_close(server, fd);
 }
 
 void answer(Request& request) {
@@ -426,9 +454,9 @@ bool fromBoardAddress(httpd_req_t* req) {
     return header(req, "Origin", origin) && latchkey_util::isOwnOrigin(origin, own);
 }
 
-uint32_t serverStackFree() {
+std::optional<uint32_t> serverStackFree() {
     const TaskHandle_t task = s_server.load();
-    return task != nullptr ? uxTaskGetStackHighWaterMark(task) : 0;
+    return task != nullptr ? std::optional<uint32_t>(uxTaskGetStackHighWaterMark(task)) : std::nullopt;
 }
 
 uint32_t workerStackFree() { return s_worker != nullptr ? uxTaskGetStackHighWaterMark(s_worker) : 0; }

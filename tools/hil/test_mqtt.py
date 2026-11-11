@@ -690,7 +690,14 @@ def exercise_web_heap(console: Console, secrets: dict[str, Any], board_settings:
     assert heap["largestBlock"] > 16_384
     assert stacks["mqtt"] >= MIN_STACK_FREE
     assert stacks["mqttClient"] >= MIN_STACK_FREE
-    assert all(free >= MIN_STACK_FREE for free in stacks.values() if free)
+    active = {"lockWorker", "nimbleHost", "console", "webRequests", "webJobs", "mqtt", "mqttClient"}
+    if relay_settings:
+        active.add("httpsServer")
+    if info["syslog"]["enabled"]:
+        active.add("syslog")
+    for name in active:
+        free = stacks[name]
+        assert free is not None and free >= MIN_STACK_FREE, f"{name} stack headroom: {free}"
 
 
 def test_a_restart_sends_the_last_will_then_online(console: Console, broker: Broker, connected: Session) -> None:

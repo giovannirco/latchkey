@@ -329,7 +329,7 @@ struct Joined {
     }
 
     void feedCut(uintptr_t writer, std::string_view piece) {
-        joiner.feed(writer, piece, true, [this](std::string_view line) { lines.emplace_back(line); });
+        joiner.feed(writer, piece, true, [this](std::string_view line) { lines.emplace_back(line); }, true);
     }
 };
 
@@ -377,20 +377,20 @@ static void test_a_new_piece_from_another_writer_closes_the_open_line() {
     joined.feed(1, "I (1) wifi:");
     joined.feed(2, "I (2) a:");
     TEST_ASSERT_EQUAL_UINT32(1, joined.lines.size());
-    TEST_ASSERT_EQUAL_STRING("I (1) wifi:", joined.lines[0].c_str());
+    TEST_ASSERT_EQUAL_STRING("line withheld: incomplete log line", joined.lines[0].c_str());
     joined.feed(2, " b\n");
     TEST_ASSERT_EQUAL_UINT32(2, joined.lines.size());
     TEST_ASSERT_EQUAL_STRING("I (2) a: b\n", joined.lines[1].c_str());
 }
 
-static void test_an_overlong_line_is_cut() {
+static void test_an_overlong_line_is_withheld() {
     Joined joined;
     const std::string piece(200, 'x');
     joined.feed(1, piece);
     joined.feed(1, piece);
     joined.feed(1, "\n");
     TEST_ASSERT_EQUAL_UINT32(1, joined.lines.size());
-    TEST_ASSERT_EQUAL_UINT32(latchkey_util::LogJoiner::kCapacity, joined.lines[0].size());
+    TEST_ASSERT_EQUAL_STRING("line withheld: incomplete log line", joined.lines[0].c_str());
 }
 
 static void test_a_line_the_console_cut_does_not_swallow_the_next_one() {
@@ -399,7 +399,7 @@ static void test_a_line_the_console_cut_does_not_swallow_the_next_one() {
     joined.feedCut(1, cut);
     joined.feed(1, "I (10) a: next\n");
     TEST_ASSERT_EQUAL_UINT32(2, joined.lines.size());
-    TEST_ASSERT_EQUAL_STRING(cut.c_str(), joined.lines[0].c_str());
+    TEST_ASSERT_EQUAL_STRING("line withheld: incomplete log line", joined.lines[0].c_str());
     TEST_ASSERT_EQUAL_STRING("I (10) a: next\n", joined.lines[1].c_str());
 }
 
@@ -409,8 +409,31 @@ static void test_a_cut_line_ends_the_pieces_before_it() {
     joined.feedCut(1, std::string(250, 'w'));
     joined.feed(1, "I (12) b: after\n");
     TEST_ASSERT_EQUAL_UINT32(2, joined.lines.size());
-    TEST_ASSERT_EQUAL_UINT32(latchkey_util::LogJoiner::kCapacity, joined.lines[0].size());
+    TEST_ASSERT_EQUAL_STRING("line withheld: incomplete log line", joined.lines[0].c_str());
     TEST_ASSERT_EQUAL_STRING("I (12) b: after\n", joined.lines[1].c_str());
+}
+
+static void test_overflow_never_exposes_a_partial_secret() {
+    for (size_t start = 225; start <= 256; ++start) {
+        Joined joined;
+        joined.feed(1, "I (1) t: " + std::string(start, 'x') + std::string(32, 'a') + "\n");
+        TEST_ASSERT_EQUAL_UINT(1, joined.lines.size());
+        TEST_ASSERT_EQUAL_STRING("line withheld: incomplete log line", joined.lines[0].c_str());
+    }
+}
+
+static void test_interrupted_fragments_and_late_continuations_are_withheld() {
+    Joined joined;
+    joined.feed(1, "I (1) t: secret=");
+    joined.feed(2, "I (2) u:");
+    joined.feed(2, " fine\n");
+    joined.feed(1, "synthetic-value\n");
+    joined.feed(3, "I (3) v: next\n");
+    TEST_ASSERT_EQUAL_UINT(4, joined.lines.size());
+    TEST_ASSERT_EQUAL_STRING("line withheld: incomplete log line", joined.lines[0].c_str());
+    TEST_ASSERT_EQUAL_STRING("I (2) u: fine\n", joined.lines[1].c_str());
+    TEST_ASSERT_EQUAL_STRING("line withheld: incomplete log line", joined.lines[2].c_str());
+    TEST_ASSERT_EQUAL_STRING("I (3) v: next\n", joined.lines[3].c_str());
 }
 
 static void test_a_new_ring_wipes_what_its_storage_held_before() {
@@ -426,12 +449,14 @@ int main() {
     UNITY_BEGIN();
     RUN_TEST(test_a_line_the_console_cut_does_not_swallow_the_next_one);
     RUN_TEST(test_a_cut_line_ends_the_pieces_before_it);
+    RUN_TEST(test_overflow_never_exposes_a_partial_secret);
+    RUN_TEST(test_interrupted_fragments_and_late_continuations_are_withheld);
     RUN_TEST(test_a_whole_line_passes_at_once);
     RUN_TEST(test_pieces_of_one_writer_become_one_line);
     RUN_TEST(test_empty_lines_are_dropped);
     RUN_TEST(test_another_writer_keeps_its_own_lines);
     RUN_TEST(test_a_new_piece_from_another_writer_closes_the_open_line);
-    RUN_TEST(test_an_overlong_line_is_cut);
+    RUN_TEST(test_an_overlong_line_is_withheld);
     RUN_TEST(test_a_prefixed_line_gives_level_tag_and_message);
     RUN_TEST(test_every_level_letter_is_read);
     RUN_TEST(test_an_unprefixed_line_is_info_without_a_tag);

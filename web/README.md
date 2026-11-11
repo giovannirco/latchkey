@@ -15,7 +15,7 @@ It also writes `<output.gz>.csp.txt`, the Content-Security-Policy header value: 
   - `Content-Encoding: gzip`;
   - `Content-Security-Policy:` the contents of `<output.gz>.csp.txt`;
   - `X-Frame-Options: DENY`, `X-Content-Type-Options: nosniff`, `Referrer-Policy: no-referrer`, `Cache-Control: no-store`.
-- With every API response (`/api/rpc`, `/api/ota`): `Cache-Control: no-store` and `X-Content-Type-Options: nosniff`.
+- With every API response (`/api/rpc`): `Cache-Control: no-store` and `X-Content-Type-Options: nosniff`.
 - The session cookie: `Secure; HttpOnly; SameSite=Strict; Path=/`. The mock leaves out `Secure` because it serves plain HTTP.
 
 ## Develop against the mock
@@ -26,14 +26,18 @@ python3 tools/mock_api.py --port 8765
 
 Open http://127.0.0.1:8765/ and sign in with password `owner-pass` and code `123456`. The mock rebuilds the page on every load, so edits in `web/` show on reload. It keeps everything in memory: two demo locks, Front door (every feature) and Shed (passcodes and auto-lock only), plus a factory-fresh lock to pair. Buttons on the board are pressed for you after 2 s.
 
-`tools/mock_api.py` models the public parameters, results and events: `lock.state`, `lock.event`, `enroll.progress`, `confirm.required`, `confirm.result`, `scan.result`, `audit.appended` and `job.done`. Lock methods and button-gated methods answer `{"job": id}`, as the board does, and their outcome arrives later as `job.done` on the requesting session's sockets. Hardening preview uses a job without a button prompt or mutation; execution reports partial completion because reset-button writes remain unverified.
+`tools/mock_api.py` models the public parameters, results and events: `lock.state`, `lock.event`, `lock.alert`, `lock.alerts.changed`, `enroll.progress`, `confirm.required`, `confirm.result`, `scan.result`, `audit.appended` and `job.done`. Lock methods and button-gated methods answer `{"job": id}`, as the board does, and their outcome arrives later as `job.done` on the requesting session's sockets. Hardening preview uses a job without a button prompt or mutation; execution reports partial completion because reset-button writes remain unverified. Reset-button disabling refuses with `backup_required` before export and `unverified` after it.
+
+System reads the board's POSIX time zone through `system.timezone.get` and saves explicit rules through `system.timezone.set`. The browser's zone and current offset are guidance only; IANA names are not accepted and fixed offsets do not follow daylight saving. The mock validates POSIX syntax and uses Python's `zoneinfo` with a generated TZif record to calculate offsets without changing the process time zone.
+
+Firmware uploads are hidden until the board implements `/api/ota`. The mock's upload simulation is not evidence of a working board update path.
 
 Mock backups are opaque, fixture-only tokens with an in-memory snapshot, not encrypted recovery files. They restore only within the same mock lifetime and cannot be imported on a board. The browser treats their bytes as opaque and exercises scope, passphrase validation, conflicts and failure reporting. Native tests cover the real backup format and crypto; browser tests do not prove hardware recovery.
 
 ## Test
 
 ```sh
-sh tools/ui-tests/run.sh                    # bundler unit tests, then the Playwright suite
+sh tools/ui-tests/run.sh                    # bundler and API contract tests, then Playwright
 sh tools/ui-tests/run.sh pair.spec.cjs      # extra arguments go to `playwright test`
 LK_SHOTS_DIR=/tmp/shots sh tools/ui-tests/run.sh shots.spec.cjs
 ```

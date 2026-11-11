@@ -12,6 +12,7 @@
 #include "mbedtls/platform_util.h"
 
 #include "access_requests.h"
+#include "key_store.h"
 #include "latchkey_util/lock_settings.h"
 #include "lock_manager.h"
 #include "methods.h"
@@ -182,7 +183,13 @@ rpc::Handler switchSet(Feature feature) {
             return lock_access::withTarget(rpc::fail("unsupported", "the lock does not report this switch"), mac);
         }
         if (feature == Feature::ResetButton && !enabled) {
-            return lock_access::withTarget(rpc::fail("backup_required", kBackupFirst), mac);
+            latchkey_util::LockMetadata metadata;
+            if (key_store::loadMetadata(mac, metadata) != ESP_OK) {
+                return lock_access::withTarget(rpc::fail("internal", "cannot read the lock backup state"), mac);
+            }
+            if ((metadata.lifecycle & latchkey_util::kBackupBackedUp) == 0) {
+                return lock_access::withTarget(rpc::fail("backup_required", kBackupFirst), mac);
+            }
         }
         return lock_access::withTarget(rpc::fail("unverified", "switch writes are not yet verified on this lock"), mac);
     };

@@ -10,7 +10,8 @@ Served like the firmware serves them:
 - GET /             the page bundled by tools/build_web.py (gzip), rebuilt on every request;
 - POST /api/rpc     {"id", "method", "params"} -> {"id", "result"} or {"id", "error": {"code", "message"}};
 - GET /api/events   WebSocket (RFC 6455, text frames) carrying {"event", "data"};
-- POST /api/ota     a firmware image as application/octet-stream, installed after the board button.
+
+The mock retains an experimental /api/ota fixture; released firmware does not serve it and the UI hides it.
 
 The session is an HttpOnly, SameSite=Strict cookie set by auth.login. /api/rpc only accepts
 application/json and refuses a foreign Origin. A method that needs the board's button emits
@@ -28,7 +29,7 @@ up to 16 entries after that record number, with "more" when others follow. The b
 background and sends lock.alert {"lock", "method", "time", "seq", "type"} for an unlock from an app it
 did not make, or a forced opening; tests emit one with the emit hook. Switch writes refuse with
 unverified before any radio traffic or board-button wait. Turning the reset button off refuses first
-with backup_required, with or without a key backup.
+with backup_required until the lock has a key backup, then unverified.
 
 lock.alerts.list answers {alerts, warnings}; lock.alerts.ack {lock, through} acknowledges displayed
 ids without removing later arrivals. An alert's kind is unexpected_unlock, or a stored warning:
@@ -96,6 +97,7 @@ import threading
 import time
 from contextlib import contextmanager
 from dataclasses import dataclass, field
+from datetime import datetime
 from http.cookies import CookieError, SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -104,6 +106,7 @@ from urllib.parse import urlsplit
 
 sys.dont_write_bytecode = True
 import build_web  # noqa: E402
+from mock_timezone import parse_timezone
 
 SESSION_COOKIE = "lk_session"
 MOCK_PASSWORD = "owner-pass"
@@ -385,6 +388,8 @@ def public_passcode(entry: dict) -> dict:
 def summary(lock: dict) -> dict:
     keys = ("id", "mac", "name", "model", "state", "battery", "rssi", "lastSeen", "lastEvent", "hardened", "backedUp")
     result = {key: copy.deepcopy(lock[key]) for key in keys}
+    result["pairComplete"] = lock["pairComplete"]
+    result["adminPasscodeConfirmed"] = lock["adminPasscodeConfirmed"]
     result["alertCount"] = len(lock["alerts"])
     result["warnings"] = list(lock["warnings"])
     if any(alert["kind"] == "alerts_unreadable" for alert in lock["alerts"]):
@@ -490,7 +495,7 @@ def demo_locks() -> list[dict]:
         ),
     }
     for lock in (front, shed):
-        lock.update(alerts=[], alertNext=1, warnings=[])
+        lock.update(alerts=[], alertNext=1, warnings=[], pairComplete=True, adminPasscodeConfirmed=True)
     return [front, shed]
 
 
@@ -520,6 +525,8 @@ def new_lock(mac: str, name: str, admin_passcode: str) -> dict:
         "lastEvent": None,
         "hardened": False,
         "backedUp": False,
+        "pairComplete": True,
+        "adminPasscodeConfirmed": True,
         "autolock": {"seconds": 0, "min": 1, "max": 900},
         "sound": {"enabled": True, "volume": 5},
         "resetButton": True,
@@ -593,6 +600,8 @@ class Mock:
             self.timers = []
             self.generation += 1
             self.config = Config()
+            self.timezone = "UTC0"
+            self.zone = parse_timezone(self.timezone)
             self.password = MOCK_PASSWORD
             self.sessions: dict[str, float] = {}
             self.failures = 0
@@ -642,7 +651,7 @@ class Mock:
     def _seed_logs(self) -> None:
         synced = int(self.started) + 3
         for uptime_ms, level, tag, message in (
-            (120, "info", "", "latchkey 0.1.0 board=esp32s3-atom chip=esp32s3 idf=v6.1.0"),
+            (120, "info", "", "latchkey 0.6.0 board=esp32s3 chip=esp32s3 idf=v6.1.0"),
             (380, "info", "certs", f"HTTPS certificate SHA-256 {CERT_FINGERPRINT}"),
             (2100, "info", "wifi", "connected, ip 192.0.2.10"),
             (2950, "info", "clock", f"SNTP synced, utc {synced}"),
@@ -886,15 +895,28 @@ class Mock:
                 if summary(lock)["warnings"]
             ]
         return {
-            "firmware": "0.1.0",
-            "board": "esp32s3-atom",
+            "firmware": "0.6.0",
+            "board": "esp32s3",
             "chip": "esp32s3",
             "idf": "v6.1.0",
             "uptime": int(time.time() - self.started),
-            "heap": {"free": 151552, "minFree": 98304},
-            "time": {"utc": now() if synced else 0, "synced": synced},
-            "timezone": "UTC0",
-            "localTime": time.strftime("%Y-%m-%dT%H:%M:%S+00:00", time.gmtime()) if synced else None,
+            "heap": {"free": 151552, "minFree": 98304, "largestBlock": 65536},
+            "stackFree": {
+                name: 2048
+                for name in (
+                    "syslog", "lockWorker", "nimbleHost", "console", "httpsServer", "webRequests", "webJobs", "mqtt", "mqttClient"
+                )
+            },
+            "claimed": True,
+            "button": {"gpio": 0, "pressed": False, "presses": 0},
+            "ble": {
+                "ready": True, "scanning": False, "connected": False, "reports": 0,
+                "lockReports": 0, "frames": 0, "badCrc": 0, "dropped": 0,
+            },
+            "nvs": {"usedEntries": 128, "availableEntries": 512, "totalEntries": 640, "reservedEntries": 256},
+            "time": {"utc": now() if synced else None, "synced": synced},
+            "timezone": self.timezone,
+            "localTime": datetime.fromtimestamp(now(), self.zone).isoformat() if synced else None,
             "wifi": dict(self.wifi),
             "certFingerprint": CERT_FINGERPRINT,
             "warnings": warnings,
@@ -905,6 +927,24 @@ class Mock:
     @rpc("system.setup", session=False, audited=False)
     def system_setup(self, ctx: Context, params: dict) -> dict:
         raise RpcError("unsupported", "system.setup is only available over USB serial")
+
+    @rpc("system.timezone.get", audited=False)
+    def system_timezone_get(self, ctx: Context, params: dict) -> dict:
+        with self.lock:
+            offset = datetime.fromtimestamp(now(), self.zone).utcoffset() if self.config.time_synced else None
+            return {"tz": self.timezone, "utcOffset": int(offset.total_seconds()) if offset is not None else None}
+
+    @rpc("system.timezone.set")
+    def system_timezone_set(self, ctx: Context, params: dict) -> dict:
+        text = params.get("tz")
+        try:
+            zone = parse_timezone(text)
+        except ValueError as error:
+            raise invalid("tz must be a POSIX TZ string with explicit daylight rules") from error
+        with self.lock:
+            self.timezone = text
+            self.zone = zone
+        return self.system_timezone_get(ctx, {})
 
     @rpc("system.wifi.set")
     def system_wifi_set(self, ctx: Context, params: dict) -> dict:
@@ -1009,13 +1049,13 @@ class Mock:
     @rpc("system.reboot")
     def system_reboot(self, ctx: Context, params: dict) -> dict:
         self.later(0.3, self.events.disconnect)
-        return {"rebooting": True}
+        return {}
 
     @rpc("system.factoryReset", job=True)
     def system_factory_reset(self, ctx: Context, params: dict) -> dict:
         self.confirm("system.factoryReset")
         self.later(0.3, self.reset)
-        return {"rebooting": True}
+        return {}
 
     @rpc("auth.login", session=False)
     def auth_login(self, ctx: Context, params: dict) -> dict:
@@ -1207,9 +1247,11 @@ class Mock:
     def lock_autolock_set(self, ctx: Context, params: dict) -> dict:
         lock = self.get_lock(params)
         setting = lock["autolock"]
-        seconds = int_param(params, "seconds", lo=0, hi=setting["max"])
-        if seconds is None or (seconds and seconds < setting["min"]):
-            raise invalid(f"auto-lock is 0 (off) or {setting['min']} to {setting['max']} s")
+        has_range = bool(setting["min"] and setting["max"])
+        minimum, maximum = (setting["min"], setting["max"]) if has_range else (1, 65535)
+        seconds = int_param(params, "seconds", lo=0, hi=maximum)
+        if seconds is None or (seconds and seconds < minimum):
+            raise invalid(f"auto-lock is 0 (off) or {minimum} to {maximum} s")
         with self.radio():
             setting["seconds"] = seconds
         return dict(setting)
@@ -1250,8 +1292,8 @@ class Mock:
     def lock_passage_add(self, ctx: Context, params: dict) -> dict:
         lock = self.get_lock(params)
         days = params.get("days")
-        if not isinstance(days, list) or not days:
-            raise invalid("days lists 0 (every day) or weekdays 1 to 7")
+        if not isinstance(days, list) or not 1 <= len(days) <= 8:
+            raise invalid("days lists up to 8 values: 0 (every day) or weekdays 1 to 7")
         entries = [self._passage_entry(params, day) for day in days]
         with self.lock:
             stop, self.fail_passage_add = self.fail_passage_add, None
@@ -1522,7 +1564,7 @@ class Mock:
     def lock_reset_button_set(self, ctx: Context, params: dict) -> dict:
         lock = self.get_lock(params)
         enabled = bool_param(params, "enabled")
-        if not enabled:
+        if not enabled and not lock["backedUp"]:
             raise RpcError(
                 "backup_required", "export this lock's keys with keys.export before turning its reset button off"
             )
@@ -1752,11 +1794,18 @@ class Mock:
 
     @rpc("audit.list", audited=False)
     def audit_list(self, ctx: Context, params: dict) -> dict:
-        before = int_param(params, "before", lo=1)
-        limit = int_param(params, "limit", default=50, lo=1, hi=200)
+        before = int_param(params, "before", lo=1, hi=0xFFFFFFFF)
+        limit = int_param(params, "limit", default=50, lo=1, hi=50)
+        if limit is None:
+            raise invalid("limit must be 1 to 50")
         with self.lock:
             older = [entry for entry in reversed(self.audit) if before is None or entry["seq"] < before]
-        return {"entries": [dict(entry) for entry in older[:limit]], "more": len(older) > limit}
+        more = len(older) > limit
+        return {
+            "entries": [dict(entry) for entry in older[:limit]],
+            "more": more,
+            "next": older[limit - 1]["seq"] if more else None,
+        }
 
     def _mqtt_view(self) -> dict:
         view = {key: value for key, value in self.mqtt.items() if key != "password"}

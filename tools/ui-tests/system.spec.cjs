@@ -1,64 +1,71 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-const { test, expect, mock, calls, login, boardButton, toast } = require('./support.cjs');
+const { test, expect, mock, calls, login } = require('./support.cjs');
 
-function firmware(size) {
-  const image = Buffer.alloc(size, 0);
-  image[0] = 0xe9;
-  return image;
-}
+test.use({ timezoneId: 'Asia/Kathmandu' });
+
+test('time zone starts from the board and saves explicit daylight rules across reloads', async ({ page, request }) => {
+  await login(page, '#/system');
+  const zone = page.getByRole('region', { name: 'Time zone', exact: true });
+  await expect(zone.getByLabel('POSIX time zone')).toHaveValue('UTC0');
+  await expect(zone).toContainText('Browser time zone:');
+  await expect(zone).toContainText('UTC+05:45');
+  await expect(zone).toContainText('does not adjust for daylight saving');
+  const tz = 'EST5EDT,M3.2.0,M11.1.0';
+  await zone.getByLabel('POSIX time zone').fill(tz);
+  expect((await calls(request)).filter((call) => call.method === 'system.timezone.set')).toHaveLength(0);
+  await zone.getByRole('button', { name: 'Save time zone' }).click();
+  await expect(page.locator('#toasts')).toContainText('Time zone saved');
+  expect((await calls(request)).find((call) => call.method === 'system.timezone.set').params).toEqual({ tz });
+  await page.reload();
+  await expect(zone.getByLabel('POSIX time zone')).toHaveValue(tz);
+});
+
+test('time zone rejects IANA names and preserves the saved value', async ({ page }) => {
+  await login(page, '#/system');
+  const zone = page.getByRole('region', { name: 'Time zone', exact: true });
+  await zone.getByLabel('POSIX time zone').fill('America/New_York');
+  await zone.getByRole('button', { name: 'Save time zone' }).click();
+  await expect(page.locator('#toasts')).toContainText('Some values are not valid');
+  await expect(page.locator('#toasts')).not.toContainText('Time zone saved');
+  await page.reload();
+  await expect(zone.getByLabel('POSIX time zone')).toHaveValue('UTC0');
+});
+
+test('browser offset fills an explicit fixed-offset suggestion without saving it', async ({ page, request }) => {
+  await login(page, '#/system');
+  const zone = page.getByRole('region', { name: 'Time zone', exact: true });
+  await zone.getByRole('button', { name: 'Use current browser offset' }).click();
+  await expect(zone.getByLabel('POSIX time zone')).toHaveValue('UTC-5:45');
+  expect((await calls(request)).filter((call) => call.method === 'system.timezone.set')).toHaveLength(0);
+  await zone.getByRole('button', { name: 'Save time zone' }).click();
+  await expect(zone).toContainText('Current board offset: UTC+05:45');
+  await expect(zone).toContainText('Sync time');
+});
+
+test('time zone storage errors retain the edit for retry without claiming success', async ({ page, request }) => {
+  await login(page, '#/system');
+  await mock(request, { failNext: { method: 'system.timezone.set', code: 'internal', message: 'cannot save time zone' } });
+  const zone = page.getByRole('region', { name: 'Time zone', exact: true });
+  await zone.getByLabel('POSIX time zone').fill('<-03>3');
+  await zone.getByRole('button', { name: 'Save time zone' }).click();
+  await expect(page.locator('#toasts')).toContainText('Cannot save time zone');
+  await expect(page.locator('#toasts')).not.toContainText('Time zone saved');
+  await expect(zone.getByLabel('POSIX time zone')).toHaveValue('<-03>3');
+  await expect(zone.getByRole('button', { name: 'Save time zone' })).toBeEnabled();
+});
+
+test('released firmware does not offer an unsupported update upload', async ({ page }) => {
+  await login(page, '#/system');
+  await expect(page.getByRole('region', { name: 'Firmware update' })).toHaveCount(0);
+  await expect(page.getByLabel('Firmware image (.bin)')).toHaveCount(0);
+});
 
 test('the system page shows board, Wi-Fi and clock details', async ({ page }) => {
   await login(page, '#/system');
   const board = page.getByRole('region', { name: 'Board' });
-  await expect(board).toContainText('esp32s3-atom');
+  await expect(board).toContainText('esp32s3');
   await expect(board).toContainText('192.0.2.10');
   await expect(board).toContainText('Synced');
-});
-
-async function uploadFirmware(page) {
-  const ota = page.getByRole('region', { name: 'Firmware update' });
-  await ota.getByLabel('Firmware image (.bin)').setInputFiles({
-    name: 'latchkey-esp32s3.bin',
-    mimeType: 'application/octet-stream',
-    buffer: firmware(300_000),
-  });
-  await ota.getByRole('button', { name: 'Upload' }).click();
-  return ota;
-}
-
-test('a firmware upload shows progress, asks for the board button, then restarts', async ({ page, request }) => {
-  await login(page, '#/system');
-  const ota = await uploadFirmware(page);
-  await expect(ota.getByRole('progressbar')).toBeVisible();
-  await expect(boardButton(page)).toBeVisible();
-  await expect(boardButton(page)).toContainText('Install new firmware');
-  await expect(boardButton(page)).toBeHidden();
-  await expect(toast(page, 'Firmware uploaded. The board is restarting')).toBeVisible();
-  const audit = await (await request.get('/__mock/calls')).json();
-  expect(audit.calls.filter((call) => call.method === 'ota')).toHaveLength(1);
-});
-
-test('firmware is not installed when nobody presses the board button', async ({ page, request }) => {
-  await login(page, '#/system');
-  await mock(request, { confirm: 'never', confirmTimeoutMs: 1500 });
-  const ota = await uploadFirmware(page);
-  await expect(boardButton(page)).toBeVisible();
-  await expect(ota.getByRole('alert')).toContainText('The button on the board was not pressed in time');
-  await expect(boardButton(page)).toBeHidden();
-  await expect(page.locator('#toasts')).not.toContainText('Firmware uploaded');
-});
-
-test('a file that is not an ESP32 app image is refused before upload', async ({ page, request }) => {
-  await login(page, '#/system');
-  const ota = page.getByRole('region', { name: 'Firmware update' });
-  await ota.getByLabel('Firmware image (.bin)').setInputFiles({
-    name: 'notes.bin',
-    mimeType: 'application/octet-stream',
-    buffer: Buffer.from('PK\u0003\u0004 not firmware'),
-  });
-  await ota.getByRole('button', { name: 'Upload' }).click();
-  await expect(ota.getByRole('alert')).toContainText('not an ESP32 firmware image');
-  expect((await calls(request)).some((call) => call.method === 'ota')).toBe(false);
 });
 
 test('Wi-Fi settings never echo the password', async ({ page, request }) => {

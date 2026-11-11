@@ -64,49 +64,45 @@ test('a confirmed press shows the confirmation then the result', async ({ page }
   await expect(secret).toBeHidden();
 });
 
-test('switch writes refuse before a button prompt, and turning the reset button off always asks for a backup', async ({
-  page,
-}) => {
-  await login(page);
-  await openLock(page, 'Front door', 'Settings');
-  const reset = page.getByRole('switch', { name: 'Physical reset button' });
-  await expect(reset).not.toBeChecked();
-  await page.evaluate(() => {
-    window.__switchEvents = [];
-    const socket = new WebSocket(`ws://${location.host}/api/events`);
-    window.__switchSocket = socket;
-    return new Promise((resolve) => {
-      socket.addEventListener('message', (event) => window.__switchEvents.push(JSON.parse(event.data)));
-      socket.addEventListener('open', resolve);
+for (const backedUp of [false, true]) {
+  test(`switch writes refuse without a prompt or mutation when backedUp is ${backedUp}`, async ({ page, request }) => {
+    await mock(request, { setLock: { id: FRONT_DOOR, backedUp, resetButton: true, privacyLock: false, tamperAlert: true } });
+    await login(page);
+    await openLock(page, 'Front door', 'Settings');
+    await expect(page.getByRole('switch', { name: 'Physical reset button' })).toBeChecked();
+    await page.evaluate(() => {
+      window.__switchEvents = [];
+      const socket = new WebSocket(`ws://${location.host}/api/events`);
+      window.__switchSocket = socket;
+      return new Promise((resolve) => {
+        socket.addEventListener('message', (event) => window.__switchEvents.push(JSON.parse(event.data)));
+        socket.addEventListener('open', resolve);
+      });
     });
-  });
-  for (const method of ['lock.resetButton.set', 'lock.privacyLock.set', 'lock.tamperAlert.set']) {
-    for (const enabled of [true, false]) {
-      const result = await page.evaluate(
-        async ({ method, enabled, lock }) => {
-          const response = await fetch('/api/rpc', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ id: 1, method, params: { lock, enabled } }),
-          });
-          return response.json();
-        },
-        { method, enabled, lock: FRONT_DOOR },
-      );
-      await expect
-        .poll(async () =>
-          page.evaluate((reply) => {
-            if (reply.error) return reply.error.code;
-            return window.__switchEvents.find(
-              (event) => event.event === 'job.done' && event.data.job === reply.result.job,
-            )?.data.error?.code;
-          }, result),
-        )
-        .toBe(method === 'lock.resetButton.set' && !enabled ? 'backup_required' : 'unverified');
+
+    async function switchRequest(method, params = {}) {
+      const response = await page.request.post('/api/rpc', {
+        data: { id: 1, method, params: { lock: FRONT_DOOR, ...params } },
+      });
+      const reply = await response.json();
+      if (reply.error || !reply.result.job) return reply;
+      const outcome = () => page.evaluate((job) => window.__switchEvents.find(
+        (event) => event.event === 'job.done' && event.data.job === job,
+      )?.data, reply.result.job);
+      await expect.poll(outcome).toBeTruthy();
+      return outcome();
     }
-  }
-  expect(
-    await page.evaluate(() => window.__switchEvents.filter((event) => event.event === 'confirm.required')),
-  ).toEqual([]);
-  await expect(boardButton(page)).toBeHidden();
-});
+
+    for (const [setting, original] of [['resetButton', true], ['privacyLock', false], ['tamperAlert', true]]) {
+      for (const enabled of [true, false]) {
+        const reply = await switchRequest(`lock.${setting}.set`, { enabled });
+        expect(reply.error.code).toBe(setting === 'resetButton' && !enabled && !backedUp ? 'backup_required' : 'unverified');
+        expect((await switchRequest(`lock.${setting}.get`)).result.enabled).toBe(original);
+      }
+    }
+    expect(
+      await page.evaluate(() => window.__switchEvents.filter((event) => event.event === 'confirm.required')),
+    ).toEqual([]);
+    await expect(boardButton(page)).toBeHidden();
+  });
+}

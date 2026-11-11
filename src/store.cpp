@@ -90,10 +90,12 @@ bool readString(nvs_handle_t handle, const char* key, std::string& out) {
     }
     std::string value(length, '\0');
     if (nvs_get_str(handle, key, value.data(), &length) != ESP_OK) {
+        mbedtls_platform_zeroize(value.data(), value.size());
         return false;
     }
     value.resize(length - 1);
-    out = std::move(value);
+    out = value;
+    mbedtls_platform_zeroize(value.data(), value.size());
     return true;
 }
 
@@ -237,11 +239,12 @@ bool loadWifi(Wifi& out) {
         readString(h, "ssid", wifi.ssid) && readString(h, "wifi_pass", wifi.password) &&
         nvs_get_u32(h, "ip", &wifi.ip) == ESP_OK && nvs_get_u32(h, "gateway", &wifi.gateway) == ESP_OK &&
         nvs_get_u32(h, "netmask", &wifi.netmask) == ESP_OK && nvs_get_u32(h, "dns", &wifi.dns) == ESP_OK;
-    if (!complete) {
-        return false;
+    if (complete) {
+        mbedtls_platform_zeroize(out.password.data(), out.password.size());
+        out = wifi;
     }
-    out = std::move(wifi);
-    return true;
+    mbedtls_platform_zeroize(wifi.password.data(), wifi.password.size());
+    return complete;
 }
 
 esp_err_t saveWifi(const Wifi& wifi) {
@@ -365,6 +368,7 @@ esp_err_t saveTlsIdentity(const latchkey_util::TlsIdentity& identity) {
 esp_err_t loadMqtt(Mqtt& out) {
     Handle handle(kCfgNamespace, NVS_READONLY);
     if (handle.error() == ESP_ERR_NVS_NOT_FOUND) {
+        mbedtls_platform_zeroize(out.password.data(), out.password.size());
         out = Mqtt{};
         return ESP_OK;
     }
@@ -375,6 +379,7 @@ esp_err_t loadMqtt(Mqtt& out) {
     size_t length = sizeof(record);
     esp_err_t error = nvs_get_blob(handle.get(), kMqttKey, &record, &length);
     if (error == ESP_ERR_NVS_NOT_FOUND) {
+        mbedtls_platform_zeroize(out.password.data(), out.password.size());
         out = Mqtt{};
         return ESP_OK;
     }
@@ -382,14 +387,13 @@ esp_err_t loadMqtt(Mqtt& out) {
         error = ESP_ERR_INVALID_VERSION;
     }
     if (error == ESP_OK) {
-        Mqtt mqtt;
-        mqtt.enabled = record.enabled != 0;
-        mqtt.port = record.port;
-        mqtt.host = takeText(record.host);
-        mqtt.username = takeText(record.username);
-        mqtt.password = takeText(record.password);
-        mqtt.prefix = takeText(record.prefix);
-        out = std::move(mqtt);
+        mbedtls_platform_zeroize(out.password.data(), out.password.size());
+        out.enabled = record.enabled != 0;
+        out.port = record.port;
+        out.host = takeText(record.host);
+        out.username = takeText(record.username);
+        out.password.assign(record.password, strnlen(record.password, sizeof(record.password)));
+        out.prefix = takeText(record.prefix);
     }
     mbedtls_platform_zeroize(&record, sizeof(record));
     return error;
@@ -554,6 +558,7 @@ void terminateStrings(Record& record) {
 esp_err_t list(std::vector<Record>& out) {
     Handle handle(kLocksNamespace, NVS_READONLY);
     if (handle.error() == ESP_ERR_NVS_NOT_FOUND) {
+        for (Record& record : out) mbedtls_platform_zeroize(&record, sizeof(record));
         out.clear();
         return ESP_OK;
     }
@@ -561,6 +566,7 @@ esp_err_t list(std::vector<Record>& out) {
         return handle.error();
     }
     std::vector<Record> records;
+    records.reserve(kMaxLocks);
     nvs_iterator_t entry = nullptr;
     esp_err_t error = nvs_entry_find_in_handle(handle.get(), NVS_TYPE_BLOB, &entry);
     while (error == ESP_OK) {
@@ -571,14 +577,22 @@ esp_err_t list(std::vector<Record>& out) {
         if (nvs_get_blob(handle.get(), info.key, &record, &length) == ESP_OK && length == sizeof(record) &&
             record.version == kRecordVersion) {
             terminateStrings(record);
+            if (records.size() == kMaxLocks) {
+                mbedtls_platform_zeroize(&record, sizeof(record));
+                error = ESP_ERR_INVALID_SIZE;
+                break;
+            }
             records.push_back(record);
         }
+        mbedtls_platform_zeroize(&record, sizeof(record));
         error = nvs_entry_next(&entry);
     }
     nvs_release_iterator(entry);
     if (error != ESP_ERR_NVS_NOT_FOUND) {
+        for (Record& record : records) mbedtls_platform_zeroize(&record, sizeof(record));
         return error;
     }
+    for (Record& record : out) mbedtls_platform_zeroize(&record, sizeof(record));
     out = std::move(records);
     return ESP_OK;
 }
@@ -713,9 +727,6 @@ esp_err_t save(const char* mac, const latchkey_util::SeedTable& table) {
     char key[kLockKeySize];
     if (!lockKey(mac, key)) {
         return ESP_ERR_INVALID_ARG;
-    }
-    if (!growthFits(kSeedsNamespace, key, latchkey_util::kSeedTableSize)) {
-        return ESP_ERR_NVS_NOT_ENOUGH_SPACE;
     }
     Handle handle(kSeedsNamespace, NVS_READWRITE);
     if (!handle.ok()) {

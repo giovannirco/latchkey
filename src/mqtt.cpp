@@ -5,6 +5,7 @@
 #include <atomic>
 #include <cmath>
 #include <cstdint>
+#include <deque>
 #include <map>
 #include <memory>
 #include <mutex>
@@ -65,6 +66,7 @@ constexpr int64_t kPollGapMs = 60 * 1000;
 constexpr int64_t kStableMs = 60 * 1000;
 constexpr int64_t kTallyWindowMs = 60 * 1000;
 constexpr size_t kMaxInbox = 32;
+constexpr size_t kMaxPruned = 32;
 constexpr int kMaxTopic = 128;
 constexpr int kMaxPayload = 16;
 constexpr int kAtLeastOnce = 1;
@@ -153,7 +155,7 @@ struct State {
     int64_t reconcileAtMs = 0;
     int64_t watchedSinceUtc = 0;
     std::map<std::string, Announced> announced;
-    std::set<std::string> pruned;
+    std::deque<std::string> pruned;
     std::set<std::string> commanding;
     latchkey_util::PollPlanner polls{kPollIntervalMs, kPollRetryMs, kPollGapMs};
     latchkey_util::RefusalTally refusals{kTallyWindowMs};
@@ -563,11 +565,13 @@ void handleCommand(State& state, const Item& item) {
 }
 
 void pruneStale(State& state, const std::string& id) {
-    if (state.pruned.count(id) > 0 || state.announced.count(id) > 0 || lock_manager::holds(macOf(id))) {
+    if (std::find(state.pruned.begin(), state.pruned.end(), id) != state.pruned.end() ||
+        state.announced.count(id) > 0 || lock_manager::holds(macOf(id))) {
         return;
     }
     if (removeLock(state, state.settings.prefix, id, kAtMostOnce)) {
-        state.pruned.insert(id);
+        if (state.pruned.size() == kMaxPruned) state.pruned.pop_front();
+        state.pruned.push_back(id);
         ESP_LOGI(TAG, "removed the Home Assistant entities of lock %s, which the board does not hold",
                  macOf(id).c_str());
     }
@@ -993,7 +997,9 @@ bool apply(const store::cfg::Mqtt& settings) {
         std::lock_guard<std::mutex> guard(s_mutex);
         if (s_pending.has_value()) {
             wipe(s_pending->password);
+            s_pending.reset();
         }
+        if (!settings.enabled && s_task == nullptr) return true;
         s_pending = settings;
         if (settings.enabled && !launch()) {
             wipe(s_pending->password);

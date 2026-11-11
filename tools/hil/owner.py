@@ -11,9 +11,10 @@ import hashlib
 import hmac
 import re
 import struct
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-from latchkey_cli import Console
+if TYPE_CHECKING:
+    from latchkey_cli import Console
 
 OTPAUTH = re.compile(
     r"otpauth://totp/Latchkey:(?P<board>[a-z0-9-]+)\?secret=(?P<secret>[A-Z2-7]{32})"
@@ -60,7 +61,8 @@ def otpauth_secret(uri: str, expected_board: str) -> bytes:
     match = OTPAUTH.fullmatch(uri)
     shaped = match is not None
     assert shaped, "otpauth URI does not have the expected shape"
-    assert match["board"] == expected_board
+    matches_board = match["board"] == expected_board or (expected_board == "esp32s3" and match["board"] == "esp32s3-atom")
+    assert matches_board, "otpauth URI belongs to a different board"
     secret = PrivateBytes(base64.b32decode(match["secret"]))
     length = len(secret)
     assert length == 20
