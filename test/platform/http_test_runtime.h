@@ -26,6 +26,7 @@ struct Socket {
     void* context = nullptr;
     void (*freeContext)(void*) = nullptr;
     bool shutdownPending = false;
+    bool asynchronous = false;
 };
 struct SessionSlot {
     int fd = -1;
@@ -44,6 +45,7 @@ inline std::deque<std::pair<void (*)(void*), void*>> work;
 inline std::function<void()> onSend;
 inline std::function<void()> onCloseRequested;
 inline std::function<void(char*, size_t)> onReceive;
+inline std::function<void()> onComplete;
 inline void* request = nullptr;
 inline bool rejectQueue = false, rejectAsync = false, rejectWork = false, rejectClose = false;
 inline bool rejectList = false, rejectSend = false;
@@ -80,7 +82,7 @@ inline void reset() {
     headers = {{"Host", "192.0.2.1"}, {"Content-Type", "application/json"}};
     cookie = "fixture-session";
     body.clear(); status.clear(); reply.clear(); sockets.clear(); sent.clear(); work.clear(); onSend = {}; onReceive = {};
-    onCloseRequested = {};
+    onCloseRequested = {}; onComplete = {};
     slots = {};
     lruCounter = queuedCloses = 0;
     shutdownCalls = shutdownsOutsideServer = 0;
@@ -153,10 +155,18 @@ int httpd_req_recv(httpd_req_t*, char* output, size_t capacity) {
 int httpd_req_to_sockfd(httpd_req_t*) { return http_fixture::fd; }
 esp_err_t httpd_req_async_handler_begin(httpd_req_t* req, httpd_req_t** out) {
     if (http_fixture::rejectAsync) return ESP_FAIL;
+    http_fixture::sockets.at(http_fixture::fd).asynchronous = true;
     *out = req;
     return ESP_OK;
 }
-esp_err_t httpd_req_async_handler_complete(httpd_req_t*) { ++http_fixture::completed; return ESP_OK; }
+esp_err_t httpd_req_async_handler_complete(httpd_req_t*) {
+    ++http_fixture::completed;
+    auto& socket = http_fixture::sockets.at(http_fixture::fd);
+    socket.asynchronous = false;
+    if (socket.shutdownPending) http_fixture::retireSocket(http_fixture::fd);
+    if (http_fixture::onComplete) http_fixture::onComplete();
+    return ESP_OK;
+}
 esp_err_t httpd_sess_trigger_close(httpd_handle_t server, int fd) {
     using namespace http_fixture;
     if (rejectClose) return ESP_FAIL;

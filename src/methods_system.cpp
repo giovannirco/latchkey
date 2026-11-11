@@ -204,7 +204,9 @@ rpc::Reply info(const cJSON*, const rpc::Context&) {
     cJSON_AddNumberToObject(stacks, "lockWorker", lock_manager::workerStackFree());
     cJSON_AddNumberToObject(stacks, "nimbleHost", stackFree("nimble_host"));
     cJSON_AddNumberToObject(stacks, "console", stackFree("console"));
-    cJSON_AddNumberToObject(stacks, "httpsServer", http::serverStackFree());
+    const auto serverStack = http::serverStackFree();
+    if (serverStack.has_value()) cJSON_AddNumberToObject(stacks, "httpsServer", *serverStack);
+    else cJSON_AddNullToObject(stacks, "httpsServer");
     cJSON_AddNumberToObject(stacks, "webRequests", http::workerStackFree());
     cJSON_AddNumberToObject(stacks, "webJobs", jobs::stackFree());
     cJSON_AddNumberToObject(stacks, "mqtt", mqtt::stackFree());
