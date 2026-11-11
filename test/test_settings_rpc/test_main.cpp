@@ -4,11 +4,6 @@
 #include "../reference/hmac_sha256.h"
 #include "../../src/methods_settings.cpp"
 
-namespace hmac {
-bool sha256(const uint8_t* key, size_t keyLength, const uint8_t* data, size_t length, uint8_t (&out)[32]) {
-    return reference::hmacSha256(key, keyLength, data, length, out);
-}
-}
 
 void setUp() { resetManagerFixture(); }
 void tearDown() { clearManagerFixture(); }

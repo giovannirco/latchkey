@@ -487,6 +487,8 @@ const char* alertKindName(latchkey_util::LockAlertKind kind) {
             return "watch_state_unreadable";
         case latchkey_util::LockAlertKind::AlertsUnreadable:
             return "alerts_unreadable";
+        case latchkey_util::LockAlertKind::LowBattery:
+            return "low_battery";
     }
     return "unexpected_unlock";
 }
@@ -529,6 +531,7 @@ cJSON* alertsJson(const Live& live) {
         cJSON_AddStringToObject(entry, "method", latchkey_util::toString(alert.method));
         cJSON_AddNumberToObject(entry, "seq", alert.seq);
         cJSON_AddNumberToObject(entry, "type", alert.type);
+        if (alert.kind == latchkey_util::LockAlertKind::LowBattery) cJSON_AddNumberToObject(entry, "battery", alert.battery);
         cJSON_AddItemToArray(entries, entry);
     }
     cJSON_AddItemToObject(result, "warnings", lockWarnings(live));
@@ -602,7 +605,42 @@ void publishState(const std::string& mac, LockState state, int battery) {
     events::publish("lock.state", data);
 }
 
+void noteBattery(const std::string& mac, int battery) {
+    if (battery < 0 || battery > 100) return;
+    bool raised = false;
+    size_t count = 0;
+    const auto time = static_cast<uint32_t>(utcNow());
+    {
+        std::lock_guard<std::mutex> guard(s_mutex);
+        Lock* lock = findLocked(mac);
+        if (lock == nullptr || storageBlocked()) return;
+        auto changed = lock->live.alerts;
+        const auto before = changed.encode();
+        const uint32_t last = changed.entries().empty() ? 0 : changed.entries().back().id;
+        if (!changed.observeBattery(battery, time)) return;
+        const bool fresh = changed.encode() != before;
+        if (!fresh && !lock->live.alertWriteFailed) return;
+        raised = fresh && !changed.entries().empty() && changed.entries().back().id > last &&
+                 changed.entries().back().kind == latchkey_util::LockAlertKind::LowBattery;
+        const auto error = store::alerts::save(mac.c_str(), changed);
+        lock->live.alertWriteFailed = error != ESP_OK;
+        lock->live.alerts = changed;
+        count = changed.entries().size();
+        if (error != ESP_OK) ESP_LOGE(TAG, "cannot save battery alert state: %s", esp_err_to_name(error));
+    }
+    cJSON* data = cJSON_CreateObject();
+    cJSON_AddStringToObject(data, "lock", mac.c_str());
+    cJSON_AddNumberToObject(data, "alertCount", count);
+    if (raised) {
+        cJSON_AddStringToObject(data, "kind", "low_battery");
+        cJSON_AddNumberToObject(data, "battery", battery);
+        addOptionalNumber(data, "time", time > 0, time);
+    }
+    events::publish(raised ? "lock.battery.alert" : "lock.alerts.changed", data);
+}
+
 void noteState(const std::string& mac, LockState state, int battery, bool always) {
+    noteBattery(mac, battery);
     LockState current = LockState::Unknown;
     int level = -1;
     bool changed = false;
@@ -1008,7 +1046,7 @@ Status operate(ttlock::Session& session, const Lock& lock, bool open, rpc::Reply
              static_cast<unsigned>(out.uid), static_cast<unsigned>(out.recordId));
     const LockState state = open ? LockState::Unlocked : LockState::Locked;
     const int battery = out.battery >= 0 ? out.battery : lock.live.battery;
-    noteState(lock.record.mac, state, battery, true);
+    noteState(lock.record.mac, state, out.battery, true);
     noteEvent(lock.record.mac, open ? "unlock" : "lock", "app");
     cJSON* result = cJSON_CreateObject();
     cJSON_AddStringToObject(result, "state", stateName(state));
@@ -1136,6 +1174,11 @@ Status watchLock(ttlock::Session& session, const std::string& mac) {
     if (status == Status::Ok && !more) {
         status = keepClock(session, mac, view);
     }
+    if (status == Status::Ok) {
+        ttlock::LockStatus observed;
+        status = session.status(observed);
+        if (status == Status::Ok) noteState(mac, observed.state, observed.battery, false);
+    }
     if (status != Status::Ok) {
         ESP_LOGW(TAG, "reading the log of %s: %s", mac.c_str(), ttlock::toString(status));
     }
@@ -1165,8 +1208,8 @@ Status readLog(ttlock::Session& session, const Lock& lock, std::optional<uint16_
             status = lock_log::readSlots(session, static_cast<uint16_t>(from), static_cast<uint16_t>(to), shown);
         }
         if (status == Status::Ok) {
-            reply = rpc::ok(lock_log::fetchResult(shown, since, to, more || to < top,
-                                                 view.watch.state(), logOffset(view.watch.state())));
+            reply = lock_log::fetchResult(shown, since, to, more || to < top,
+                                          view.watch.state(), logOffset(view.watch.state()), lock.record);
         }
     }
     keepWatch(mac, view, status == Status::Ok, more);
@@ -1990,12 +2033,60 @@ esp_err_t loadLabels(const std::string& mac, store::labels::Kind kind, latchkey_
     return store::labels::load(mac.c_str(), kind, out);
 }
 
+static esp_err_t retainLabelsLocked(const std::string& mac, store::labels::Kind kind,
+                                    const latchkey_util::LabelTable& next) {
+    latchkey_util::LabelTable current;
+    esp_err_t error = store::labels::load(mac.c_str(), kind, current);
+    if (error != ESP_OK) return error;
+    const bool removesNames = std::any_of(current.entries().begin(), current.entries().end(),
+        [&next](const latchkey_util::Label& label) { return !label.name.empty() && next.find(label.id) == nullptr; });
+    if (!removesNames) return ESP_OK;
+    latchkey_util::RetiredLabels retired;
+    error = store::labels::loadRetired(mac.c_str(), retired);
+    if (error != ESP_OK) return error;
+    const auto before = retired.encode();
+    for (const auto& label : current.entries()) {
+        if (next.find(label.id) == nullptr && !retired.remember(static_cast<char>(kind), label.id, label.name)) {
+            return ESP_ERR_INVALID_ARG;
+        }
+    }
+    return before == retired.encode() ? ESP_OK : store::labels::saveRetired(mac.c_str(), retired);
+}
+
+esp_err_t retainLabels(const std::string& mac, store::labels::Kind kind, const latchkey_util::LabelTable& next) {
+    std::lock_guard<std::mutex> guard(s_mutex);
+    if (findLocked(mac) == nullptr || storageBlocked()) return ESP_ERR_NOT_FOUND;
+    return retainLabelsLocked(mac, kind, next);
+}
+
+esp_err_t loadLogLabels(const std::string& mac, latchkey_util::LogLabels& out) {
+    std::lock_guard<std::mutex> guard(s_mutex);
+    if (findLocked(mac) == nullptr || storageBlocked()) return ESP_ERR_NOT_FOUND;
+    latchkey_util::LogLabels labels;
+    esp_err_t error = store::labels::load(mac.c_str(), store::labels::Kind::Passcodes, labels.passcodes);
+    if (error == ESP_OK) error = store::labels::load(mac.c_str(), store::labels::Kind::Fingerprints, labels.fingerprints);
+    if (error == ESP_OK) error = store::labels::load(mac.c_str(), store::labels::Kind::Cards, labels.cards);
+    if (error == ESP_OK) error = store::labels::loadRetired(mac.c_str(), labels.retired);
+    if (error == ESP_OK) out = std::move(labels);
+    return error;
+}
+
+esp_err_t forgetRetiredLabel(const std::string& mac, store::labels::Kind kind, uint64_t id) {
+    std::lock_guard<std::mutex> guard(s_mutex);
+    if (findLocked(mac) == nullptr || storageBlocked()) return ESP_ERR_NOT_FOUND;
+    latchkey_util::RetiredLabels retired;
+    const esp_err_t error = store::labels::loadRetired(mac.c_str(), retired);
+    if (error != ESP_OK) return error;
+    return retired.remove(static_cast<char>(kind), id) ? store::labels::saveRetired(mac.c_str(), retired) : ESP_OK;
+}
+
 esp_err_t saveLabels(const std::string& mac, store::labels::Kind kind, const latchkey_util::LabelTable& table) {
     std::lock_guard<std::mutex> guard(s_mutex);
     if (findLocked(mac) == nullptr || storageBlocked()) {
         return ESP_ERR_NOT_FOUND;
     }
-    return store::labels::save(mac.c_str(), kind, table);
+    const esp_err_t error = retainLabelsLocked(mac, kind, table);
+    return error == ESP_OK ? store::labels::save(mac.c_str(), kind, table) : error;
 }
 
 bool labelsFit(const std::string& mac, store::labels::Kind kind, const latchkey_util::LabelTable& table) {

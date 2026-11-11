@@ -14,6 +14,7 @@
 #include "latchkey_util/lock_watch.h"
 #include "latchkey_util/mqtt_settings.h"
 #include "latchkey_util/password_record.h"
+#include "latchkey_util/retired_labels.h"
 #include "latchkey_util/seed_table.h"
 #include "latchkey_util/syslog.h"
 
@@ -175,6 +176,10 @@ enum class Kind : char {
 esp_err_t load(const char* mac, Kind kind, latchkey_util::LabelTable& out);
 
 esp_err_t save(const char* mac, Kind kind, const latchkey_util::LabelTable& table);
+
+esp_err_t loadRetired(const char* mac, latchkey_util::RetiredLabels& out);
+
+esp_err_t saveRetired(const char* mac, const latchkey_util::RetiredLabels& table);
 
 bool fits(const char* mac, Kind kind, const latchkey_util::LabelTable& table);
 

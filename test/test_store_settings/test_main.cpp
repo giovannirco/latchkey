@@ -95,6 +95,29 @@ static void test_listing_excess_records_fails_without_partial_publication() {
     TEST_ASSERT_TRUE(loaded.empty());
 }
 
+static void test_retired_names_persist_within_the_reserved_capacity_and_erase_with_the_lock() {
+    latchkey_util::RetiredLabels labels;
+    TEST_ASSERT_TRUE(labels.remember('f', 17, "Entry finger"));
+    s_available = store::reservedEntries();
+    TEST_ASSERT_EQUAL_INT(ESP_OK, store::labels::saveRetired(kMac.data(), labels));
+    latchkey_util::RetiredLabels loaded;
+    TEST_ASSERT_EQUAL_INT(ESP_OK, store::labels::loadRetired(kMac.data(), loaded));
+    TEST_ASSERT_NOT_NULL(loaded.find('f', 17));
+    TEST_ASSERT_EQUAL_INT(ESP_OK, store::labels::erase(kMac.data()));
+    TEST_ASSERT_EQUAL_INT(ESP_OK, store::labels::loadRetired(kMac.data(), loaded));
+    TEST_ASSERT_NULL(loaded.find('f', 17));
+}
+
+static void test_retired_name_storage_rejects_oversized_or_unreadable_records() {
+    s_namespaces["labels"][kKey] = {NVS_TYPE_BLOB, std::vector<uint8_t>(latchkey_util::kRetiredLabelsBytes + 1)};
+    latchkey_util::RetiredLabels loaded;
+    TEST_ASSERT_EQUAL_INT(ESP_ERR_INVALID_SIZE, store::labels::loadRetired(kMac.data(), loaded));
+    s_namespaces["labels"][kKey] = {NVS_TYPE_BLOB, {1, 1}};
+    TEST_ASSERT_EQUAL_INT(ESP_ERR_INVALID_CRC, store::labels::loadRetired(kMac.data(), loaded));
+    s_failRead = s_reads + 1;
+    TEST_ASSERT_EQUAL_INT(ESP_FAIL, store::labels::loadRetired(kMac.data(), loaded));
+}
+
 int main() {
     UNITY_BEGIN();
     RUN_TEST(test_loading_mqtt_wipes_the_replaced_password_and_preserves_fields);
@@ -103,5 +126,7 @@ int main() {
     RUN_TEST(test_loading_wifi_wipes_password_temporaries_on_success_and_incomplete_records);
     RUN_TEST(test_listing_records_wipes_stack_and_partial_failure_copies);
     RUN_TEST(test_listing_excess_records_fails_without_partial_publication);
+    RUN_TEST(test_retired_names_persist_within_the_reserved_capacity_and_erase_with_the_lock);
+    RUN_TEST(test_retired_name_storage_rejects_oversized_or_unreadable_records);
     return UNITY_END();
 }

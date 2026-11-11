@@ -232,8 +232,9 @@ rpc::Reply passcodesList(const cJSON* params, const rpc::Context&) {
                 }
             }
             text += ']';
-            if (labels.keepOnly(passcodes.numbers)) {
-                lock_manager::saveLabels(mac, kLabels, labels);
+            if (labels.keepOnly(passcodes.numbers) && lock_manager::saveLabels(mac, kLabels, labels) != ESP_OK) {
+                out = rpc::fail("storage_error", "cannot preserve removed passcode labels");
+                return Status::Ok;
             }
             cJSON* result = cJSON_CreateObject();
             cJSON_AddItemToObject(result, "passcodes", lock_access::rawJson(text));
@@ -473,6 +474,10 @@ Status updatePasscode(const UpdateRequest& request, Session& session, const Reco
         out = lock_access::storageFull();
         return Status::Ok;
     }
+    if (lock_manager::retainLabels(request.mac, kLabels, labels) != ESP_OK) {
+        out = rpc::fail("storage_error", "cannot preserve passcode labels before updating");
+        return Status::Ok;
+    }
     Passcode changed;
     changed.type = entry.type;
     changed.code = code.get();
@@ -538,12 +543,16 @@ rpc::Reply passcodesDelete(const cJSON* params, const rpc::Context&) {
             if (!loadLabels(mac, labels, out)) {
                 return Status::Ok;
             }
+            labels.keepOnly(passcodes.numbers);
+            labels.remove(passcodes.numbers[index]);
+            if (lock_manager::retainLabels(mac, kLabels, labels) != ESP_OK) {
+                out = rpc::fail("storage_error", "cannot preserve the passcode label before deletion");
+                return Status::Ok;
+            }
             status = session.passcodeDelete(passcodes.items[index].type, passcodes.items[index].code);
             if (status != Status::Ok) {
                 return status;
             }
-            labels.keepOnly(passcodes.numbers);
-            labels.remove(passcodes.numbers[index]);
             const bool stored = lock_manager::saveLabels(mac, kLabels, labels) == ESP_OK;
             cJSON* result = cJSON_CreateObject();
             lock_access::addWarnings(result, {stored ? "" : lock_access::kNamesNotStored});
@@ -564,6 +573,10 @@ rpc::Reply passcodesClear(const cJSON* params, const rpc::Context&) {
     }
     rpc::Reply reply = lock_manager::runOnLock(
         mac, "lock.passcodes.clear", [mac](Session& session, const Record&, rpc::Reply& out) {
+            if (lock_manager::retainLabels(mac, kLabels, LabelTable{}) != ESP_OK) {
+                out = rpc::fail("storage_error", "cannot preserve passcode labels before clearing");
+                return Status::Ok;
+            }
             const Status status = session.passcodeClear();
             if (status != Status::Ok) {
                 return status;
