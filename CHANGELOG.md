@@ -16,6 +16,7 @@ Notable changes to Latchkey, in the format of [Keep a Changelog](https://keepach
 ### Fixed
 
 - Unlock alerts describe an unlock that this board could not match to its own commands instead of claiming it was not made by Latchkey. A spare board with the same keys can trigger this alert; restart and bounded history can also prevent a match. Alert detection and acknowledgement remain unchanged.
+- Local browser-test servers bind without reverse DNS, preventing runner hostname-resolution stalls before tests start.
 - Refresh security, setup and readiness documentation, separating completed CI/review work from unresolved hardware checks.
 
 ### Changed

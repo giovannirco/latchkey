@@ -106,7 +106,7 @@ jobs:
           test -n "$version"
           npx --yes "playwright@${version}" install --only-shell chromium
       - name: Bundler tests and Playwright suite against the mock
-        run: DEBUG=pw:webserver sh tools/ui-tests/run.sh
+        run: sh tools/ui-tests/run.sh
       - name: Browser installer and USB transport tests
         run: sh tools/pages-tests/run.sh
       - name: Keep the Playwright traces of failed tests
