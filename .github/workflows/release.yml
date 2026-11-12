@@ -22,7 +22,7 @@ defaults:
 jobs:
   build:
     name: Build and package
-    runs-on: macos-15
+    runs-on: macos-15-intel
     timeout-minutes: 60
     permissions:
       contents: read

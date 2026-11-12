@@ -99,7 +99,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime
 from http.cookies import CookieError, SimpleCookie
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from http.server import BaseHTTPRequestHandler
 from pathlib import Path
 from typing import Any, Callable, Iterator
 from urllib.parse import urlsplit
@@ -107,6 +107,7 @@ from urllib.parse import urlsplit
 sys.dont_write_bytecode = True
 import build_web  # noqa: E402
 from mock_timezone import parse_timezone
+from local_http_server import LocalHTTPServer
 
 SESSION_COOKIE = "lk_session"
 MOCK_PASSWORD = "owner-pass"
@@ -1922,7 +1923,7 @@ class Mock:
         return self._mqtt_view()
 
 
-class Server(ThreadingHTTPServer):
+class Server(LocalHTTPServer):
     daemon_threads = True
     allow_reuse_address = True
 

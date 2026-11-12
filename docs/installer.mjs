@@ -5,7 +5,7 @@ const byId = id => document.getElementById(id);
 const version = document.querySelector('meta[name="latchkey-version"]').content;
 const hasRelease = /^\d+\.\d+\.\d+$/.test(version);
 const hasSerial = Boolean(window.isSecureContext && navigator.serial);
-const panels = ['install', 'setup', 'auth', 'recovery', 'backup', 'ready'];
+const panels = ['install', 'setup', 'auth', 'recovery', 'timezone', 'backup', 'ready'];
 let rpc = null;
 let busy = false;
 let authUri = '';
@@ -14,6 +14,7 @@ let restored = false;
 let needsOwnerRecovery = false;
 let generation = 0;
 let connectingRpc = null;
+let timezoneKnown = false;
 
 class InactivePage extends Error {}
 
@@ -42,7 +43,7 @@ function problem(text) {
 function showPanel(name) {
   currentPanel = name;
   for (const panel of panels) byId(`${panel}-panel`).hidden = panel !== name;
-  const step = { install: 0, setup: 1, auth: 1, recovery: 1, backup: 2, ready: 3 }[name];
+  const step = { install: 0, setup: 1, auth: 1, recovery: 1, timezone: 1, backup: 2, ready: 3 }[name];
   document.querySelectorAll('.steps li').forEach((item, index) => {
     item.classList.toggle('complete', index < step);
     if (index === step) item.setAttribute('aria-current', 'step');
@@ -62,6 +63,10 @@ function updateControls() {
   for (const element of document.querySelectorAll('#setup-form input, #setup-form button, #backup-form input, #backup-form button')) {
     element.disabled = busy || !rpc || (restored && element.closest('#backup-form') !== null);
   }
+  for (const element of document.querySelectorAll('#timezone-form input, #timezone-form button, #timezone-keep')) {
+    element.disabled = busy || !rpc || !timezoneKnown;
+  }
+  byId('timezone-read').disabled = busy || !rpc;
   byId('auth-next').disabled = busy || !byId('auth-saved').checked;
   byId('recovery-next').disabled = busy || !rpc || !byId('recovery-ack').checked;
   byId('skip-backup').disabled = busy || !rpc;
@@ -152,7 +157,8 @@ async function connect() {
     byId('skip-backup').textContent = 'Continue without a backup';
     if (!info.claimed) needsOwnerRecovery = false;
     byId('recovery-ack').checked = false;
-    showPanel(info.claimed ? (needsOwnerRecovery ? 'recovery' : 'backup') : 'setup');
+    if (info.claimed && !needsOwnerRecovery) await readTimezone();
+    else showPanel(info.claimed ? 'recovery' : 'setup');
   } catch (error) {
     if (next) await next.close().catch(() => {});
     if (started !== generation) return;
@@ -215,6 +221,57 @@ async function setup(params) {
     params.password = '';
     params.wifi.password = '';
     if (started === generation) clearPasswords();
+  }
+}
+
+function validTimezoneText(tz) {
+  return typeof tz === 'string' && tz.length <= 64 && /^[A-Za-z0-9<>+,:./-]+$/.test(tz) &&
+    /^(?:[A-Za-z]{3,}|<[A-Za-z0-9+-]{3,}>)[+-]?\d/.test(tz);
+}
+
+function validTimezone(result) {
+  if (!validTimezoneText(result?.tz) || (result.utcOffset !== null &&
+      (!Number.isInteger(result.utcOffset) || Math.abs(result.utcOffset) >= 86400 || result.utcOffset % 60 !== 0))) {
+    throw new RpcError('bad_response');
+  }
+  return result.tz;
+}
+
+async function readTimezone() {
+  timezoneKnown = false;
+  byId('current-timezone').textContent = 'Not checked';
+  byId('timezone').value = '';
+  byId('timezone-read').hidden = true;
+  showPanel('timezone');
+  try {
+    message('status', 'Reading the board’s time zone…');
+    const tz = validTimezone(await pageResult(rpc.call('system.timezone.get')));
+    byId('current-timezone').textContent = tz;
+    byId('timezone').value = tz;
+    timezoneKnown = true;
+  } catch (error) {
+    if (error instanceof InactivePage) return;
+    byId('timezone-read').hidden = false;
+    problem('The board’s time zone could not be read. Read it again, or reconnect before continuing.');
+  }
+}
+
+async function saveTimezone(tz) {
+  try {
+    message('status', 'Saving the board’s time zone…');
+    const saved = validTimezone(await pageResult(rpc.call('system.timezone.set', { tz })));
+    if (saved !== tz) throw new RpcError('bad_response');
+    showPanel('backup');
+  } catch (error) {
+    if (error instanceof InactivePage) return;
+    if (error.code === 'invalid_argument') {
+      problem('The board rejected this POSIX time zone. Check the offset and daylight-saving rules.');
+      return;
+    }
+    timezoneKnown = false;
+    byId('current-timezone').textContent = 'Not confirmed';
+    byId('timezone-read').hidden = false;
+    problem('The time zone change could not be confirmed. Read the board’s time zone again, or reconnect before continuing. The write may have completed.');
   }
 }
 
@@ -327,15 +384,38 @@ byId('recovery-ack').addEventListener('change', updateControls);
 byId('recovery-next').addEventListener('click', () => {
   if (!byId('recovery-ack').checked || busy || !rpc) return;
   needsOwnerRecovery = false;
-  message('error', '');
-  showPanel('backup');
+  void run(readTimezone);
 });
 byId('auth-next').addEventListener('click', () => {
   if (!byId('auth-saved').checked || busy) return;
   authUri = '';
   byId('totp-secret').value = '';
   message('status', '');
-  showPanel(rpc ? 'backup' : 'install');
+  if (rpc) void run(readTimezone);
+  else showPanel('install');
+});
+byId('timezone-read').addEventListener('click', () => run(readTimezone));
+byId('timezone-computer').addEventListener('click', () => {
+  if (busy || !rpc || !timezoneKnown) return;
+  const offset = new Date().getTimezoneOffset();
+  const magnitude = Math.abs(offset);
+  const minutes = magnitude % 60;
+  byId('timezone').value = `UTC${offset < 0 ? '-' : ''}${Math.floor(magnitude / 60)}${minutes ? `:${String(minutes).padStart(2, '0')}` : ''}`;
+});
+byId('timezone-keep').addEventListener('click', () => {
+  if (busy || !rpc || !timezoneKnown) return;
+  message('error', '');
+  showPanel('backup');
+});
+byId('timezone-form').addEventListener('submit', event => {
+  event.preventDefault();
+  if (busy || !rpc || !timezoneKnown) return;
+  const tz = byId('timezone').value.trim();
+  if (!validTimezoneText(tz)) {
+    problem('Enter a POSIX time zone of 1–64 characters, such as UTC0. City names are not supported.');
+    return;
+  }
+  void run(() => saveTimezone(tz));
 });
 byId('backup-form').addEventListener('submit', event => {
   event.preventDefault();

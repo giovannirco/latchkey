@@ -5,10 +5,30 @@ Notable changes to Latchkey, in the format of [Keep a Changelog](https://keepach
 
 ## [Unreleased]
 
+## [0.7.1] - 2026-11-12
+
 ### Added
 
 - Guided GitHub Pages installer with responsive board selection, an explicit factory-erase acknowledgement, USB owner/Wi-Fi setup, one-time authenticator capture, local encrypted lock-backup import and certificate/connection checks. Existing `.lkb` files exclude owner login, network settings and TLS identity; each board keeps its own certificate.
 - Pages-only publishing reuses checksum-verified binaries from the latest stable release without rebuilding or retagging firmware. Browser and serial tests cover setup, recovery, file validation and uncertain writes; fresh-board browser commissioning remains a hardware acceptance item.
+- Explicit board time-zone review during browser setup, before restoring lock keys. Keep existing POSIX rules without writing, save a custom rule, or fill today's fixed computer offset. Rejected and uncertain writes do not advance setup; uncertain results require a fresh read.
+
+### Fixed
+
+- Unlock alerts describe an unlock that this board could not match to its own commands instead of claiming it was not made by Latchkey. A spare board with the same keys can trigger this alert; restart and bounded history can also prevent a match. Alert detection and acknowledgement remain unchanged.
+- Local browser-test servers bind without reverse DNS, preventing runner hostname-resolution stalls before tests start.
+- Refresh security, setup and readiness documentation, separating completed CI/review work from unresolved hardware checks.
+
+### Changed
+
+- Update ESP Web Tools to 10.5.0 with SHA-384 integrity pins for every module. Guided setup continues to require desktop Web Serial; Android commissioning is not claimed.
+- Update CI tooling to Node 26.13.1, uv 0.13.7 and Playwright 1.65.0. Browser checks and firmware builds use Intel macOS runners to avoid the ARM64 runner capacity shortage; firmware caches are separated by architecture.
+
+### Scope and known limits
+
+- This release was validated offline. Fresh-board browser commissioning, physical credential failures and battery depletion, and classic ESP32 heap/TLS behavior under combined load remain unverified on hardware.
+- Existing configured boards require a normal PlatformIO upload that preserves NVS. The browser factory installer erases settings and lock keys. No migration, reset or re-pairing is required for this release.
+- OTA updates, switch writes, gateway-unlock controls and passage-readback investigation remain outside this release.
 
 ## [0.7.0] - 2026-11-11
 

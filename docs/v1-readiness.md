@@ -1,7 +1,7 @@
 <!-- SPDX-License-Identifier: GPL-3.0-or-later -->
 # v1.0.0 readiness
 
-This is the checklist for v1.0.0. The latest release is [v0.7.0](https://github.com/giovannirco/latchkey/releases/tag/v0.7.0) (2026-11-11); v1.0.0 is not ready to tag. The roadmap and its discussion are in [#26](https://github.com/giovannirco/latchkey/issues/26); `CHANGELOG.md` lists what each release contains.
+This is the checklist for v1.0.0. The latest release is [v0.7.1](https://github.com/giovannirco/latchkey/releases/tag/v0.7.1) (2026-11-12); v1.0.0 is not ready to tag. The roadmap and its discussion are in [#26](https://github.com/giovannirco/latchkey/issues/26); `CHANGELOG.md` lists what each release contains.
 
 ## Released
 
@@ -14,6 +14,7 @@ This is the checklist for v1.0.0. The latest release is [v0.7.0](https://github.
 | v0.5.0 | Encrypted key export/import, pending admin-code recovery, previewed partial hardening with the reset-button step skipped. |
 | v0.6.0 | Time-zone controls, HTTP and logging hardening, bounded MQTT state, credential cleanup and alert persistence recovery. |
 | v0.7.0 | Credential details and failure outcomes in operation logs, bounded retired labels and persistent battery warnings below 40%. |
+| v0.7.1 | Guided browser setup and local restore, explicit installer time-zone choice, accurate board-local unlock alert wording and updated browser flasher. |
 
 Gateway-unlock API/UI controls are not planned for the installation or v1. The protocol primitive remains available; its effect on Latchkey unlocking is unverified.
 
@@ -21,7 +22,7 @@ Gateway-unlock API/UI controls are not planned for the installation or v1. The p
 
 | Item | Status |
 |---|---|
-| Final review ([#25](https://github.com/giovannirco/latchkey/issues/25)) | Local #21 fixes and broader code/UI review completed on `fix/readiness-findings`. Still required: CI on the final `main` commit before tagging. |
+| Final review ([#25](https://github.com/giovannirco/latchkey/issues/25)) | The #21 code/UI fixes were released in v0.6.0. Subsequent main CI passed through `4b86090` on 2026-11-12. A v1 candidate still requires its own final diff review and successful CI on the exact main commit; open hardware investigations are listed below. |
 
 ## Unverified on hardware
 
@@ -30,6 +31,8 @@ Hardware acceptance is deferred beyond v1.0.0; these stay listed as unverified i
 | Item | Status |
 |---|---|
 | Backup, recovery and hardening ([#19](https://github.com/giovannirco/latchkey/issues/19)) | Built in v0.5.0 with native and browser tests. A real ESP32-S3 USB export and hardening preview were checked. Before v0.6.0, a fresh authenticated export was imported onto a classic ESP32; keys survived restart, the restored spare unlocked the real lock, and the S3 locked it again. Unverified: a real hardening run, the web button flow for these, maximum-size backups and the classic ESP32's heap under backup plus concurrent load. Mock results are not evidence of hardware recovery. |
+| Browser commissioning | Guided setup, time-zone selection and local restore have serial/browser regression coverage. Commissioning a new empty board through the complete browser flow remains unverified on hardware; configured boards must not be erased to test it. |
+| Credential records and battery warnings | Typed IDs, labels, failed outcomes and the 40% threshold have deterministic fixture coverage. Real failed attempts and battery depletion have not been induced; hardware acceptance must not assume every lock records an identifier. |
 | Switch writes ([#20](https://github.com/giovannirco/latchkey/issues/20)) | Reset button, privacy lock and tamper alert writes refuse before any Bluetooth frame until their layout is proven on a real lock. Full hardening (turning the reset button off) depends on this. |
 | Passage readback ([#31](https://github.com/giovannirco/latchkey/issues/31)) | Further investigation is outside the installation and v1 scope by decision on 2026-11-11. The acknowledged write followed by a dropped readback connection remains unresolved; existing passage controls remain available. |
 | Classic ESP32 heap and HTTPS ([#21](https://github.com/giovannirco/latchkey/issues/21)) | One stress run recorded a 27,576-byte minimum heap; later runs passed the 30 KB check. The first TLS connection closing during MQTT announcements, minimum heap under combined load, and stack headroom with a full log page and active alert monitoring remain untraced on hardware. Native fixes do not establish their cause. |
@@ -48,7 +51,7 @@ The November 2026 review covers the issue body and follow-up comments. Already r
 | Slow anonymous HTTP bodies monopolized the worker | Two-second absolute anonymous body deadline; ten seconds for authenticated bodies. Socket shutdown precedes asynchronous-request release. Native tests cover stalls and TLS read/write readiness. |
 | CMake source discovery; WebSocket byte bounds and failed delivery | Already fixed on `main`: the utility component source glob uses `CONFIGURE_DEPENDS`; WebSocket admission bounds allocated bytes and closes affected sessions on undeliverable results. |
 | Confirmed versus pending admin codes; anti-peeping guidance | Already fixed in v0.5.0. Pending candidates remain separate recovery evidence; UI guidance avoids unsupported claims. |
-| UTC default and missing time-zone setup guidance | System edits the saved POSIX zone explicitly, offers a fixed browser offset, and explains daylight-saving rules. Pairing and lock pages show offset mismatches. USB-only claiming remains unchanged; setup documentation directs owners to review the zone before pairing and sync existing locks after changes. |
+| UTC default and missing time-zone setup guidance | System edits the saved POSIX zone explicitly, offers a fixed browser offset, and explains daylight-saving rules. Pairing and lock pages show offset mismatches. The browser installer now reads the board zone and requires an explicit keep/save choice before backup restore. USB-only claiming remains unchanged; owners must check the lock clock before relying on schedules. |
 | Weekly passage records carried an irrelevant month | Weekly readback normalizes month to zero; monthly and unknown types retain their original data. This does not resolve the hardware disconnect in #31. |
 | Mock auto-lock range and passage day count | Mock follows optional firmware ranges and accepts eight passage-day entries; invalid requests leave state unchanged. HIL chooses a supported auto-lock test value and restores the original. |
 | Unlock-log baseline lost dated evidence | Undated trailing records retain the last valid timestamp; restart inference requires a known prior timestamp. An entirely undated history cannot prove a restart. |
@@ -62,7 +65,7 @@ The November 2026 review covers the issue body and follow-up comments. Already r
 
 Alert deduplication remains bounded to eight entries. A longer backlog and failed cursor write can cause repeated notifications after earlier entries are displaced; exactly-once delivery is not guaranteed.
 
-Local verification on 2026-11-11: 869 native tests, 177 browser tests including desktop/phone screenshots, 23 browser-build/mock Python tests, 22 CI-tool tests and 28 release-tool tests passed. A subsequent mock log identity correction passed all 10 log-view browser tests. Both target builds passed; the v0.6.0 classic ESP32 image was 1,403,360 bytes against the 1,887,436-byte limit. Updated hardware suites collected 75 cases without running them against a device. The separate v0.6.0 hardware checks verified the two-board restore and one unlock/lock cycle, preserving the enabled reset button. CI on the final `main` commit remains the release gate.
+Local verification on 2026-11-11: 869 native tests, 177 browser tests including desktop/phone screenshots, 23 browser-build/mock Python tests, 22 CI-tool tests and 28 release-tool tests passed. A subsequent mock log identity correction passed all 10 log-view browser tests. Both target builds passed; the v0.6.0 classic ESP32 image was 1,403,360 bytes against the 1,887,436-byte limit. Updated hardware suites collected 75 cases without running them against a device. The separate v0.6.0 hardware checks verified the two-board restore and one unlock/lock cycle, preserving the enabled reset button. CI subsequently passed on released main commits; every future tag still requires successful CI on its exact main commit.
 
 v0.7.0 validation passed 903 native tests, 180 passing browser cases plus four final targeted cases, and 27 passing mock/bundler tests. Independent firmware and UI reviews resolved label reuse, failed status interpretation and battery-alert overflow. Credential identification and battery thresholds are covered by deterministic fixtures; physical failed attempts and battery depletion were not induced.
 
@@ -84,6 +87,7 @@ Run the non-device checks from the repository root:
 uvx platformio==6.2.0 test -e native
 uvx platformio==6.2.0 run -e esp32 -e esp32s3
 sh tools/ui-tests/run.sh
+sh tools/pages-tests/run.sh
 python3 -m unittest discover -s tools/ci -p 'test_*.py'
 python3 -m unittest discover -s tools/release -p 'test_*.py'
 python3 tools/ci/check_sources.py
