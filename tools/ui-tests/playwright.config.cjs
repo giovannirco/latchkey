@@ -23,12 +23,12 @@ module.exports = defineConfig({
   },
   projects: [{ name: 'chromium', use: { ...devices['Desktop Chrome'], headless: true } }],
   webServer: {
-    command: `python3 tools/mock_api.py --port ${PORT}`,
+    command: `python3 -u -c 'import faulthandler, runpy, sys; faulthandler.dump_traceback_later(10); sys.path.insert(0, "tools"); sys.argv = ["tools/mock_api.py", "--port", "${PORT}"]; runpy.run_path("tools/mock_api.py", run_name="__main__")'`,
     cwd: ROOT,
     url: `http://127.0.0.1:${PORT}/__mock/health`,
     reuseExistingServer: false,
     timeout: 20_000,
-    stdout: 'ignore',
+    stdout: 'pipe',
     stderr: 'pipe',
   },
 });
