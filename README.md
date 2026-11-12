@@ -5,7 +5,7 @@
 
 Latchkey is firmware for ESP32 boards that takes a TTLock Bluetooth LE smart lock off the TTLock cloud and puts it under one owner's control: the board pairs with the lock by itself, manages what the TTLock app can manage on that lock, and serves an owner-only web UI, with no phone app, TTLock account or computer Bluetooth involved.
 
-Latchkey is in early development; the current release is [v0.8.0](https://github.com/giovannirco/latchkey/releases/tag/v0.8.0). [CHANGELOG.md](CHANGELOG.md) lists what each release added. What is not built yet, and what is still unverified on hardware, is in the [v1.0.0 checklist](docs/v1-readiness.md) and the roadmap issue [#26](https://github.com/giovannirco/latchkey/issues/26).
+Latchkey is in early development; the current release is [v0.7.1](https://github.com/giovannirco/latchkey/releases/tag/v0.7.1). [CHANGELOG.md](CHANGELOG.md) lists what each release added. What is not built yet, and what is still unverified on hardware, is in the [v1.0.0 checklist](docs/v1-readiness.md) and the roadmap issue [#26](https://github.com/giovannirco/latchkey/issues/26).
 
 ## Why
 
@@ -192,6 +192,8 @@ uv run -q --no-project --python 3.14 --with pytest==9.1.1 --with pyserial==3.5 p
 - GitHub Actions are pinned to commit SHAs in `.github/workflows/`; ESP Web Tools 10.5.0 on the flasher page is pinned by version and by the SHA-384 hash of each of its modules.
 
 ### Releasing
+
+Use a patch bump for fixes, maintenance and setup polish. Use a minor bump for a meaningful new capability.
 
 1. Move the `[Unreleased]` entries of `CHANGELOG.md` under `## [x.y.z] - YYYY-MM-DD` and set `PROJECT_VER` in `CMakeLists.txt` to `x.y.z`, merge that to `main` and wait for CI to pass there.
 2. Push a tag `vx.y.z` on that commit of `main`. `.github/workflows/release.yml` refuses a tag whose commit is not on `main`, runs the host tests, builds both boards, checks that the app images report `x.y.z`, writes per board a factory image (flashable at `0x0`), an OTA image and an ESP Web Tools manifest plus `SHA256SUMS`, creates the GitHub Release with the changelog section as its notes, and deploys GitHub Pages with the flasher and the images under `firmware/x.y.z/`.

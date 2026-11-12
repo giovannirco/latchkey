@@ -1,7 +1,7 @@
 <!-- SPDX-License-Identifier: GPL-3.0-or-later -->
 # v1.0.0 readiness
 
-This is the checklist for v1.0.0. The latest release is [v0.8.0](https://github.com/giovannirco/latchkey/releases/tag/v0.8.0) (2026-11-12); v1.0.0 is not ready to tag. The roadmap and its discussion are in [#26](https://github.com/giovannirco/latchkey/issues/26); `CHANGELOG.md` lists what each release contains.
+This is the checklist for v1.0.0. The latest release is [v0.7.1](https://github.com/giovannirco/latchkey/releases/tag/v0.7.1) (2026-11-12); v1.0.0 is not ready to tag. The roadmap and its discussion are in [#26](https://github.com/giovannirco/latchkey/issues/26); `CHANGELOG.md` lists what each release contains.
 
 ## Released
 
@@ -14,7 +14,7 @@ This is the checklist for v1.0.0. The latest release is [v0.8.0](https://github.
 | v0.5.0 | Encrypted key export/import, pending admin-code recovery, previewed partial hardening with the reset-button step skipped. |
 | v0.6.0 | Time-zone controls, HTTP and logging hardening, bounded MQTT state, credential cleanup and alert persistence recovery. |
 | v0.7.0 | Credential details and failure outcomes in operation logs, bounded retired labels and persistent battery warnings below 40%. |
-| v0.8.0 | Guided browser setup and local restore, explicit installer time-zone choice, accurate board-local unlock alert wording and updated browser flasher. |
+| v0.7.1 | Guided browser setup and local restore, explicit installer time-zone choice, accurate board-local unlock alert wording and updated browser flasher. |
 
 Gateway-unlock API/UI controls are not planned for the installation or v1. The protocol primitive remains available; its effect on Latchkey unlocking is unverified.
 

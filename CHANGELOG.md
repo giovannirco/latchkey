@@ -5,7 +5,7 @@ Notable changes to Latchkey, in the format of [Keep a Changelog](https://keepach
 
 ## [Unreleased]
 
-## [0.8.0] - 2026-11-12
+## [0.7.1] - 2026-11-12
 
 ### Added
 
