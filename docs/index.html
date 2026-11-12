@@ -60,7 +60,7 @@
       <p>Install over USB, create your login, and bring your lock keys with you. Everything stays between this browser and your board.</p>
       <ol class="steps" aria-label="Setup progress">
         <li aria-current="step"><span class="step-number">1</span><span><strong>Install &amp; connect</strong><small>Choose your board</small></span></li>
-        <li><span class="step-number">2</span><span><strong>Make it yours</strong><small>Wi-Fi &amp; owner access</small></span></li>
+        <li><span class="step-number">2</span><span><strong>Make it yours</strong><small>Wi-Fi, login &amp; time zone</small></span></li>
         <li><span class="step-number">3</span><span><strong>Bring your keys</strong><small>Optional encrypted backup</small></span></li>
         <li><span class="step-number">4</span><span><strong>Open Latchkey</strong><small>Verify your connection</small></span></li>
       </ol>
@@ -135,7 +135,7 @@
         <p class="small">The URI includes the account name and secret. Treat it like a password.</p>
         <p class="notice">This secret cannot be shown again after you leave this step. Save it before continuing.</p>
         <label class="check"><input id="auth-saved" type="checkbox"><span>I saved this account in my authenticator.</span></label>
-        <button id="auth-next" type="button" disabled>Continue to backup</button>
+        <button id="auth-next" type="button" disabled>Continue to time zone</button>
       </section>
       <section id="recovery-panel" class="panel" aria-labelledby="recovery-title" hidden>
         <h2 id="recovery-title" tabindex="-1">Recover your owner login.</h2>
@@ -144,6 +144,21 @@
         <p><a href="https://github.com/giovannirco/latchkey/blob/main/docs/hardware.md#recovering-a-lost-setup-reply" target="_blank" rel="noopener noreferrer">USB owner recovery guide</a></p>
         <label class="check"><input id="recovery-ack" type="checkbox"><span>I recovered and verified this board’s owner login.</span></label>
         <button id="recovery-next" type="button" disabled>Continue after recovery</button>
+      </section>
+      <section id="timezone-panel" class="panel" aria-labelledby="timezone-title" hidden>
+        <h2 id="timezone-title" tabindex="-1">Set the board’s time zone.</h2>
+        <p>Use the time zone where the lock will be installed. Keep its current rules or save a new setting.</p>
+        <p>Current board setting: <code id="current-timezone">Not checked</code></p>
+        <button id="timezone-read" class="secondary" type="button" hidden>Read board time zone again</button>
+        <form id="timezone-form" autocomplete="off" novalidate>
+          <label>POSIX time zone<input id="timezone" maxlength="64" spellcheck="false" aria-describedby="timezone-hint" required></label>
+          <p id="timezone-hint" class="small">For example, <code>UTC0</code> for UTC or <code>EST5EDT,M3.2.0/2,M11.1.0/2</code> with daylight-saving rules. Use a POSIX rule, not a city name.</p>
+          <button id="timezone-computer" class="secondary" type="button">Use this computer’s UTC offset</button>
+          <p class="small">This uses today’s fixed UTC offset, without daylight-saving changes.</p>
+          <button type="submit">Save time zone and continue</button>
+        </form>
+        <button id="timezone-keep" class="text-button continue" type="button">Keep board time zone</button>
+        <p class="small">This step does not verify an existing lock’s clock. Sync and check it in the board’s interface before relying on schedules.</p>
       </section>
       <section id="backup-panel" class="panel" aria-labelledby="backup-title" hidden>
         <h2 id="backup-title" tabindex="-1">Bring your lock keys.</h2>

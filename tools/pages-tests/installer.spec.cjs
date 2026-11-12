@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 const { test, expect } = require('playwright/test');
 
-async function start(page, { claimed = false, supported = true, missingRelease = false, importError = '', setupReply = null, ready = true, bootOnProbe = false, delayPort = false } = {}) {
+async function start(page, { claimed = false, supported = true, missingRelease = false, importError = '', setupReply = null, ready = true, bootOnProbe = false, delayPort = false, timezone = 'UTC0', timezoneGetReply = null, timezoneSetReply = null, timezoneError = '', delayTimezone = false, offset = 0 } = {}) {
   await page.route('https://unpkg.com/**', route => route.fulfill({
     contentType: 'text/javascript',
     body: `customElements.define('esp-web-install-button', class extends HTMLElement {
@@ -16,9 +16,10 @@ async function start(page, { claimed = false, supported = true, missingRelease =
     html = html.replace(/<script type="importmap">[\s\S]*?<\/script>/, '');
     await route.fulfill({ response, body: html });
   });
-  await page.addInitScript(({ claimed, supported, importError, setupReply, ready, bootOnProbe, delayPort }) => {
+  await page.addInitScript(({ claimed, supported, importError, setupReply, ready, bootOnProbe, delayPort, timezone, timezoneGetReply, timezoneSetReply, timezoneError, delayTimezone, offset }) => {
     window.sent = [];
     let owner = claimed;
+    Date.prototype.getTimezoneOffset = () => offset;
     let controller;
     const encoder = new TextEncoder();
     const decoder = new TextDecoder();
@@ -26,7 +27,7 @@ async function start(page, { claimed = false, supported = true, missingRelease =
     const info = () => ({
       firmware: '0.7.0', board: 'esp32s3', claimed: owner,
       wifi: { configured: owner, connected: owner && ready, ip: '192.0.2.50' },
-      certFingerprint: owner ? 'ab'.repeat(32) : '', time: { synced: true }, timezone: 'UTC0',
+      certFingerprint: owner ? 'ab'.repeat(32) : '', time: { synced: true }, timezone,
     });
     const port = {
       addEventListener() {},
@@ -51,13 +52,20 @@ async function start(page, { claimed = false, supported = true, missingRelease =
             else if (request.method === 'system.setup') {
               owner = true;
               result = setupReply || { otpauth: 'otpauth://totp/Latchkey:test?secret=JBSWY3DPEHPK3PXP&issuer=Latchkey' };
+            } else if (request.method === 'system.timezone.get') result = timezoneGetReply || { tz: timezone, utcOffset: 0 };
+            else if (request.method === 'system.timezone.set') {
+              if (!timezoneError) timezone = request.params.tz;
+              result = timezoneSetReply || { tz: timezone, utcOffset: 0 };
             } else if (request.method === 'keys.import') result = { imported: ['00:00:5E:00:53:01'] };
             else if (request.method === 'locks.list') result = [];
             else result = {};
-            const reply = request.method === 'keys.import' && importError
-              ? { id: request.id, error: { code: importError, message: 'untrusted response text' } }
+            const error = request.method === 'keys.import' ? importError : request.method === 'system.timezone.set' ? timezoneError : '';
+            const reply = error
+              ? { id: request.id, error: { code: error, message: 'untrusted response text' } }
               : { id: request.id, result };
-            controller.enqueue(encoder.encode('# log ignored\n' + JSON.stringify(reply) + '\n'));
+            const respond = () => controller.enqueue(encoder.encode('# log ignored\n' + JSON.stringify(reply) + '\n'));
+            if (delayTimezone && request.method === 'system.timezone.set') window.finishTimezone = respond;
+            else respond();
           }
         } });
       },
@@ -70,12 +78,17 @@ async function start(page, { claimed = false, supported = true, missingRelease =
       } : undefined,
       configurable: true,
     });
-  }, { claimed, supported, importError, setupReply, ready, bootOnProbe, delayPort });
+  }, { claimed, supported, importError, setupReply, ready, bootOnProbe, delayPort, timezone, timezoneGetReply, timezoneSetReply, timezoneError, delayTimezone, offset });
   await page.goto('/index.html');
 }
 
 async function connect(page) {
   await page.getByRole('button', { name: 'Connect for setup' }).click();
+}
+
+async function connectForBackup(page) {
+  await connect(page);
+  await page.getByRole('button', { name: 'Keep board time zone' }).click();
 }
 
 async function claim(page, password = 'example-owner-password') {
@@ -119,10 +132,10 @@ test('missing release blocks flashing but allows setup of installed firmware', a
 test('claimed board bypasses owner creation and hides destructive installation', async ({ page }) => {
   await start(page, { claimed: true });
   await connect(page);
-  await expect(page.getByRole('heading', { name: 'Bring your lock keys.' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Set the board’s time zone.' })).toBeVisible();
   await expect(page.getByRole('button', { name: 'Install firmware' })).toBeHidden();
   await expect(page.getByRole('button', { name: 'Create owner access' })).toBeHidden();
-  expect(await page.evaluate(() => window.sent.map(item => item.method))).toEqual(['system.info']);
+  expect(await page.evaluate(() => window.sent.map(item => item.method))).toEqual(['system.info', 'system.timezone.get']);
 });
 
 test('first boot setup keeps one-time authenticator visible until explicitly saved', async ({ page }) => {
@@ -130,11 +143,12 @@ test('first boot setup keeps one-time authenticator visible until explicitly sav
   await claim(page);
   await expect(page.getByRole('heading', { name: 'Save your authenticator.' })).toBeVisible();
   await expect(page.getByLabel('Authenticator secret')).toHaveValue('JBSWY3DPEHPK3PXP');
-  await expect(page.getByRole('button', { name: 'Continue to backup' })).toBeDisabled();
+  await expect(page.getByRole('button', { name: 'Continue to time zone' })).toBeDisabled();
   await expect(page.getByLabel('Owner password', { exact: true })).toHaveValue('');
   await page.getByLabel('I saved this account in my authenticator.').check();
-  await page.getByRole('button', { name: 'Continue to backup' }).click();
+  await page.getByRole('button', { name: 'Continue to time zone' }).click();
   await expect(page.getByLabel('Authenticator secret')).toHaveValue('');
+  await expect(page.getByRole('heading', { name: 'Set the board’s time zone.' })).toBeVisible();
   expect(await page.evaluate(() => [localStorage.length, sessionStorage.length])).toEqual([0, 0]);
   const calls = await page.evaluate(() => window.sent.map(item => item.method));
   expect(calls.filter(item => item === 'system.setup')).toHaveLength(1);
@@ -142,7 +156,7 @@ test('first boot setup keeps one-time authenticator visible until explicitly sav
 
 test('backup file and passphrase go only through USB and are cleared after restore', async ({ page }) => {
   await start(page, { claimed: true });
-  await connect(page);
+  await connectForBackup(page);
   const backup = Buffer.alloc(56);
   backup.write('LKB2'); backup[4] = 1; backup[5] = 1; backup.writeUInt32BE(100000, 6);
   await page.getByLabel('Encrypted lock backup').setInputFiles({ name: 'example.lkb', mimeType: 'application/octet-stream', buffer: backup });
@@ -160,7 +174,7 @@ test('backup file and passphrase go only through USB and are cleared after resto
 
 test('invalid backup is rejected before USB import', async ({ page }) => {
   await start(page, { claimed: true });
-  await connect(page);
+  await connectForBackup(page);
   await page.getByLabel('Encrypted lock backup').setInputFiles({ name: 'bad.lkb', mimeType: 'application/octet-stream', buffer: Buffer.from('not a backup') });
   await page.getByLabel('Backup passphrase').fill('example-backup-passphrase');
   await page.getByRole('button', { name: 'Restore lock keys' }).click();
@@ -170,7 +184,7 @@ test('invalid backup is rejected before USB import', async ({ page }) => {
 
 test('readiness shows the local address and fingerprint without claiming lock operation was tested', async ({ page }) => {
   await start(page, { claimed: true });
-  await connect(page);
+  await connectForBackup(page);
   await page.getByRole('button', { name: 'Continue without a backup' }).click();
   await expect(page.getByRole('heading', { name: 'Open your Latchkey.' })).toBeVisible();
   await expect(page.getByRole('link', { name: 'Open board' })).toHaveAttribute('href', 'https://192.0.2.50');
@@ -188,7 +202,7 @@ for (const width of [390, 1440]) {
   });
 }
 
-test('capture installer and setup at desktop and mobile sizes', async ({ page }) => {
+test('capture installer, setup and time zone at desktop and mobile sizes', async ({ page }) => {
   test.skip(!process.env.LK_PAGES_SCREENSHOTS, 'visual review only');
   for (const [name, width] of [['desktop', 1440], ['mobile', 390]]) {
     await page.setViewportSize({ width, height: 1000 });
@@ -197,6 +211,11 @@ test('capture installer and setup at desktop and mobile sizes', async ({ page })
     await connect(page);
     await page.evaluate(() => scrollTo(0, 0));
     await page.screenshot({ path: `/tmp/latchkey-pages-review/${name}-setup.png`, fullPage: true, animations: 'disabled' });
+    await start(page, { claimed: true });
+    await connect(page);
+    await expect(page.getByLabel('POSIX time zone')).toBeEnabled();
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+    await page.screenshot({ path: `/tmp/latchkey-pages-review/${name}-timezone.png`, fullPage: true, animations: 'disabled' });
   }
 });
 
@@ -223,7 +242,7 @@ test('malformed setup success never advances or repeats owner creation', async (
 
 test('backup conflict is explicit and never becomes a successful restore', async ({ page }) => {
   await start(page, { claimed: true, importError: 'conflict' });
-  await connect(page);
+  await connectForBackup(page);
   const backup = Buffer.alloc(56);
   backup.write('LKB2'); backup[4] = 1; backup[5] = 1; backup.writeUInt32BE(100000, 6);
   await page.getByLabel('Encrypted lock backup').setInputFiles({ name: 'example.lkb', mimeType: 'application/octet-stream', buffer: backup });
@@ -236,7 +255,7 @@ test('backup conflict is explicit and never becomes a successful restore', async
 
 test('disconnected Wi-Fi never produces a usable board link', async ({ page }) => {
   await start(page, { claimed: true, ready: false });
-  await connect(page);
+  await connectForBackup(page);
   await page.getByRole('button', { name: 'Continue without a backup' }).click();
   await expect(page.getByRole('link', { name: 'Open board' })).toBeHidden();
   await expect(page.locator('#board-wifi')).toContainText('Not connected');
@@ -253,6 +272,8 @@ test('uncertain owner setup remains blocked across USB reconnect until login rec
   await expect(page.getByRole('button', { name: 'Continue after recovery' })).toBeDisabled();
   await page.getByLabel('I recovered and verified this board’s owner login.').check();
   await page.getByRole('button', { name: 'Continue after recovery' }).click();
+  await expect(page.getByRole('heading', { name: 'Set the board’s time zone.' })).toBeVisible();
+  await page.getByRole('button', { name: 'Keep board time zone' }).click();
   await expect(page.getByRole('heading', { name: 'Bring your lock keys.' })).toBeVisible();
   expect(await page.evaluate(() => window.sent.some(item => item.method === 'auth.rotateTotp'))).toBe(false);
 });
@@ -290,4 +311,100 @@ test('a late USB picker result after navigation cannot connect the old page', as
   });
   expect(await page.evaluate(() => window.sent)).toEqual([]);
   await expect(page.getByRole('button', { name: 'Connect for setup' })).toBeEnabled();
+});
+
+test('keeping the board time zone preserves custom daylight-saving rules without a write', async ({ page }) => {
+  const timezone = 'EST5EDT,M3.2.0/2,M11.1.0/2';
+  await start(page, { claimed: true, timezone });
+  await connect(page);
+  await expect(page.locator('#current-timezone')).toHaveText(timezone);
+  await expect(page.getByLabel('POSIX time zone')).toHaveValue(timezone);
+  await page.getByLabel('POSIX time zone').fill('UTC0');
+  await page.getByRole('button', { name: 'Keep board time zone' }).click();
+  await expect(page.getByRole('heading', { name: 'Bring your lock keys.' })).toBeVisible();
+  expect(await page.evaluate(() => window.sent.map(item => item.method))).toEqual(['system.info', 'system.timezone.get']);
+});
+
+test('saving a custom time zone sends one explicit write before backup', async ({ page }) => {
+  await start(page, { claimed: true });
+  await connect(page);
+  await page.getByLabel('POSIX time zone').fill('EST5EDT,M3.2.0/2,M11.1.0/2');
+  await page.getByRole('button', { name: 'Save time zone and continue' }).click();
+  await expect(page.getByRole('heading', { name: 'Bring your lock keys.' })).toBeVisible();
+  expect(await page.evaluate(() => window.sent.filter(item => item.method === 'system.timezone.set').map(item => item.params)))
+    .toEqual([{ tz: 'EST5EDT,M3.2.0/2,M11.1.0/2' }]);
+  expect(await page.evaluate(() => window.sent.some(item => item.method.startsWith('lock.')))).toBe(false);
+});
+
+for (const [offset, zone] of [[0, 'UTC0'], [180, 'UTC3'], [-345, 'UTC-5:45'], [210, 'UTC3:30']]) {
+  test(`computer offset ${offset} creates explicit fixed POSIX zone ${zone}`, async ({ page }) => {
+    await start(page, { claimed: true, offset });
+    await connect(page);
+    await page.getByRole('button', { name: 'Use this computer’s UTC offset' }).click();
+    await expect(page.getByLabel('POSIX time zone')).toHaveValue(zone);
+    await expect(page.getByText('This uses today’s fixed UTC offset, without daylight-saving changes.')).toBeVisible();
+    expect(await page.evaluate(() => window.sent.some(item => item.method === 'system.timezone.set'))).toBe(false);
+  });
+}
+
+test('invalid time zone text never reaches the board', async ({ page }) => {
+  await start(page, { claimed: true });
+  await connect(page);
+  await page.getByLabel('POSIX time zone').fill('America/New_York');
+  await page.getByRole('button', { name: 'Save time zone and continue' }).click();
+  await expect(page.getByRole('alert')).toContainText('POSIX');
+  expect(await page.evaluate(() => window.sent.some(item => item.method === 'system.timezone.set'))).toBe(false);
+});
+
+test('rejected time zone stays editable and is never retried automatically', async ({ page }) => {
+  await start(page, { claimed: true, timezoneError: 'invalid_argument' });
+  await connect(page);
+  await page.getByLabel('POSIX time zone').fill('UTC25');
+  await page.getByRole('button', { name: 'Save time zone and continue' }).click();
+  await expect(page.getByRole('alert')).toContainText('board rejected');
+  await expect(page.getByLabel('POSIX time zone')).toBeEnabled();
+  await expect(page.getByRole('heading', { name: 'Bring your lock keys.' })).toBeHidden();
+  expect(await page.evaluate(() => window.sent.filter(item => item.method === 'system.timezone.set').length)).toBe(1);
+});
+
+for (const timezoneSetReply of [{}, { tz: 'UTC1', utcOffset: 3600 }]) {
+  test(`unconfirmed time zone write ${JSON.stringify(timezoneSetReply)} requires a fresh read`, async ({ page }) => {
+    await start(page, { claimed: true, timezoneSetReply });
+    await connect(page);
+    await page.getByLabel('POSIX time zone').fill('UTC3');
+    await page.getByRole('button', { name: 'Save time zone and continue' }).click();
+    await expect(page.getByRole('alert')).toContainText('could not be confirmed');
+    await expect(page.getByRole('button', { name: 'Keep board time zone' })).toBeDisabled();
+    await expect(page.getByRole('button', { name: 'Save time zone and continue' })).toBeDisabled();
+    await page.getByRole('button', { name: 'Read board time zone again' }).click();
+    await expect(page.locator('#current-timezone')).toHaveText('UTC3');
+    await page.getByRole('button', { name: 'Keep board time zone' }).click();
+    expect(await page.evaluate(() => window.sent.filter(item => item.method === 'system.timezone.set').length)).toBe(1);
+  });
+}
+
+test('malformed time zone read blocks keeping or saving unknown settings', async ({ page }) => {
+  await start(page, { claimed: true, timezoneGetReply: {} });
+  await connect(page);
+  await expect(page.getByRole('alert')).toContainText('time zone');
+  await expect(page.getByRole('button', { name: 'Keep board time zone' })).toBeDisabled();
+  await expect(page.getByRole('button', { name: 'Save time zone and continue' })).toBeDisabled();
+  expect(await page.evaluate(() => window.sent.some(item => item.method === 'system.timezone.set'))).toBe(false);
+});
+
+test('navigation during a time zone write cannot advance the previous session', async ({ page }) => {
+  await start(page, { claimed: true, delayTimezone: true });
+  await connect(page);
+  await page.getByLabel('POSIX time zone').fill('UTC3');
+  await page.getByRole('button', { name: 'Save time zone and continue' }).click();
+  await expect.poll(() => page.evaluate(() => Boolean(window.finishTimezone))).toBe(true);
+  await page.evaluate(() => {
+    dispatchEvent(new PageTransitionEvent('pagehide', { persisted: true }));
+    dispatchEvent(new PageTransitionEvent('pageshow', { persisted: true }));
+  });
+  await expect(page.getByRole('button', { name: 'Connect for setup' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Bring your lock keys.' })).toBeHidden();
+  expect(await page.evaluate(() => window.sent.filter(item => item.method === 'system.timezone.set').length)).toBe(1);
+  await connect(page);
+  await expect(page.locator('#current-timezone')).toHaveText('UTC3');
 });
