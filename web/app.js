@@ -649,14 +649,17 @@ function alertText(data) {
   if (data.kind === 'low_battery') return `${name} battery is low (${data.battery}%). Replace the batteries.`;
   if (data.method === 'forced') return `${name} was forced open`;
   const how = METHOD_TEXT[data.method];
-  return how ? `${name} was unlocked ${how}, and not by Latchkey` : `${name} was unlocked, and not by Latchkey`;
+  return `${name} was unlocked${how ? ` ${how}` : ''}. This board could not match this unlock to one of its own commands.`;
 }
 
 events.on('lock.alert', (data) => {
   if (!data || typeof data.lock !== 'string') return;
+  const explanation = data.method === 'forced'
+    ? ''
+    : 'Another Latchkey board, a restart, or expired command history can cause this. ';
   toast(alertText(data), {
     alarm: true,
-    detail: `${formatTime(data.time)}, read from the lock's log. Check who can open it.`,
+    detail: `${formatTime(data.time)}, read from the lock's log. ${explanation}Check who can open it.`,
   });
 });
 

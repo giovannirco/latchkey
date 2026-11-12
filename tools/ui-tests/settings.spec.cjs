@@ -83,7 +83,9 @@ test('an unlock alert shows a notice that stays until it is dismissed', async ({
     emit: [{ event: 'lock.alert', data: { lock: FRONT_DOOR, method: 'app', time, seq: 41, type: 1 } }],
   });
   const notice = page.locator('#toasts .toast-alarm');
-  await expect(notice).toContainText('Front door was unlocked from the app, and not by Latchkey');
+  await expect(notice).toContainText('Front door was unlocked from the app. This board could not match this unlock to one of its own commands.');
+  await expect(notice).toContainText('Another Latchkey board, a restart, or expired command history can cause this.');
+  await expect(notice).not.toContainText('not by Latchkey');
   await page.waitForTimeout(7000);
   await expect(notice).toBeVisible();
   await notice.getByRole('button', { name: 'Dismiss' }).click();
@@ -93,7 +95,21 @@ test('an unlock alert shows a notice that stays until it is dismissed', async ({
     emit: [{ event: 'lock.alert', data: { lock: FRONT_DOOR, method: 'forced', time, seq: 42, type: 29 } }],
   });
   await expect(page.locator('#toasts .toast-alarm')).toContainText('Front door was forced open');
+  await expect(page.locator('#toasts .toast-alarm')).not.toContainText('could not match');
+  await expect(page.locator('#toasts .toast-alarm')).not.toContainText('Another Latchkey board');
 });
+
+for (const [method, description, type] of [['remote', 'remotely', 3], ['unknown', '', 1]]) {
+  test(`an unmatched ${method} unlock alert describes only what this board knows`, async ({ page, request }) => {
+    await login(page);
+    await mock(request, {
+      emit: [{ event: 'lock.alert', data: { lock: FRONT_DOOR, method, time: null, seq: 41, type } }],
+    });
+    const notice = page.locator('#toasts .toast-alarm');
+    await expect(notice).toContainText(`Front door was unlocked${description ? ` ${description}` : ''}. This board could not match this unlock to one of its own commands.`);
+    await expect(notice).not.toContainText('not by Latchkey');
+  });
+}
 
 test('the log shows the newest entries and reads on until it has every new one', async ({ page, request }) => {
   const now = Math.floor(Date.now() / 1000);
@@ -121,8 +137,10 @@ test('an alert raised with no browser open stays visible until acknowledged', as
   await openLock(page, 'Front door');
   const alerts = page.getByRole('region', { name: 'Alerts', exact: true });
   await expect(alerts).toContainText('unlocked from the app');
+  await expect(alerts).toContainText('This board could not match this unlock to one of its own commands.');
   await page.reload();
   await expect(page.getByRole('region', { name: 'Alerts', exact: true })).toContainText('unlocked from the app');
+  await expect(page.getByRole('region', { name: 'Alerts', exact: true })).toContainText('This board could not match this unlock to one of its own commands.');
   await page.getByRole('button', { name: 'Acknowledge alerts' }).click();
   await expect(page.getByRole('region', { name: 'Alerts', exact: true })).toContainText('No unacknowledged alerts');
   await page.reload();
