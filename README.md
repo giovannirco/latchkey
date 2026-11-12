@@ -185,7 +185,7 @@ uv run -q --no-project --python 3.14 --with pytest==9.1.1 --with pyserial==3.5 p
 
 - PlatformIO Core 6.2.0.
 - `espressif32@8.0.0` with exact `platform_packages` in `[esp_common]`: `framework-espidf` 4.60100.0 (ESP-IDF v6.1.0), `toolchain-xtensa-esp-elf` 15.2.0+20251204, `tool-esptool` 2.50400.0 (esptool v5.4.0), `tool-cmake` 3.30.2, `tool-ninja` 1.13.2. The platform itself pins `toolchain-riscv32-esp` 15.2.0+20251204 (S3 ULP) and `tool-esp-rom-elfs` 0.0.1+20241011; `toolchain-esp32ulp` still resolves from `~1.23800.0` (1.23800.240113 today).
-- `tool-ninja` 1.13.2 is published for macOS only, so the firmware builds in CI and in the release workflow run on macOS (`macos-15`, arm64). Browser suites also run on macOS; host tests and source checks run on Ubuntu.
+- `tool-ninja` 1.13.2 is published for macOS only, so the firmware builds in CI and in the release workflow run on macOS (`macos-15-intel`, x86_64). Browser suites also run on macOS; host tests and source checks run on Ubuntu.
 - `native@1.2.1` with Unity 2.6.1 for host tests.
 - ESP-IDF managed components are declared in `src/idf_component.yml` and locked per target in `dependencies.lock.esp32` and `dependencies.lock.esp32s3`.
 - The headers in `test/vectors/` are generated. `tools/vectors/gen_vectors.py` uses ttlock-ble 0.3.4: `uv run -q --no-project --python 3.14 --with ttlock-ble==0.3.4 python -I tools/vectors/gen_vectors.py`. `tools/vectors/kind3r_vectors.ts` uses Deno 2.9.8 and a kind3r/ttlock-sdk-js checkout at 8c84cda, with moment 2.29.1 locked in `tools/vectors/deno.lock`: `TZ=UTC deno run --allow-env --allow-read --allow-write=test/vectors --config tools/vectors/kind3r_deno.json tools/vectors/kind3r_vectors.ts <checkout>`.

@@ -64,7 +64,7 @@ jobs:
 
   firmware:
     name: Firmware builds
-    runs-on: macos-15
+    runs-on: macos-15-intel
     timeout-minutes: 45
     permissions:
       contents: read
@@ -80,7 +80,7 @@ jobs:
       - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/.platformio
-          key: platformio-firmware-${{ runner.os }}-${{ hashFiles('platformio.ini', 'dependencies.lock.*') }}
+          key: platformio-firmware-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('platformio.ini', 'dependencies.lock.*') }}
       - name: Build esp32 and esp32s3
         run: uvx "platformio==${PLATFORMIO_VERSION}" run -e esp32 -e esp32s3
       - name: App image sizes and the 1.8 MB gate
@@ -88,7 +88,7 @@ jobs:
 
   web:
     name: Web UI tests
-    runs-on: macos-15
+    runs-on: macos-15-intel
     timeout-minutes: 20
     permissions:
       contents: read

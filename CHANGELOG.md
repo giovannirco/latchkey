@@ -21,7 +21,7 @@ Notable changes to Latchkey, in the format of [Keep a Changelog](https://keepach
 ### Changed
 
 - Update ESP Web Tools to 10.5.0 with SHA-384 integrity pins for every module. Guided setup continues to require desktop Web Serial; Android commissioning is not claimed.
-- Update CI tooling to Node 26.13.1, uv 0.13.7 and Playwright 1.65.0. Browser checks run on macOS alongside firmware builds.
+- Update CI tooling to Node 26.13.1, uv 0.13.7 and Playwright 1.65.0. Browser checks and firmware builds use Intel macOS runners to avoid the ARM64 runner capacity shortage; firmware caches are separated by architecture.
 
 ### Scope and known limits
 
