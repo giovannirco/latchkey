@@ -4,7 +4,7 @@
 # suite, which starts and stops tools/mock_api.py by itself (playwright.config.cjs).
 set -eu
 
-PLAYWRIGHT_VERSION=1.64.1
+PLAYWRIGHT_VERSION=1.65.0
 PYTHONDONTWRITEBYTECODE=1
 export PYTHONDONTWRITEBYTECODE
 
