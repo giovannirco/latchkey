@@ -5,7 +5,7 @@
 
 Latchkey is firmware for ESP32 boards that takes a TTLock Bluetooth LE smart lock off the TTLock cloud and puts it under one owner's control: the board pairs with the lock by itself, manages what the TTLock app can manage on that lock, and serves an owner-only web UI, with no phone app, TTLock account or computer Bluetooth involved.
 
-Latchkey is in early development; the current release is [v0.7.0](https://github.com/giovannirco/latchkey/releases/tag/v0.7.0). [CHANGELOG.md](CHANGELOG.md) lists what each release added. What is not built yet, and what is still unverified on hardware, is in the [v1.0.0 checklist](docs/v1-readiness.md) and the roadmap issue [#26](https://github.com/giovannirco/latchkey/issues/26).
+Latchkey is in early development; the current release is [v0.8.0](https://github.com/giovannirco/latchkey/releases/tag/v0.8.0). [CHANGELOG.md](CHANGELOG.md) lists what each release added. What is not built yet, and what is still unverified on hardware, is in the [v1.0.0 checklist](docs/v1-readiness.md) and the roadmap issue [#26](https://github.com/giovannirco/latchkey/issues/26).
 
 ## Why
 
@@ -21,7 +21,7 @@ Works today:
 - Firmware for the classic ESP32 and the ESP32-S3: a JSON-lines console over USB, claiming the board, Wi-Fi with a static address, SNTP time with a configurable time zone, an audit log, the owner login (password, TOTP code and rate limit) with web sessions, and HTTPS with a certificate the board makes itself: the web UI, the JSON API behind a session cookie, live events over a WebSocket, and a press of the board's button before destructive actions from the web.
 - Pairing from the board, checked on a real lock: the web UI starts it and a press of the board's button confirms it; then lock, unlock, status, battery and time sync from the web.
 - Lock access from the board, checked on a real lock: passcodes (permanent, timed and one-time, listed by id and never by code), fingerprints and IC cards (enrolment with live progress, validity, weekly windows), and the keypad's super admin passcode, which pairing can take from the owner and the web UI can show and change after a press of the board's button.
-- Lock settings (auto-lock, passage mode, sound, and read-only reset button, privacy lock and tamper alert switches), the lock's operation log, and unlock alerts: the board reads each lock's log and raises an alert, with an audit entry, for every unlock from an app it did not make and every forced opening. The lock's clock follows the board's time zone, daylight-saving changes included.
+- Lock settings (auto-lock, passage mode, sound, and read-only reset button, privacy lock and tamper alert switches), the lock's operation log, and unlock alerts: the board reads each lock's log and raises an alert, with an audit entry, for app or gateway unlocks it cannot match to its own commands and every forced opening. The lock's clock follows the board's time zone, daylight-saving changes included.
 - Credential details for supported fingerprint, PIN and IC-card operation records, including additions, deletions and failed attempts. Current or last-known labels are shown when available; PIN digits stay private. Persistent battery warnings appear below 40% on fresh authenticated readings.
 - The owner web UI (`web/`), served by the board and tested against a mock of the board API.
 - Home Assistant over MQTT, off until configured: each lock appears as a device with a lock entity, battery, last event, Bluetooth link and an unlock alert, through MQTT discovery, and LOCK and UNLOCK from Home Assistant run through the same queue as the web.
@@ -45,7 +45,7 @@ Not built yet: creating or editing weekly passcodes, rotating OTP codes, and boa
 
 [SECURITY.md](SECURITY.md) has the full model and how to report a vulnerability; [docs/protocol.md](docs/protocol.md) has the protocol notes and its limits.
 
-An unlock alert just after a board restart can be the board's own unlock if it restarted before reading that unlock from the lock's log. The board remembers at most 16 unmatched unlocks per lock for 24 hours; an older or displaced unlock can also raise a false alert if its log record arrives later. Otherwise its unlock replies are matched by record id; only replies without an id use a time window. Log timestamps use the current and preceding clock offsets, so older history spanning more offset changes can have inaccurate times. Alert deduplication retains eight entries: a failed cursor write after more alerts have displaced earlier entries can cause repeated notifications on retry; exactly-once delivery is not guaranteed.
+An unlock by another Latchkey board holding the same keys can raise an alert on this board. An unlock alert just after a board restart can be the board's own unlock if it restarted before reading that unlock from the lock's log. The board remembers at most 16 unmatched unlocks per lock for 24 hours; an older or displaced unlock can also raise a false alert if its log record arrives later. Otherwise its unlock replies are matched by record id; only replies without an id use a time window. Log timestamps use the current and preceding clock offsets, so older history spanning more offset changes can have inaccurate times. Alert deduplication retains eight entries: a failed cursor write after more alerts have displaced earlier entries can cause repeated notifications on retry; exactly-once delivery is not guaranteed.
 
 ## Supported boards
 
@@ -60,7 +60,7 @@ An M5 ATOM runs the `esp32` build with `LATCHKEY_BUTTON_GPIO=39`, and an M5Stack
 ## Quick start
 
 1. Flash the board: with Chrome or Edge, open the [browser flasher](https://giovannirco.github.io/latchkey/), or build and flash from source as below. The flasher writes a factory image, which erases the board, lock keys included: use it only on a new board, never on one that holds a lock.
-2. Close the flashing dialog and use **Connect for setup** on the installer to configure Wi-Fi, owner login and an optional local `.lkb` restore. Save the authenticator secret when shown. The backup restores lock keys, not Wi-Fi, owner login or certificates. See [browser setup and recovery](docs/hardware.md#browser-setup-and-recovery). For CLI setup instead, send `system.setup` with static IPv4 settings and a 12–128-byte owner password from a private file:
+2. Close the flashing dialog and use **Connect for setup** on the installer to configure Wi-Fi, owner login, the board's time zone and an optional local `.lkb` restore. Save the authenticator secret when shown. The backup restores lock keys, not Wi-Fi, owner login or certificates. See [browser setup and recovery](docs/hardware.md#browser-setup-and-recovery). For CLI setup instead, send `system.setup` with static IPv4 settings and a 12–128-byte owner password from a private file:
 
    ```sh
    uv run -q --no-project --python 3.14 --with pyserial==3.5 python -I tools/latchkey_cli.py --port <port> system.setup - < setup.json
@@ -185,11 +185,11 @@ uv run -q --no-project --python 3.14 --with pytest==9.1.1 --with pyserial==3.5 p
 
 - PlatformIO Core 6.2.0.
 - `espressif32@8.0.0` with exact `platform_packages` in `[esp_common]`: `framework-espidf` 4.60100.0 (ESP-IDF v6.1.0), `toolchain-xtensa-esp-elf` 15.2.0+20251204, `tool-esptool` 2.50400.0 (esptool v5.4.0), `tool-cmake` 3.30.2, `tool-ninja` 1.13.2. The platform itself pins `toolchain-riscv32-esp` 15.2.0+20251204 (S3 ULP) and `tool-esp-rom-elfs` 0.0.1+20241011; `toolchain-esp32ulp` still resolves from `~1.23800.0` (1.23800.240113 today).
-- `tool-ninja` 1.13.2 is published for macOS only, so the firmware builds in CI and in the release workflow run on macOS (`macos-15`, arm64); the host tests, the source checks and the web UI suite run on Ubuntu.
+- `tool-ninja` 1.13.2 is published for macOS only, so the firmware builds in CI and in the release workflow run on macOS (`macos-15`, arm64). Browser suites also run on macOS; host tests and source checks run on Ubuntu.
 - `native@1.2.1` with Unity 2.6.1 for host tests.
 - ESP-IDF managed components are declared in `src/idf_component.yml` and locked per target in `dependencies.lock.esp32` and `dependencies.lock.esp32s3`.
 - The headers in `test/vectors/` are generated. `tools/vectors/gen_vectors.py` uses ttlock-ble 0.3.4: `uv run -q --no-project --python 3.14 --with ttlock-ble==0.3.4 python -I tools/vectors/gen_vectors.py`. `tools/vectors/kind3r_vectors.ts` uses Deno 2.9.8 and a kind3r/ttlock-sdk-js checkout at 8c84cda, with moment 2.29.1 locked in `tools/vectors/deno.lock`: `TZ=UTC deno run --allow-env --allow-read --allow-write=test/vectors --config tools/vectors/kind3r_deno.json tools/vectors/kind3r_vectors.ts <checkout>`.
-- GitHub Actions are pinned to commit SHAs in `.github/workflows/`; ESP Web Tools 10.4.0 on the flasher page is pinned by version and by the SHA-384 hash of each of its modules.
+- GitHub Actions are pinned to commit SHAs in `.github/workflows/`; ESP Web Tools 10.5.0 on the flasher page is pinned by version and by the SHA-384 hash of each of its modules.
 
 ### Releasing
 

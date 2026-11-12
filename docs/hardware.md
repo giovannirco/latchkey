@@ -47,6 +47,8 @@ After installing on a new board, close the flashing dialog and choose **Connect 
 
 Setup sends static Wi-Fi settings and an owner password over USB, then displays the authenticator secret once. Save it before continuing. An existing `.lkb` backup restores lock data only: it excludes Wi-Fi, owner login, TLS identity and MQTT settings. The replacement board generates its own certificate; compare the SHA-256 fingerprint read over USB with the browser's certificate before trusting it. Neither credentials nor backups are uploaded to the Pages server or saved in browser storage.
 
+Before backup restore, review the board's current POSIX time zone. Keep it without a write, or explicitly save rules for the lock's location. The computer-offset shortcut fills a fixed offset for today; it does not follow daylight saving. After changing the zone for an existing lock, use Settings → Sync time in the board interface and check its clock before relying on schedules. Saving the board setting alone does not verify the lock's clock.
+
 The final connection check reads the board's status; it does not verify physical lock operation. Test access with the door open. Browser setup and restore have automated serial/browser coverage; commissioning a new empty board through this flow still needs hardware acceptance. Existing configured boards must not be factory-flashed to test it.
 
 ### Recovering a lost setup reply
